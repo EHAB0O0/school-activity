@@ -763,7 +763,7 @@ export default function ReportsPage() {
                     </div>
 
                     <div className="flex-1 overflow-auto custom-scrollbar bg-black/20 rounded-xl border border-white/5">
-                        <table className="w-full text-right text-sm">
+                        <table className="w-full min-w-[700px] text-right text-sm">
                             <thead className="bg-[#1a1a20] text-gray-400 sticky top-0 backdrop-blur-md shadow-md z-10">
                                 <tr>
                                     {activeTab === 'activities' && (

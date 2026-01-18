@@ -732,102 +732,104 @@ export default function Scheduler() {
 
             {/* MONTHLY VIEW */}
             {view === 'month' && (
-                <div className="bg-black/20 rounded-2xl border border-white/10 overflow-hidden shadow-2xl">
-                    {/* Days Header */}
-                    <div className="grid grid-cols-7 bg-white/5 border-b border-white/10">
-                        {['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'].map(d => (
-                            <div key={d} className="p-4 text-center font-bold text-white border-l border-white/5 last:border-0">
-                                {d}
-                            </div>
-                        ))}
-                    </div>
+                <div className="bg-black/20 rounded-2xl border border-white/10 overflow-x-auto shadow-2xl custom-scrollbar">
+                    <div className="min-w-[800px]">
+                        {/* Days Header */}
+                        <div className="grid grid-cols-7 bg-white/5 border-b border-white/10">
+                            {['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'].map(d => (
+                                <div key={d} className="p-4 text-center font-bold text-white border-l border-white/5 last:border-0">
+                                    {d}
+                                </div>
+                            ))}
+                        </div>
 
-                    {/* Grid */}
-                    <div className="grid grid-cols-7 auto-rows-[140px]">
-                        {(() => {
-                            const monthStart = startOfMonth(currentDate);
-                            const monthEnd = endOfMonth(monthStart);
-                            const startDate = startOfWeek(monthStart, { weekStartsOn: 0 });
-                            const endDate = endOfWeek(monthEnd, { weekStartsOn: 0 });
+                        {/* Grid */}
+                        <div className="grid grid-cols-7 auto-rows-[140px]">
+                            {(() => {
+                                const monthStart = startOfMonth(currentDate);
+                                const monthEnd = endOfMonth(monthStart);
+                                const startDate = startOfWeek(monthStart, { weekStartsOn: 0 });
+                                const endDate = endOfWeek(monthEnd, { weekStartsOn: 0 });
 
-                            const days = [];
-                            let day = startDate;
-                            while (day <= endDate) {
-                                days.push(day);
-                                day = addDays(day, 1);
-                            }
+                                const days = [];
+                                let day = startDate;
+                                while (day <= endDate) {
+                                    days.push(day);
+                                    day = addDays(day, 1);
+                                }
 
-                            return days.map((day, idx) => {
-                                const dayFormatted = format(day, 'yyyy-MM-dd');
-                                const isCurrentMonth = isSameDay(day, monthStart) || (day >= monthStart && day <= monthEnd);
-                                const isToday = isSameDay(day, new Date());
+                                return days.map((day, idx) => {
+                                    const dayFormatted = format(day, 'yyyy-MM-dd');
+                                    const isCurrentMonth = isSameDay(day, monthStart) || (day >= monthStart && day <= monthEnd);
+                                    const isToday = isSameDay(day, new Date());
 
-                                // Blocking Logic
-                                const isWeekend = weekends?.includes(day.getDay());
-                                const holiday = holidays?.find(h => h.date === dayFormatted);
-                                const isBlocked = isWeekend || !!holiday;
-                                const blockReason = holiday ? holiday.reason : (isWeekend ? 'عطلة' : '');
+                                    // Blocking Logic
+                                    const isWeekend = weekends?.includes(day.getDay());
+                                    const holiday = holidays?.find(h => h.date === dayFormatted);
+                                    const isBlocked = isWeekend || !!holiday;
+                                    const blockReason = holiday ? holiday.reason : (isWeekend ? 'عطلة' : '');
 
-                                // Events for this day
-                                const dayEvents = events.filter(e => {
-                                    const eDate = e.startTime?.toDate ? format(e.startTime.toDate(), 'yyyy-MM-dd') : e.date;
-                                    return eDate === dayFormatted;
-                                });
+                                    // Events for this day
+                                    const dayEvents = events.filter(e => {
+                                        const eDate = e.startTime?.toDate ? format(e.startTime.toDate(), 'yyyy-MM-dd') : e.date;
+                                        return eDate === dayFormatted;
+                                    });
 
-                                return (
-                                    <div
-                                        key={dayFormatted}
-                                        onClick={() => !isBlocked && handleCellClick(day, { type: 'Class', start: '08:00', end: '09:00' })}
-                                        className={`
+                                    return (
+                                        <div
+                                            key={dayFormatted}
+                                            onClick={() => !isBlocked && handleCellClick(day, { type: 'Class', start: '08:00', end: '09:00' })}
+                                            className={`
                                             p-2 border-b border-l border-white/5 relative transition-all group
                                             ${!isCurrentMonth ? 'bg-black/40 opacity-50' : ''}
                                             ${isBlocked ? 'bg-rose-900/10 cursor-not-allowed' : 'hover:bg-white/5 cursor-pointer'}
                                             ${isToday ? 'bg-indigo-500/10' : ''}
                                         `}
-                                    >
-                                        {/* Date Numbers */}
-                                        <div className="flex justify-between items-start mb-2">
-                                            {calendarSystem === 'hijri' && (
-                                                <span className={`text-sm font-bold ${isBlocked ? 'text-rose-400' : 'text-emerald-400'}`}>
-                                                    {getHijriDay(day)}
-                                                </span>
-                                            )}
-                                            <span className={`text-sm ${isToday ? 'bg-indigo-600 text-white w-6 h-6 rounded-full flex items-center justify-center' : 'text-gray-400'}`}>
-                                                {format(day, 'd')}
-                                            </span>
-                                        </div>
-
-                                        {/* Blocked Overlay Label */}
-                                        {isBlocked && (
-                                            <div className="absolute inset-x-0 bottom-2 text-center">
-                                                <span className="text-[10px] text-rose-400/70 border border-rose-500/20 px-1 rounded bg-rose-900/20">
-                                                    {blockReason}
+                                        >
+                                            {/* Date Numbers */}
+                                            <div className="flex justify-between items-start mb-2">
+                                                {calendarSystem === 'hijri' && (
+                                                    <span className={`text-sm font-bold ${isBlocked ? 'text-rose-400' : 'text-emerald-400'}`}>
+                                                        {getHijriDay(day)}
+                                                    </span>
+                                                )}
+                                                <span className={`text-sm ${isToday ? 'bg-indigo-600 text-white w-6 h-6 rounded-full flex items-center justify-center' : 'text-gray-400'}`}>
+                                                    {format(day, 'd')}
                                                 </span>
                                             </div>
-                                        )}
 
-                                        {/* Events Dots/List */}
-                                        <div className="space-y-1 overflow-y-auto max-h-[80px] custom-scrollbar">
-                                            {dayEvents.map(ev => (
-                                                <div
-                                                    key={ev.id}
-                                                    onClick={(e) => handleEventClick(e, ev)}
-                                                    className={`
+                                            {/* Blocked Overlay Label */}
+                                            {isBlocked && (
+                                                <div className="absolute inset-x-0 bottom-2 text-center">
+                                                    <span className="text-[10px] text-rose-400/70 border border-rose-500/20 px-1 rounded bg-rose-900/20">
+                                                        {blockReason}
+                                                    </span>
+                                                </div>
+                                            )}
+
+                                            {/* Events Dots/List */}
+                                            <div className="space-y-1 overflow-y-auto max-h-[80px] custom-scrollbar">
+                                                {dayEvents.map(ev => (
+                                                    <div
+                                                        key={ev.id}
+                                                        onClick={(e) => handleEventClick(e, ev)}
+                                                        className={`
                                                         text-[10px] px-2 py-1 rounded truncate border
                                                         ${ev.status === 'Done'
-                                                            ? 'bg-emerald-900/40 border-emerald-500/20 text-emerald-200'
-                                                            : 'bg-indigo-900/40 border-indigo-500/20 text-indigo-200'}
+                                                                ? 'bg-emerald-900/40 border-emerald-500/20 text-emerald-200'
+                                                                : 'bg-indigo-900/40 border-indigo-500/20 text-indigo-200'}
                                                     `}
-                                                    title={ev.title}
-                                                >
-                                                    {ev.title}
-                                                </div>
-                                            ))}
+                                                        title={ev.title}
+                                                    >
+                                                        {ev.title}
+                                                    </div>
+                                                ))}
+                                            </div>
                                         </div>
-                                    </div>
-                                );
-                            });
-                        })()}
+                                    );
+                                });
+                            })()}
+                        </div>
                     </div>
                 </div>
             )}

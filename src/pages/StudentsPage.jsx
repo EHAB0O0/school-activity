@@ -347,7 +347,7 @@ export default function StudentsPage() {
 
             {/* Grid */}
             <div className="flex-1 overflow-auto custom-scrollbar min-h-0 bg-white/5 border border-white/10 rounded-2xl">
-                <table className="w-full text-right bg-transparent">
+                <table className="w-full min-w-[700px] text-right bg-transparent">
                     <thead className="bg-black/20 text-gray-300 sticky top-0 backdrop-blur-md z-10">
                         <tr>
                             <th className="p-4 font-medium">اسم الطالب</th>
