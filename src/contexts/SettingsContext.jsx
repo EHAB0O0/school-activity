@@ -84,11 +84,9 @@ export function SettingsProvider({ children }) {
         });
     }
 
-    async function updateHolidaysAndWeekends(data) {
-        // data = { weekends: [5, 6], holidays: [{date, reason}, ...] }
+    async function updateClasses(classesStructure) {
         await updateDoc(doc(db, "settings", "global"), {
-            weekends: data.weekends,
-            holidays: data.holidays
+            classes: classesStructure // [{ id, name, sections: [] }]
         });
     }
 
@@ -99,7 +97,9 @@ export function SettingsProvider({ children }) {
         updateEventTypes,
         saveTimeProfile,
         updateSchoolInfo,
+        updateClasses,
         updateHolidaysAndWeekends,
+        classes: settings?.classes || [],
         eventTypes: settings?.eventTypes || [],
         schoolInfo: settings?.schoolInfo || {},
         weekends: settings?.weekends || [], // Default to empty if not set

@@ -14,9 +14,9 @@ export default function StudentsPage() {
     const [sortBy, setSortBy] = useState('name'); // name | points
     const [specFilter, setSpecFilter] = useState('All'); // 'All' | 'General' | 'Radio' ...
 
-    const { eventTypes } = useSettings();
+    const { eventTypes, classes } = useSettings();
     const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-    const [newStudent, setNewStudent] = useState({ name: '', class: '', specializations: [] });
+    const [newStudent, setNewStudent] = useState({ name: '', class: '', grade: '', section: '', specializations: [] });
 
     // Spec Options Construction
     const specOptions = [
@@ -50,7 +50,7 @@ export default function StudentsPage() {
                 totalPoints: 0,
                 joinedAt: new Date()
             });
-            setNewStudent({ name: '', class: '', specializations: [] });
+            setNewStudent({ name: '', class: '', grade: '', section: '', specializations: [] });
             setIsAddModalOpen(false);
             fetchStudents();
             toast.success('تمت إضافة الطالب');
@@ -422,11 +422,43 @@ export default function StudentsPage() {
                                 <input required className="w-full bg-black/30 border border-gray-700 rounded-xl px-4 py-3 text-white focus:border-indigo-500 outline-none"
                                     value={newStudent.name} onChange={e => setNewStudent({ ...newStudent, name: e.target.value })} />
                             </div>
-                            <div>
-                                <label className="block text-gray-400 text-sm mb-1">الفصل</label>
-                                <input required className="w-full bg-black/30 border border-gray-700 rounded-xl px-4 py-3 text-white focus:border-indigo-500 outline-none"
-                                    value={newStudent.class} onChange={e => setNewStudent({ ...newStudent, class: e.target.value })} />
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-gray-400 text-sm mb-1">الصف / المرحلة</label>
+                                    <select
+                                        required
+                                        className="w-full bg-black/30 border border-gray-700 rounded-xl px-4 py-3 text-white focus:border-indigo-500 outline-none"
+                                        value={newStudent.grade || ''}
+                                        onChange={e => {
+                                            const g = classes?.find(c => c.name === e.target.value);
+                                            setNewStudent({ ...newStudent, grade: e.target.value, section: '', class: `${e.target.value} - ` });
+                                        }}
+                                    >
+                                        <option value="">اختر الصف...</option>
+                                        {classes?.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-gray-400 text-sm mb-1">الشعبة</label>
+                                    <select
+                                        required
+                                        className="w-full bg-black/30 border border-gray-700 rounded-xl px-4 py-3 text-white focus:border-indigo-500 outline-none"
+                                        value={newStudent.section || ''}
+                                        onChange={e => setNewStudent({
+                                            ...newStudent,
+                                            section: e.target.value,
+                                            class: `${newStudent.grade} - ${e.target.value}`
+                                        })}
+                                        disabled={!newStudent.grade}
+                                    >
+                                        <option value="">اختر الشعبة...</option>
+                                        {classes?.find(c => c.name === newStudent.grade)?.sections?.map(s => (
+                                            <option key={s} value={s}>{s}</option>
+                                        ))}
+                                    </select>
+                                </div>
                             </div>
+                            <input type="hidden" value={newStudent.class} /> {/* Legacy Support */}
                             <div>
                                 <MultiSelect
                                     label="التخصصات / الفرق"

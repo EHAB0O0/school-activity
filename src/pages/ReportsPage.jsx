@@ -66,7 +66,10 @@ const PrintControls = ({ event, onPrint }) => {
     );
 };
 
+import { useSettings } from '../contexts/SettingsContext';
+
 export default function ReportsPage() {
+    const { classes } = useSettings(); // Use Global Classes
     const [activeTab, setActiveTab] = useState('activities'); // activities | students | assets
     const [loading, setLoading] = useState(false);
 
@@ -78,7 +81,14 @@ export default function ReportsPage() {
     // Filters
     const [dateRange, setDateRange] = useState({ start: '', end: '' });
     const [minPoints, setMinPoints] = useState(0);
+    const [maxPoints, setMaxPoints] = useState(1000); // New Max Points Filter
+
+    // Student Filters
+    const [gradeFilter, setGradeFilter] = useState('');
+    const [sectionFilter, setSectionFilter] = useState('');
+
     const [assetFilter, setAssetFilter] = useState('All');
+    const [venueFilter, setVenueFilter] = useState('All'); // New Event Filter
 
     // Detail Modal State
     const [selectedEvent, setSelectedEvent] = useState(null);
@@ -104,7 +114,7 @@ export default function ReportsPage() {
     // --- 2. Filter Logic ---
     useEffect(() => {
         applyFilters();
-    }, [rawData, dateRange, minPoints, assetFilter]);
+    }, [rawData, dateRange, minPoints, maxPoints, assetFilter, gradeFilter, sectionFilter, venueFilter, activeTab]);
 
     async function fetchData() {
         setLoading(true);
@@ -114,9 +124,7 @@ export default function ReportsPage() {
                 const snap = await getDocs(query(collection(db, 'events'), orderBy('startTime', 'desc')));
                 data = snap.docs.map(d => {
                     const pd = d.data();
-                    // Resolve Student Names
                     const studentNames = pd.participatingStudents?.map(id => studentMap[id] || 'طالب غير معروف') || [];
-
                     return {
                         id: d.id,
                         title: pd.title,
@@ -124,13 +132,15 @@ export default function ReportsPage() {
                         date: pd.startTime?.toDate ? format(pd.startTime.toDate(), 'yyyy-MM-dd') : pd.date,
                         formattedDate: pd.startTime?.toDate ? format(pd.startTime.toDate(), 'EEEE d MMMM yyyy', { locale: ar }) : pd.date,
                         time: pd.startTime?.toDate ? format(pd.startTime.toDate(), 'hh:mm a') : pd.startTime,
+                        venueId: pd.venueId, // Store ID for filtering
                         venue: getVenueLabel(pd.venueId),
                         status: getStatusLabel(pd.status || 'Draft'),
-                        rawStatus: pd.status || 'Draft', // Added for logic
-                        rawParticipatingStudents: pd.participatingStudents || [], // Added for logic
+                        rawStatus: pd.status || 'Draft',
+                        rawParticipatingStudents: pd.participatingStudents || [],
                         studentsCount: studentNames.length,
                         studentNames: studentNames,
-                        type: pd.typeName || 'عام'
+                        type: pd.typeName || 'عام',
+                        points: pd.points || 10 // Sortable
                     };
                 });
             } else if (activeTab === 'students') {
@@ -138,7 +148,9 @@ export default function ReportsPage() {
                 data = snap.docs.map(d => ({
                     id: d.id,
                     name: d.data().name,
-                    class: d.data().class,
+                    class: d.data().class, // Legacy
+                    grade: d.data().grade || '', // New
+                    section: d.data().section || '', // New
                     specializations: d.data().specializations || [],
                     points: d.data().totalPoints || 0
                 }));
@@ -164,20 +176,26 @@ export default function ReportsPage() {
         let filtered = [...rawData];
 
         if (activeTab === 'activities') {
-            if (dateRange.start) {
-                filtered = filtered.filter(item => item.date >= dateRange.start);
-            }
-            if (dateRange.end) {
-                filtered = filtered.filter(item => item.date <= dateRange.end);
-            }
+            if (dateRange.start) filtered = filtered.filter(item => item.date >= dateRange.start);
+            if (dateRange.end) filtered = filtered.filter(item => item.date <= dateRange.end);
+            if (venueFilter !== 'All') filtered = filtered.filter(item => item.venueId === venueFilter);
+
         } else if (activeTab === 'students') {
-            if (minPoints > 0) {
-                filtered = filtered.filter(item => item.points >= minPoints);
+            if (minPoints > 0) filtered = filtered.filter(item => item.points >= minPoints);
+            if (maxPoints < 1000) filtered = filtered.filter(item => item.points <= maxPoints);
+
+            if (gradeFilter) {
+                // If legacy data has no 'grade', we might miss them. Ideally migration script ran.
+                // Assuming data is mixed, we check item.grade OR start of item.class?
+                // For now strict check on new fields if present.
+                filtered = filtered.filter(item => item.grade === gradeFilter);
             }
+            if (sectionFilter) {
+                filtered = filtered.filter(item => item.section === sectionFilter);
+            }
+
         } else if (activeTab === 'assets') {
-            if (assetFilter !== 'All') {
-                filtered = filtered.filter(item => item.status === assetFilter);
-            }
+            if (assetFilter !== 'All') filtered = filtered.filter(item => item.status === assetFilter);
         }
 
         setPreviewData(filtered);
@@ -206,7 +224,18 @@ export default function ReportsPage() {
                 'students': 'قائمة الطلاب المتميزين',
                 'assets': 'جرد الموارد والمعدات'
             };
-            const pageTitle = titleMap[activeTab] || 'تقرير شامل';
+            let pageTitle = titleMap[activeTab] || 'تقرير شامل';
+
+            // Dynamic Title overrides
+            if (activeTab === 'students' && gradeFilter) {
+                pageTitle = `تقرير طلاب ${gradeFilter}`;
+                if (sectionFilter) pageTitle += ` - ${sectionFilter}`;
+            }
+            if (activeTab === 'activities' && venueFilter !== 'All') {
+                const vLabel = getVenueLabel(venueFilter);
+                pageTitle = `تقرير أنشطة (مخصص): ${vLabel}`;
+            }
+
             const dateStr = new Date().toLocaleDateString('ar-EG', { year: 'numeric', month: 'long', day: 'numeric' });
 
             let tableHeader = '';
@@ -713,45 +742,42 @@ export default function ReportsPage() {
                         </button>
                     </div>
 
-                    {/* Filters Section */}
-                    <div className="border-t border-white/10 pt-4">
-                        <h4 className="text-gray-400 text-sm mb-3 font-bold">تصفية النتائج</h4>
-
-                        {activeTab === 'activities' && (
-                            <div className="space-y-3">
-                                <div>
-                                    <label className="text-gray-500 text-xs block mb-1">من تاريخ</label>
-                                    <input type="date" className="w-full bg-black/30 border border-white/10 rounded-lg p-2 text-white text-sm focus:border-indigo-500 outline-none"
-                                        onChange={e => setDateRange({ ...dateRange, start: e.target.value })} />
-                                </div>
-                                <div>
-                                    <label className="text-gray-500 text-xs block mb-1">إلى تاريخ</label>
-                                    <input type="date" className="w-full bg-black/30 border border-white/10 rounded-lg p-2 text-white text-sm focus:border-indigo-500 outline-none"
-                                        onChange={e => setDateRange({ ...dateRange, end: e.target.value })} />
-                                </div>
-                            </div>
-                        )}
+                    {/* Actions Section */}
+                    <div className="border-t border-white/10 pt-4 space-y-3">
+                        <h4 className="text-gray-400 text-sm mb-2 font-bold">إجراءات سريعة</h4>
 
                         {activeTab === 'students' && (
-                            <div>
-                                <label className="text-gray-500 text-xs block mb-1">الحد الأدنى للنقاط</label>
-                                <input type="number" className="w-full bg-black/30 border border-white/10 rounded-lg p-2 text-white text-sm focus:border-emerald-500 outline-none"
-                                    value={minPoints} onChange={e => setMinPoints(Number(e.target.value))} placeholder="0" />
-                            </div>
+                            <button
+                                onClick={() => {
+                                    if (!gradeFilter || !sectionFilter) {
+                                        toast.error("الرجاء اختيار الصف والشعبة أولاً من شريط التصفية بالأعلى");
+                                        return;
+                                    }
+                                    const titleStr = `تقرير فصل ${gradeFilter} - ${sectionFilter}`;
+                                    // Generate PDF for just these students
+                                    // We can reuse generateBulkPDF but we need to ensure it uses the filtered data
+                                    if (previewData.length === 0) {
+                                        toast.error("لا يوجد طلاب في القائمة الحالية");
+                                        return;
+                                    }
+                                    generateBulkPDF();
+                                }}
+                                className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl shadow transition-all flex items-center justify-center gap-2"
+                            >
+                                <Printer size={18} />
+                                طباعة تقرير الفصل المحدد
+                            </button>
                         )}
 
-                        {activeTab === 'assets' && (
-                            <div>
-                                <label className="text-gray-500 text-xs block mb-1">الحالة</label>
-                                <select className="w-full bg-black/30 border border-white/10 rounded-lg p-2 text-white text-sm focus:border-amber-500 outline-none"
-                                    value={assetFilter} onChange={e => setAssetFilter(e.target.value)}>
-                                    <option value="All">الكل</option>
-                                    <option value="Available">متاح</option>
-                                    <option value="In Use">قيد الاستخدام</option>
-                                    <option value="Maintenance">صيانة</option>
-                                </select>
-                            </div>
-                        )}
+                        <button onClick={generateBulkPDF} className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl shadow-lg transition-all flex items-center justify-center group">
+                            <Download size={18} className="ml-2 group-hover:scale-110 transition-transform" />
+                            تحميل التقرير المعروض (PDF)
+                        </button>
+
+                        <div className="bg-white/5 p-3 rounded-xl text-xs text-gray-400 leading-relaxed mt-4">
+                            <span className="text-indigo-400 font-bold block mb-1">تلميح:</span>
+                            استخدم خيارات "تصفية النتائج" في الأعلى لتخصيص محتوى التقرير قبل الطباعة.
+                        </div>
                     </div>
                 </div>
 
