@@ -98,8 +98,33 @@ function EventModal({ isOpen, onClose, initialData, onSave, onDelete, eventTypes
         }
     }, [initialData]);
 
+    const { weekends, holidays } = useSettings(); // Use Global Settings directly
+
+    // Helper to check blocked dates
+    const isDateBlocked = (dateStr) => {
+        const d = new Date(dateStr);
+        const dayIdx = d.getDay();
+        if (weekends.includes(dayIdx)) return "هذا اليوم عطلة نهاية أسبوع";
+
+        // holidays: [{ start: 'YYYY-MM-DD', end: '...' }]
+        const isHoliday = holidays.some(h => dateStr >= h.start && dateStr <= h.end);
+        if (isHoliday) return "هذا اليوم إجازة رسمية";
+
+        return null;
+    };
+
     const handleChange = (field, value) => {
         if (isReadOnly) return;
+
+        // Strict Date Validation
+        if (field === 'date') {
+            const blockReason = isDateBlocked(value);
+            if (blockReason) {
+                toast.error(`لا يمكن اختيار هذا التاريخ: ${blockReason}`, { duration: 4000 });
+                return; // Block change
+            }
+        }
+
         setFormData(prev => {
             const updated = { ...prev, [field]: value };
             setConflict(null);
@@ -368,32 +393,74 @@ function EventModal({ isOpen, onClose, initialData, onSave, onDelete, eventTypes
 
                             {/* Two-Way Time Logic */}
                             <div className="md:col-span-2 bg-white/5 p-4 rounded-xl border border-white/5">
-                                <label className="block text-sm text-gray-400 mb-3 font-bold">الوقت والفترة الزمنية</label>
+                                <div className="flex justify-between items-center mb-3">
+                                    <label className="text-sm text-gray-400 font-bold">الوقت والفترة الزمنية</label>
+                                    <span className="text-xs text-indigo-400">اختر حصة واحدة أو أكثر لتحديد الوقت</span>
+                                </div>
+
                                 <div className="flex gap-4">
                                     <div className="flex-1">
                                         <label className="text-xs text-gray-500 block mb-1">من</label>
-                                        <input type="time" disabled={isReadOnly} required className="w-full bg-black/40 border border-white/10 rounded-xl p-3 text-white focus:border-indigo-500 outline-none disabled:opacity-50"
+                                        <input type="time" disabled={isReadOnly} required className="w-full bg-black/40 border border-white/10 rounded-xl p-3 text-white focus:border-indigo-500 outline-none disabled:opacity-50 font-mono"
                                             value={formData.startTime} onChange={e => handleChange('startTime', e.target.value)} />
                                     </div>
                                     <div className="flex-1">
                                         <label className="text-xs text-gray-500 block mb-1">إلى</label>
-                                        <input type="time" disabled={isReadOnly} required className="w-full bg-black/40 border border-white/10 rounded-xl p-3 text-white focus:border-indigo-500 outline-none disabled:opacity-50"
+                                        <input type="time" disabled={isReadOnly} required className="w-full bg-black/40 border border-white/10 rounded-xl p-3 text-white focus:border-indigo-500 outline-none disabled:opacity-50 font-mono"
                                             value={formData.endTime} onChange={e => handleChange('endTime', e.target.value)} />
                                     </div>
                                 </div>
 
                                 {/* Quick Chips */}
                                 <div className="mt-3 flex flex-wrap gap-2">
-                                    {activeProfile?.slots?.map((slot, idx) => (
-                                        <button
-                                            key={idx}
-                                            type="button"
-                                            onClick={() => applySlotTime(slot)}
-                                            className="px-3 py-1 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 rounded-lg text-xs text-indigo-300 transition-colors"
-                                        >
-                                            {slot.label}
-                                        </button>
-                                    ))}
+                                    {activeProfile?.slots?.map((slot, idx) => {
+                                        // Check if slot is strictly within current time range
+                                        const isSelected = formData.startTime <= slot.start && formData.endTime >= slot.end;
+                                        // Or almost matching
+                                        return (
+                                            <button
+                                                key={idx}
+                                                type="button"
+                                                onClick={() => {
+                                                    if (isReadOnly) return;
+                                                    const sStart = slot.start;
+                                                    const sEnd = slot.end;
+                                                    const curStart = formData.startTime;
+                                                    const curEnd = formData.endTime;
+
+                                                    // Logic:
+                                                    // 1. If nothing logical set, set to slot.
+                                                    // 2. If click slot BEFORE current range, Extend Start.
+                                                    // 3. If click slot AFTER current range, Extend End.
+                                                    // 4. If click INSIDE range (and range > slot), Reset to just this slot.
+
+                                                    let newStart = curStart;
+                                                    let newEnd = curEnd;
+
+                                                    if (sEnd <= curStart) {
+                                                        // Clicked 'before' -> Extend Start
+                                                        newStart = sStart;
+                                                    } else if (sStart >= curEnd) {
+                                                        // Clicked 'after' -> Extend End
+                                                        newEnd = sEnd;
+                                                    } else {
+                                                        // Inside or Overlap -> Reset to single slot (User wants specific period)
+                                                        newStart = sStart;
+                                                        newEnd = sEnd;
+                                                    }
+
+                                                    setFormData(prev => ({ ...prev, startTime: newStart, endTime: newEnd }));
+                                                }}
+                                                className={`px-3 py-1.5 border rounded-lg text-xs font-bold transition-all flex flex-col items-center min-w-[60px]
+                                                    ${isSelected
+                                                        ? 'bg-indigo-600 text-white border-indigo-500 shadow-lg scale-105'
+                                                        : 'bg-indigo-500/10 text-indigo-300 border-indigo-500/30 hover:bg-indigo-500/20'}
+                                                `}
+                                            >
+                                                <span>{slot.label}</span>
+                                            </button>
+                                        );
+                                    })}
                                 </div>
                                 {(() => {
                                     if (!activeProfile?.slots || activeProfile.slots.length === 0) return null;

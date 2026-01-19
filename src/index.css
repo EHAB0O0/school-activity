@@ -8,6 +8,7 @@ body,
     padding: 0;
     overflow: hidden;
     /* Important: Disable native browser scroll */
+    overscroll-behavior-y: none;
     background-color: #0f172a;
     /* Match your dark theme bg */
     font-family: 'Cairo', sans-serif;

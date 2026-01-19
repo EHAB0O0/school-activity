@@ -679,11 +679,14 @@ function ClassesManager() {
 
     const addSection = () => {
         if (!newSection || !editingGrade) return;
-        if (editingGrade.sections.includes(newSection)) return toast.error("الشعبة موجودة مسبقاً");
-        const updated = { ...editingGrade, sections: [...editingGrade.sections, newSection] };
+        const currentSections = editingGrade.sections || [];
+        if (currentSections.includes(newSection)) return toast.error("الشعبة موجودة مسبقاً");
+
+        const updated = { ...editingGrade, sections: [...currentSections, newSection] };
         setEditingGrade(updated);
         setLocalClasses(localClasses.map(c => c.id === editingGrade.id ? updated : c));
         setNewSection('');
+        toast.success("تم إضافة الشعبة (تذكر حفظ التغييرات النهائية)");
     };
 
     const removeSection = (sec) => {
