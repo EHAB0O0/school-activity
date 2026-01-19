@@ -90,6 +90,14 @@ export function SettingsProvider({ children }) {
         });
     }
 
+    async function updateHolidaysAndWeekends(data) {
+        // data = { weekends: [5,6], holidays: [...] }
+        await updateDoc(doc(db, "settings", "global"), {
+            weekends: data.weekends || [],
+            holidays: data.holidays || []
+        });
+    }
+
     const value = {
         settings,
         activeProfile,
