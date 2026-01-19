@@ -6,7 +6,7 @@ import { doc, setDoc } from 'firebase/firestore';
 import { updatePassword, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth';
 import {
     Save, Shield, Key, AlertTriangle, RefreshCw, Clock,
-    Settings, Plus, Trash2, List, Calendar, School, Edit3, CheckCircle, Box
+    Settings, Plus, Trash2, List, Calendar, School, Edit3, CheckCircle, Box, X
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
