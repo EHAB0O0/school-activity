@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useSettings } from '../contexts/SettingsContext';
 import { useAuth } from '../contexts/AuthContext';
 import { db } from '../firebase';
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, setDoc, writeBatch, collection, getDocs, query, where, updateDoc } from 'firebase/firestore';
 import { updatePassword, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth';
 import {
     Save, Shield, Key, AlertTriangle, RefreshCw, Clock,
@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import CriticalActionModal from '../components/ui/CriticalActionModal';
-import { writeBatch, collection, getDocs, query, where, doc, updateDoc } from 'firebase/firestore';
+
 import toast from 'react-hot-toast';
 
 export default function SettingsPage() {
