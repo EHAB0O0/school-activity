@@ -10,7 +10,6 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import { updateEventWithSmartSync } from '../utils/EventLogic';
 import toast from 'react-hot-toast';
 import { format } from 'date-fns';
-import { format } from 'date-fns';
 import { ar } from 'date-fns/locale';
 import MultiSelect from '../components/ui/MultiSelect'; // Imported MultiSelect
 import { Tag, CheckSquare, Square } from 'lucide-react';
