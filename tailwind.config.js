@@ -7,6 +7,50 @@ export default {
     theme: {
         extend: {
             colors: {
+                // Force Hex for printing safety (Html2Canvas doesn't like oklab)
+                indigo: {
+                    50: '#eef2ff',
+                    100: '#e0e7ff',
+                    200: '#c7d2fe',
+                    300: '#a5b4fc',
+                    400: '#818cf8',
+                    500: '#6366f1',
+                    600: '#4f46e5',
+                    700: '#4338ca',
+                    800: '#3730a3',
+                    900: '#312e81',
+                    950: '#1e1b4b',
+                },
+                emerald: {
+                    50: '#ecfdf5',
+                    100: '#d1fae5',
+                    400: '#34d399',
+                    500: '#10b981',
+                    600: '#059669',
+                    900: '#064e3b',
+                },
+                purple: {
+                    400: '#c084fc',
+                    500: '#a855f7',
+                    600: '#9333ea',
+                    900: '#581c87',
+                },
+                rose: {
+                    300: '#fda4af',
+                    400: '#fb7185',
+                    500: '#f43f5e',
+                    900: '#881337',
+                },
+                amber: {
+                    400: '#fbbf24',
+                    500: '#f59e0b',
+                },
+                gray: {
+                    300: '#d1d5db',
+                    400: '#9ca3af',
+                    500: '#6b7280',
+                    900: '#111827',
+                },
                 primary: {
                     50: '#f0f9ff',
                     100: '#e0f2fe',
