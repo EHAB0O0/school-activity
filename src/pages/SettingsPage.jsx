@@ -46,6 +46,7 @@ export default function SettingsPage() {
     const [newPwd, setNewPwd] = useState('');
     const [confirmPwd, setConfirmPwd] = useState('');
     const [generatedKey, setGeneratedKey] = useState('');
+    const [hintText, setHintText] = useState('');
 
     const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: '', message: '', onConfirm: null, isDestructive: false });
 

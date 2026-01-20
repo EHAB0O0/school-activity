@@ -10,7 +10,10 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import { updateEventWithSmartSync } from '../utils/EventLogic';
 import toast from 'react-hot-toast';
 import { format } from 'date-fns';
+import { format } from 'date-fns';
 import { ar } from 'date-fns/locale';
+import MultiSelect from '../components/ui/MultiSelect'; // Imported MultiSelect
+import { Tag, CheckSquare, Square } from 'lucide-react';
 
 // --- Helper: Arabic Status ---
 const getStatusLabel = (status) => {
@@ -72,7 +75,7 @@ const PrintControls = ({ event, onPrint }) => {
 import { useSettings } from '../contexts/SettingsContext';
 
 export default function ReportsPage() {
-    const { classes } = useSettings(); // Use Global Classes
+    const { classes, eventTypes, activeProfile } = useSettings(); // Use Global Classes
     const [activeTab, setActiveTab] = useState('activities'); // activities | students | assets
     const [loading, setLoading] = useState(false);
 
@@ -81,17 +84,28 @@ export default function ReportsPage() {
     const [previewData, setPreviewData] = useState([]);
     const [studentMap, setStudentMap] = useState({}); // id -> name
 
-    // Filters
+    // --- Advanced Filters State ---
     const [dateRange, setDateRange] = useState({ start: '', end: '' });
-    const [minPoints, setMinPoints] = useState(0);
-    const [maxPoints, setMaxPoints] = useState(1000); // New Max Points Filter
+    const [selectedTypes, setSelectedTypes] = useState([]); // MultiSelect array
 
     // Student Filters
     const [gradeFilter, setGradeFilter] = useState('');
     const [sectionFilter, setSectionFilter] = useState('');
+    const [specFilter, setSpecFilter] = useState('All');
+    const [pointsRange, setPointsRange] = useState({ min: 0, max: 2000 });
 
-    const [assetFilter, setAssetFilter] = useState('All');
-    const [venueFilter, setVenueFilter] = useState('All'); // New Event Filter
+    // Asset Filters
+    const [assetStatusFilter, setAssetStatusFilter] = useState('All');
+
+    // Venue Filter
+    const [venueFilter, setVenueFilter] = useState('All');
+
+    // --- Report Options (Toggles) ---
+    const [reportOptions, setReportOptions] = useState({
+        showStudents: false,
+        showAssets: false,
+        showCustomFields: false
+    });
 
     // Detail Modal State
     const [selectedEvent, setSelectedEvent] = useState(null);
@@ -243,23 +257,29 @@ export default function ReportsPage() {
             if (dateRange.start) filtered = filtered.filter(item => item.date >= dateRange.start);
             if (dateRange.end) filtered = filtered.filter(item => item.date <= dateRange.end);
             if (venueFilter !== 'All') filtered = filtered.filter(item => item.venueId === venueFilter);
+            if (selectedTypes.length > 0) filtered = filtered.filter(item => selectedTypes.includes(item.type));
 
         } else if (activeTab === 'students') {
             if (minPoints > 0) filtered = filtered.filter(item => item.points >= minPoints);
-            if (maxPoints < 1000) filtered = filtered.filter(item => item.points <= maxPoints);
+            if (maxPoints < 2000) filtered = filtered.filter(item => item.points <= pointsRange.max);
+            if (pointsRange.min > 0) filtered = filtered.filter(item => item.points >= pointsRange.min);
 
-            if (gradeFilter) {
-                // If legacy data has no 'grade', we might miss them. Ideally migration script ran.
-                // Assuming data is mixed, we check item.grade OR start of item.class?
-                // For now strict check on new fields if present.
-                filtered = filtered.filter(item => item.grade === gradeFilter);
-            }
-            if (sectionFilter) {
-                filtered = filtered.filter(item => item.section === sectionFilter);
+
+            if (gradeFilter) filtered = filtered.filter(item => item.grade === gradeFilter);
+            if (sectionFilter) filtered = filtered.filter(item => item.section === sectionFilter);
+            if (specFilter !== 'All') {
+                filtered = filtered.filter(item => {
+                    if (specFilter === 'General') return item.specializations.includes('General');
+                    return item.specializations.includes(specFilter);
+                });
             }
 
         } else if (activeTab === 'assets') {
-            if (assetFilter !== 'All') filtered = filtered.filter(item => item.status === assetFilter);
+            if (assetStatusFilter !== 'All') {
+                const statuses = Array.isArray(assetStatusFilter) ? assetStatusFilter : [assetStatusFilter];
+                // If it's single select acting as multi, simpler check:
+                if (assetStatusFilter !== 'All') filtered = filtered.filter(item => item.status === assetStatusFilter);
+            }
         }
 
         setPreviewData(filtered);
@@ -271,11 +291,11 @@ export default function ReportsPage() {
         try {
             // 1. Create a hidden Iframe
             const iframe = document.createElement('iframe');
-            iframe.style.position = 'fixed';
-            iframe.style.top = '-9999px';
             iframe.style.left = '0';
             iframe.style.width = '1200px'; // Wider for table
-            iframe.style.height = '1600px'; // Tall for content
+            iframe.style.height = 'auto'; // Allow full height
+            iframe.style.position = 'absolute'; // Use absolute to allow expansion
+            iframe.style.visibility = 'hidden'; // Hide visual but keep render
             iframe.style.border = 'none';
             document.body.appendChild(iframe);
 
@@ -315,19 +335,39 @@ export default function ReportsPage() {
                         <th style="width: 10%">الطلاب</th>
                     </tr>
                 `;
-                tableRowsHtml = previewData.map(item => `
-                    <tr>
-                        <td class="bold">${item.title}</td>
-                        <td class="dim">${item.formattedDate || item.date}</td>
-                        <td>${item.venue}</td>
-                        <td>
-                            <span class="badge ${item.status === 'مكتمل' ? 'success' : 'neutral'}">
-                                ${item.status}
-                            </span>
-                        </td>
-                        <td class="center">${item.studentsCount}</td>
-                    </tr>
-                `).join('');
+                tableRowsHtml = previewData.map(item => {
+                    const mainRow = `
+                        <tr>
+                            <td class="bold">${item.title}</td>
+                            <td class="dim">${item.formattedDate || item.date}</td>
+                            <td>${item.venue}</td>
+                            <td>
+                                <span class="badge ${item.status === 'مكتمل' ? 'success' : 'neutral'}">
+                                    ${item.status}
+                                </span>
+                            </td>
+                            <td class="center">${item.studentsCount}</td>
+                        </tr>
+                    `;
+
+                    let detailsRow = '';
+                    // Check if we should show details
+                    if (reportOptions.showStudents && item.studentNames && item.studentNames.length > 0) {
+                        const studentTags = item.studentNames.map(s => `<span class="student-tag">${s}</span>`).join('');
+                        detailsRow = `
+                            <tr class="details-row">
+                                <td colspan="5">
+                                    <div class="details-box">
+                                        <div class="details-title">الطلاب المشاركون (${item.studentNames.length}):</div>
+                                        <div class="tags-container">${studentTags}</div>
+                                    </div>
+                                </td>
+                            </tr>
+                         `;
+                    }
+                    return mainRow + detailsRow;
+                }).join('');
+
             } else if (activeTab === 'students') {
                 tableHeader = `
                     <tr>
@@ -432,6 +472,35 @@ export default function ReportsPage() {
                         .badge.neutral { background-color: #f3f4f6; color: #4b5563; }
                         .badge.danger { background-color: #fef2f2; color: #dc2626; }
 
+                        /* DETAILS ROW STYLES */
+                        .details-row { background-color: #ffffff !important; }
+                        .details-box {
+                            background-color: #f8fafc;
+                            border: 1px solid #e2e8f0;
+                            border-radius: 8px;
+                            padding: 10px;
+                            margin: 5px 0 15px 0;
+                        }
+                        .details-title {
+                            font-weight: bold;
+                            font-size: 12px;
+                            color: #64748b;
+                            margin-bottom: 5px;
+                        }
+                        .tags-container {
+                            display: flex;
+                            flex-wrap: wrap;
+                            gap: 5px;
+                        }
+                        .student-tag {
+                            background-color: #fff;
+                            border: 1px solid #cbd5e1;
+                            padding: 2px 8px;
+                            border-radius: 4px;
+                            font-size: 11px;
+                            color: #334155;
+                        }
+
                         .footer {
                             margin-top: 40px;
                             text-align: left;
@@ -468,12 +537,12 @@ export default function ReportsPage() {
             await new Promise(r => setTimeout(r, 100)); // Render wait
 
             // 4. Capture & PDF
-            // 4. Capture & PDF
             const canvas = await html2canvas(doc.body, {
                 scale: 2,
                 useCORS: true,
                 logging: false,
                 windowWidth: 1200,
+                // height: doc.body.scrollHeight + 100, // Ensure full height capture
                 backgroundColor: '#ffffff'
             });
 
@@ -796,16 +865,127 @@ export default function ReportsPage() {
 
                     {/* Tab Switcher */}
                     <div className="space-y-2 mb-8">
-                        <button onClick={() => setActiveTab('activities')} className={`w-full p-3 rounded-xl flex items-center transition-all ${activeTab === 'activities' ? 'bg-indigo-600 text-white shadow-lg' : 'hover:bg-white/5 text-gray-400'}`}>
+                        <button onClick={() => activeTab !== 'activities' && setActiveTab('activities')} className={`w-full p-3 rounded-xl flex items-center transition-all ${activeTab === 'activities' ? 'bg-indigo-600 text-white shadow-lg' : 'hover:bg-white/5 text-gray-400'}`}>
                             <Calendar size={18} className="ml-2" /> سجل الأنشطة
                         </button>
-                        <button onClick={() => setActiveTab('students')} className={`w-full p-3 rounded-xl flex items-center transition-all ${activeTab === 'students' ? 'bg-emerald-600 text-white shadow-lg' : 'hover:bg-white/5 text-gray-400'}`}>
+                        <button onClick={() => activeTab !== 'students' && setActiveTab('students')} className={`w-full p-3 rounded-xl flex items-center transition-all ${activeTab === 'students' ? 'bg-emerald-600 text-white shadow-lg' : 'hover:bg-white/5 text-gray-400'}`}>
                             <Users size={18} className="ml-2" /> قائمة الطلاب
                         </button>
-                        <button onClick={() => setActiveTab('assets')} className={`w-full p-3 rounded-xl flex items-center transition-all ${activeTab === 'assets' ? 'bg-amber-600 text-white shadow-lg' : 'hover:bg-white/5 text-gray-400'}`}>
+                        <button onClick={() => activeTab !== 'assets' && setActiveTab('assets')} className={`w-full p-3 rounded-xl flex items-center transition-all ${activeTab === 'assets' ? 'bg-amber-600 text-white shadow-lg' : 'hover:bg-white/5 text-gray-400'}`}>
                             <Box size={18} className="ml-2" /> جرد الموارد
                         </button>
                     </div>
+
+                    {/* --- ACTIVITIES FILTERS --- */}
+                    {activeTab === 'activities' && (
+                        <div className="space-y-4 animate-fade-in mb-8">
+                            <div>
+                                <label className="block text-gray-400 text-sm mb-1">الفترة الزمنية</label>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <input type="date" className="bg-black/40 border border-white/10 rounded-xl px-2 py-2 text-white text-xs"
+                                        value={dateRange.start} onChange={e => setDateRange({ ...dateRange, start: e.target.value })} />
+                                    <input type="date" className="bg-black/40 border border-white/10 rounded-xl px-2 py-2 text-white text-xs"
+                                        value={dateRange.end} onChange={e => setDateRange({ ...dateRange, end: e.target.value })} />
+                                </div>
+                            </div>
+
+                            <MultiSelect
+                                label="أنواع الأنشطة"
+                                placeholder="اختر الأنواع..."
+                                options={eventTypes.map(t => ({ label: t.name, value: t.name }))}
+                                selectedValues={selectedTypes}
+                                onChange={setSelectedTypes}
+                                icon={Filter}
+                            />
+
+                            <div>
+                                <label className="block text-gray-400 text-sm mb-1">المكان / Venue</label>
+                                <select className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-white outline-none"
+                                    value={venueFilter} onChange={e => setVenueFilter(e.target.value)}>
+                                    <option value="All">الكل</option>
+                                    <option value="Auditorium">المسرح</option>
+                                    <option value="Gym">الصالة الرياضية</option>
+                                    <option value="Playground">الملعب</option>
+                                    <option value="Lab">المعمل</option>
+                                </select>
+                            </div>
+
+                            <div className="pt-4 border-t border-white/10">
+                                <label className="block text-indigo-300 text-sm font-bold mb-2">خيارات التقرير</label>
+                                <div className="space-y-2">
+                                    <label className="flex items-center gap-2 cursor-pointer group">
+                                        <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${reportOptions.showStudents ? 'bg-indigo-600 border-indigo-600' : 'border-gray-500 bg-white/5'}`}>
+                                            {reportOptions.showStudents && <CheckSquare size={14} className="text-white" />}
+                                        </div>
+                                        <input type="checkbox" className="hidden" checked={reportOptions.showStudents} onChange={e => setReportOptions({ ...reportOptions, showStudents: e.target.checked })} />
+                                        <span className="text-gray-400 text-sm group-hover:text-white">إظهار قائمة الطلاب</span>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* --- STUDENTS FILTERS --- */}
+                    {activeTab === 'students' && (
+                        <div className="space-y-4 animate-fade-in mb-8">
+                            <div>
+                                <label className="block text-gray-400 text-sm mb-1">الصف</label>
+                                <select className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-white outline-none"
+                                    value={gradeFilter} onChange={e => { setGradeFilter(e.target.value); setSectionFilter(''); }}>
+                                    <option value="">الكل</option>
+                                    {Object.keys(classes || {}).map(g => <option key={g} value={g}>{g}</option>)}
+                                </select>
+                            </div>
+
+                            {gradeFilter && (
+                                <div>
+                                    <label className="block text-gray-400 text-sm mb-1">الشعبة</label>
+                                    <select className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-white outline-none"
+                                        value={sectionFilter} onChange={e => setSectionFilter(e.target.value)}>
+                                        <option value="">الكل</option>
+                                        {classes[gradeFilter]?.sections?.map(s => <option key={s} value={s}>{s}</option>)}
+                                    </select>
+                                </div>
+                            )}
+
+                            <div>
+                                <label className="block text-gray-400 text-sm mb-1">التخصص</label>
+                                <select className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-white outline-none"
+                                    value={specFilter} onChange={e => setSpecFilter(e.target.value)}>
+                                    <option value="All">الكل</option>
+                                    <option value="General">عام</option>
+                                    {eventTypes.map(t => <option key={t.id} value={t.name}>{t.name}</option>)}
+                                </select>
+                            </div>
+
+                            <div>
+                                <label className="block text-gray-400 text-sm mb-1">نطاق النقاط</label>
+                                <div className="flex items-center gap-2">
+                                    <input type="number" placeholder="min" className="w-full bg-black/40 border border-white/10 rounded-xl p-2 text-white text-xs"
+                                        value={pointsRange.min} onChange={e => setPointsRange({ ...pointsRange, min: Number(e.target.value) })} />
+                                    <span className="text-gray-500">-</span>
+                                    <input type="number" placeholder="max" className="w-full bg-black/40 border border-white/10 rounded-xl p-2 text-white text-xs"
+                                        value={pointsRange.max} onChange={e => setPointsRange({ ...pointsRange, max: Number(e.target.value) })} />
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* --- ASSETS FILTERS --- */}
+                    {activeTab === 'assets' && (
+                        <div className="space-y-4 animate-fade-in mb-8">
+                            <div>
+                                <label className="block text-gray-400 text-sm mb-1">الحالة</label>
+                                <select className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-white outline-none"
+                                    value={assetStatusFilter} onChange={e => setAssetStatusFilter(e.target.value)}>
+                                    <option value="All">الكل</option>
+                                    <option value="Available">متاح (Available)</option>
+                                    <option value="Maintenance">صيانة (Maintenance)</option>
+                                    <option value="In Use">قيد الاستخدام (In Use)</option>
+                                </select>
+                            </div>
+                        </div>
+                    )}
 
                     {/* Actions Section */}
                     <div className="border-t border-white/10 pt-4 space-y-3">
@@ -1076,6 +1256,16 @@ export default function ReportsPage() {
                 title={confirmModal.title}
                 message={confirmModal.message}
                 isDestructive={confirmModal.isDestructive}
+            />
+
+            <EventModal
+                isOpen={isEditModalOpen}
+                onClose={() => setIsEditModalOpen(false)}
+                initialData={editEventData}
+                onSave={handleSaveEditedEvent}
+                onDelete={handleDeleteEvent}
+                eventTypes={eventTypes}
+                activeProfile={activeProfile}
             />
         </div>
     );

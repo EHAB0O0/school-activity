@@ -5,7 +5,7 @@ import { collection, query, where, getDocs, addDoc, Timestamp, writeBatch, doc, 
 import { checkConflicts } from '../utils/ConflictGuard';
 import { format, startOfWeek, endOfWeek, addDays, startOfMonth, endOfMonth, isSameDay, parse, set, isPast } from 'date-fns';
 import { ar } from 'date-fns/locale';
-import { ChevronRight, ChevronLeft, Plus, CheckCircle, Calendar, Clock, MapPin, AlertTriangle, Users, Box, X, Search, Check, Trash2, Edit3, Lock } from 'lucide-react';
+import { ChevronRight, ChevronLeft, Plus, CheckCircle, Calendar, Clock, MapPin, AlertTriangle, Users, Box, X, Search, Check, Trash2, Edit3, Lock, Printer } from 'lucide-react';
 import toast from 'react-hot-toast';
 import ConfirmModal from './ui/ConfirmModal';
 import DeleteEventModal from './ui/DeleteEventModal';
@@ -884,7 +884,7 @@ export default function Scheduler() {
                                                     {dayEvents.map(ev => (
                                                         <div
                                                             key={ev.id}
-                                                            onClick={(e) => handleEventClick(e, ev)}
+                                                            onClick={(e) => { e.stopPropagation(); handleEventClick(e, ev); }}
                                                             className={`
                                                             text-[10px] px-2 py-1 rounded truncate border
                                                             ${ev.status === 'Done'
