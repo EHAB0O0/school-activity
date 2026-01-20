@@ -8,6 +8,7 @@ import StudentsPage from './pages/StudentsPage';
 import AssetsPage from './pages/AssetsPage';
 import SettingsPage from './pages/SettingsPage';
 import ReportsPage from './pages/ReportsPage';
+import PublicView from './pages/PublicView'; // NEW
 
 function PrivateRoute({ children }) {
   const { currentUser } = useAuth();
@@ -18,6 +19,7 @@ function App() {
   return (
     <Router>
       <Routes>
+        <Route path="/view" element={<PublicView />} />
         <Route path="/login" element={<Login />} />
 
         <Route path="/" element={

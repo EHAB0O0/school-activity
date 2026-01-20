@@ -4,7 +4,10 @@ import { collection, query, orderBy, getDocs, doc, getDoc, updateDoc, deleteDoc,
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import html2canvas from 'html2canvas';
-import { FileText, Download, Calendar, Users, Box, Filter, Printer, Search, X, Eye, Trash2, RefreshCw } from 'lucide-react';
+import { FileText, Download, Calendar, Users, Box, Filter, Printer, Search, X, Eye, Trash2, RefreshCw, Pen, Hash } from 'lucide-react';
+import EventModal from '../components/EventModal';
+import ConfirmModal from '../components/ui/ConfirmModal';
+import { updateEventWithSmartSync } from '../utils/EventLogic';
 import toast from 'react-hot-toast';
 import { format } from 'date-fns';
 import { ar } from 'date-fns/locale';
@@ -92,6 +95,14 @@ export default function ReportsPage() {
 
     // Detail Modal State
     const [selectedEvent, setSelectedEvent] = useState(null);
+    const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+
+    const [editEventData, setEditEventData] = useState(null);
+    const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: '', message: '', onConfirm: null, isDestructive: false });
+
+    // Filter Options (computed from Settings)
+    const gradeOptions = Object.keys(classes || {});
+    const sectionOptions = (gradeFilter && classes[gradeFilter]?.sections) ? classes[gradeFilter].sections : [];
 
     // --- 1. Fetch Data Logic ---
     useEffect(() => {
@@ -115,6 +126,59 @@ export default function ReportsPage() {
     useEffect(() => {
         applyFilters();
     }, [rawData, dateRange, minPoints, maxPoints, assetFilter, gradeFilter, sectionFilter, venueFilter, activeTab]);
+
+    // --- 3. Handlers ---
+    const handleEditClick = async (event) => {
+        try {
+            const docRef = doc(db, 'events', event.id);
+            const docSnap = await getDoc(docRef);
+            if (docSnap.exists()) {
+                setEditEventData({ id: event.id, ...docSnap.data() });
+                setIsEditModalOpen(true);
+            } else {
+                toast.error("هذا النشاط غير موجود");
+            }
+        } catch (e) {
+            console.error(e);
+            toast.error("فشل تحميل بيانات النشاط");
+        }
+    };
+
+    const handleSaveEditedEvent = async (updatedData) => {
+        try {
+            // Use Smart Sync Logic
+            await updateEventWithSmartSync(updatedData.id, updatedData, editEventData);
+            toast.success("تم تحديث النشاط ورصد النقاط بنجاح");
+            setIsEditModalOpen(false);
+            setEditEventData(null);
+            fetchData(); // Refresh list
+        } catch (e) {
+            console.error(e);
+            toast.error("حدث خطأ أثناء حفظ التعديلات");
+        }
+    };
+
+    const handleDeleteEvent = async (event) => {
+        setConfirmModal({
+            isOpen: true,
+            title: "حذف النشاط",
+            message: "هل أنت متأكد من حذف هذا النشاط؟ سيتم حذفه نهائياً.",
+            isDestructive: true,
+            onConfirm: async () => {
+                try {
+                    await deleteDoc(doc(db, 'events', event.id));
+                    toast.success("تم حذف النشاط");
+                    setIsEditModalOpen(false); // If open
+                    setSelectedEvent(null);
+                    setConfirmModal(prev => ({ ...prev, isOpen: false }));
+                    fetchData();
+                } catch (e) {
+                    console.error(e);
+                    toast.error("فشل الحذف");
+                }
+            }
+        });
+    };
 
     async function fetchData() {
         setLoading(true);
@@ -404,6 +468,7 @@ export default function ReportsPage() {
             await new Promise(r => setTimeout(r, 100)); // Render wait
 
             // 4. Capture & PDF
+            // 4. Capture & PDF
             const canvas = await html2canvas(doc.body, {
                 scale: 2,
                 useCORS: true,
@@ -414,30 +479,30 @@ export default function ReportsPage() {
 
             document.body.removeChild(iframe);
 
-            // OPTIMIZATION: Use JPEG with 0.75 quality instead of PNG
-            // This drastically reduces file size (e.g. 20MB -> 1MB)
-            const imgData = canvas.toDataURL('image/jpeg', 0.70);
-            const imgWidth = 595.28; // A4 Width
+            const imgData = canvas.toDataURL('image/jpeg', 0.85); // Slightly higher quality
+            const pdf = new jsPDF('p', 'pt', 'a4');
+            const pageWidth = 595.28;
+            const pageHeight = 841.89;
+
+            // Calculate dimensions
+            const imgWidth = pageWidth;
             const imgHeight = (canvas.height * imgWidth) / canvas.width;
 
-            // Handle multi-page if height exceeds A4 (basic scaling for now, better libraries exist for pagination but this is robust for single-page summary lists)
-            const pdf = new jsPDF('p', 'pt', 'a4');
+            let heightLeft = imgHeight;
+            let position = 0;
 
-            // If report is extremely long, basic scaling is applied. 
-            // Ideally, slicing the canvas would be needed for true multi-page, but for standard user reports this fits.
-            // If it exceeds one page, we add it as one long image scaled down OR split it.
-            // For simplicity and speed in this context:
-            if (imgHeight > 841.89) { // A4 Height
-                // Split across pages logic requires advanced slicing. 
-                // Fallback: Scale to fit or standard top-align.
-                // Current robust choice: Standard Top Align, user accepts page break visually if seamless.
-                // BETTER: Just add the image. If it's too long, jsPDF limits processing.
-                // FIX: We will scale it strictly to fit if it's just a bit over, or standard if not.
-                // For now, let's stick to standard single/double page flow.
+            // First Page
+            pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
+            heightLeft -= pageHeight;
+
+            // Subsequent Pages (Slicing)
+            while (heightLeft > 0) {
+                position -= pageHeight; // Slice by moving image up
+                pdf.addPage();
+                pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
+                heightLeft -= pageHeight;
             }
 
-            // 'FAST' compression + JPEG is key for speed and size
-            pdf.addImage(imgData, 'JPEG', 0, 0, imgWidth, imgHeight, undefined, 'FAST');
             pdf.save(`Report_${activeTab}_${Date.now()}.pdf`);
 
             toast.success("تم تحميل التقرير الشامل", { id: toastId });
@@ -799,6 +864,7 @@ export default function ReportsPage() {
                                             <th className="p-4">المكان</th>
                                             <th className="p-4">الحالة</th>
                                             <th className="p-4 text-center">عدد الطلاب</th>
+                                            <th className="p-4 text-center">إجراءات</th>
                                             <th className="p-4"></th>
                                         </>
                                     )}
@@ -848,6 +914,16 @@ export default function ReportsPage() {
                                                     <td className="p-4 text-center">
                                                         <span className="bg-white/10 px-2 py-1 rounded-md text-white font-mono">{row.studentsCount}</span>
                                                     </td>
+                                                    <td className="p-4 flex items-center justify-center gap-2">
+                                                        <button
+                                                            onClick={(e) => { e.stopPropagation(); handleEditClick(row); }}
+                                                            className="p-2 bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600 hover:text-white rounded-lg transition-all"
+                                                            title="تعديل النشاط"
+                                                        >
+                                                            <Pen size={16} />
+                                                        </button>
+                                                    </td>
+
                                                     <td className="p-4 text-center">
                                                         <button className="text-indigo-400 hover:text-white p-1"><Eye size={16} /></button>
                                                     </td>
@@ -895,101 +971,112 @@ export default function ReportsPage() {
             </div>
 
             {/* --- Event Details Modal --- */}
-            {selectedEvent && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
-                    <div className="bg-[#1a1a20] border border-white/10 rounded-2xl w-full max-w-2xl shadow-2xl flex flex-col max-h-[85vh]">
-                        {/* Modal Header */}
-                        <div className="p-6 border-b border-white/5 flex justify-between items-center bg-black/20">
-                            <div>
-                                <h2 className="text-2xl font-bold text-white">{selectedEvent.title}</h2>
-                                <p className="text-indigo-300 text-xs mt-1">{selectedEvent.type}</p>
+            {
+                selectedEvent && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
+                        <div className="bg-[#1a1a20] border border-white/10 rounded-2xl w-full max-w-2xl shadow-2xl flex flex-col max-h-[85vh]">
+                            {/* Modal Header */}
+                            <div className="p-6 border-b border-white/5 flex justify-between items-center bg-black/20">
+                                <div>
+                                    <h2 className="text-2xl font-bold text-white">{selectedEvent.title}</h2>
+                                    <p className="text-indigo-300 text-xs mt-1">{selectedEvent.type}</p>
+                                </div>
+                                <button onClick={() => setSelectedEvent(null)} className="text-gray-400 hover:text-white bg-white/5 p-2 rounded-full hover:bg-white/10 transition-all"><X size={20} /></button>
                             </div>
-                            <button onClick={() => setSelectedEvent(null)} className="text-gray-400 hover:text-white bg-white/5 p-2 rounded-full hover:bg-white/10 transition-all"><X size={20} /></button>
-                        </div>
 
-                        {/* VISIBLE MODAL CONTENT */}
-                        <div className="p-6 overflow-y-auto custom-scrollbar space-y-6 bg-[#1a1a20] rounded-b-2xl">
-                            {/* Key Details Cards */}
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                                <div className="bg-white/5 p-3 rounded-xl border border-white/5 text-center">
-                                    <div className="text-gray-400 text-xs mb-1">التاريخ</div>
-                                    <div className="text-white font-bold text-sm">{selectedEvent.formattedDate}</div>
+                            {/* VISIBLE MODAL CONTENT */}
+                            <div className="p-6 overflow-y-auto custom-scrollbar space-y-6 bg-[#1a1a20] rounded-b-2xl">
+                                {/* Key Details Cards */}
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                    <div className="bg-white/5 p-3 rounded-xl border border-white/5 text-center">
+                                        <div className="text-gray-400 text-xs mb-1">التاريخ</div>
+                                        <div className="text-white font-bold text-sm">{selectedEvent.formattedDate}</div>
+                                    </div>
+                                    <div className="bg-white/5 p-3 rounded-xl border border-white/5 text-center">
+                                        <div className="text-gray-400 text-xs mb-1">الوقت</div>
+                                        <div className="text-white font-bold text-sm">{selectedEvent.time}</div>
+                                    </div>
+                                    <div className="bg-white/5 p-3 rounded-xl border border-white/5 text-center">
+                                        <div className="text-gray-400 text-xs mb-1">المكان</div>
+                                        <div className="text-white font-bold text-sm truncate">{selectedEvent.venue}</div>
+                                    </div>
+                                    <div className="bg-white/5 p-3 rounded-xl border border-white/5 text-center">
+                                        <div className="text-gray-400 text-xs mb-1">الحالة</div>
+                                        <div className={`text-xs font-bold px-2 py-1 rounded inline-block mt-1 ${selectedEvent.status === 'مكتمل' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-gray-500/20 text-gray-400'}`}>
+                                            {selectedEvent.status}
+                                        </div>
+                                    </div>
                                 </div>
-                                <div className="bg-white/5 p-3 rounded-xl border border-white/5 text-center">
-                                    <div className="text-gray-400 text-xs mb-1">الوقت</div>
-                                    <div className="text-white font-bold text-sm">{selectedEvent.time}</div>
-                                </div>
-                                <div className="bg-white/5 p-3 rounded-xl border border-white/5 text-center">
-                                    <div className="text-gray-400 text-xs mb-1">المكان</div>
-                                    <div className="text-white font-bold text-sm truncate">{selectedEvent.venue}</div>
-                                </div>
-                                <div className="bg-white/5 p-3 rounded-xl border border-white/5 text-center">
-                                    <div className="text-gray-400 text-xs mb-1">الحالة</div>
-                                    <div className={`text-xs font-bold px-2 py-1 rounded inline-block mt-1 ${selectedEvent.status === 'مكتمل' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-gray-500/20 text-gray-400'}`}>
-                                        {selectedEvent.status}
+                                {/* Students List */}
+                                <div>
+                                    <h3 className="text-white font-bold mb-3 flex items-center justify-between">
+                                        <span className="flex items-center"><Users size={16} className="ml-2 text-emerald-400" /> الطلاب المشاركون ({selectedEvent.studentsCount})</span>
+                                    </h3>
+                                    <div className="bg-black/20 rounded-xl border border-white/5 overflow-hidden">
+                                        {selectedEvent.studentNames.length > 0 ? (
+                                            <div className="max-h-[300px] overflow-y-auto custom-scrollbar divide-y divide-white/5">
+                                                {selectedEvent.studentNames.map((name, idx) => (
+                                                    <div key={idx} className="p-3 text-sm text-gray-300 flex items-center hover:bg-white/5">
+                                                        <span className="w-8 text-center text-gray-500 text-xs">{idx + 1}</span>
+                                                        {name}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        ) : (
+                                            <div className="p-8 text-center text-gray-500 text-sm">لم يتم تسجيل أي طلاب في هذا النشاط</div>
+                                        )}
                                     </div>
                                 </div>
                             </div>
-                            {/* Students List */}
-                            <div>
-                                <h3 className="text-white font-bold mb-3 flex items-center justify-between">
-                                    <span className="flex items-center"><Users size={16} className="ml-2 text-emerald-400" /> الطلاب المشاركون ({selectedEvent.studentsCount})</span>
-                                </h3>
-                                <div className="bg-black/20 rounded-xl border border-white/5 overflow-hidden">
-                                    {selectedEvent.studentNames.length > 0 ? (
-                                        <div className="max-h-[300px] overflow-y-auto custom-scrollbar divide-y divide-white/5">
-                                            {selectedEvent.studentNames.map((name, idx) => (
-                                                <div key={idx} className="p-3 text-sm text-gray-300 flex items-center hover:bg-white/5">
-                                                    <span className="w-8 text-center text-gray-500 text-xs">{idx + 1}</span>
-                                                    {name}
-                                                </div>
-                                            ))}
-                                        </div>
-                                    ) : (
-                                        <div className="p-8 text-center text-gray-500 text-sm">لم يتم تسجيل أي طلاب في هذا النشاط</div>
+
+                            {/* Modal Footer */}
+                            <div className="p-6 border-t border-white/10 bg-black/20 flex flex-col md:flex-row justify-between items-center gap-4">
+                                <span className="text-gray-500 text-xs hidden md:block">رقم المعرف: <span className="font-mono select-all">{selectedEvent.id}</span></span>
+
+                                <div className="flex flex-wrap justify-end gap-3 w-full md:w-auto">
+
+                                    {/* ARCHIVE CONTROLS */}
+                                    {selectedEvent.rawStatus === 'archived' && (
+                                        <>
+                                            <button
+                                                onClick={handleForceDelete}
+                                                className="px-4 py-2 bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 rounded-xl font-bold flex items-center transition-all text-sm"
+                                            >
+                                                <Trash2 size={16} className="ml-2" /> حذف
+                                            </button>
+                                            <button
+                                                onClick={handleRestore}
+                                                className="px-4 py-2 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/30 rounded-xl font-bold flex items-center transition-all text-sm"
+                                            >
+                                                <RefreshCw size={16} className="ml-2" /> استعادة
+                                            </button>
+                                            <div className="hidden md:block w-px h-8 bg-gray-700 mx-1"></div>
+                                        </>
                                     )}
+
+                                    <PrintControls event={selectedEvent} onPrint={generateSingleEventPDF} />
+
+                                    <button
+                                        onClick={() => setSelectedEvent(null)}
+                                        className="px-4 py-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl text-sm transition-colors"
+                                    >
+                                        إغلاق
+                                    </button>
                                 </div>
                             </div>
                         </div>
-
-                        {/* Modal Footer */}
-                        <div className="p-6 border-t border-white/10 bg-black/20 flex flex-col md:flex-row justify-between items-center gap-4">
-                            <span className="text-gray-500 text-xs hidden md:block">رقم المعرف: <span className="font-mono select-all">{selectedEvent.id}</span></span>
-
-                            <div className="flex flex-wrap justify-end gap-3 w-full md:w-auto">
-
-                                {/* ARCHIVE CONTROLS */}
-                                {selectedEvent.rawStatus === 'archived' && (
-                                    <>
-                                        <button
-                                            onClick={handleForceDelete}
-                                            className="px-4 py-2 bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 rounded-xl font-bold flex items-center transition-all text-sm"
-                                        >
-                                            <Trash2 size={16} className="ml-2" /> حذف
-                                        </button>
-                                        <button
-                                            onClick={handleRestore}
-                                            className="px-4 py-2 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/30 rounded-xl font-bold flex items-center transition-all text-sm"
-                                        >
-                                            <RefreshCw size={16} className="ml-2" /> استعادة
-                                        </button>
-                                        <div className="hidden md:block w-px h-8 bg-gray-700 mx-1"></div>
-                                    </>
-                                )}
-
-                                <PrintControls event={selectedEvent} onPrint={generateSingleEventPDF} />
-
-                                <button
-                                    onClick={() => setSelectedEvent(null)}
-                                    className="px-4 py-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl text-sm transition-colors"
-                                >
-                                    إغلاق
-                                </button>
-                            </div>
-                        </div>
                     </div>
-                </div>
-            )}
+                )
+            }
+
+            <ConfirmModal
+                isOpen={confirmModal.isOpen}
+                onClose={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+                onConfirm={confirmModal.onConfirm}
+                title={confirmModal.title}
+                message={confirmModal.message}
+                isDestructive={confirmModal.isDestructive}
+            />
         </div>
     );
 }

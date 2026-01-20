@@ -8,6 +8,9 @@ import {
     Save, Shield, Key, AlertTriangle, RefreshCw, Clock,
     Settings, Plus, Trash2, List, Calendar, School, Edit3, CheckCircle, Box, X
 } from 'lucide-react';
+import ConfirmModal from '../components/ui/ConfirmModal';
+import CriticalActionModal from '../components/ui/CriticalActionModal';
+import { writeBatch, collection, getDocs, query, where, doc, updateDoc } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 
 export default function SettingsPage() {
@@ -43,7 +46,12 @@ export default function SettingsPage() {
     const [newPwd, setNewPwd] = useState('');
     const [confirmPwd, setConfirmPwd] = useState('');
     const [generatedKey, setGeneratedKey] = useState('');
-    const [hintText, setHintText] = useState('');
+
+    const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: '', message: '', onConfirm: null, isDestructive: false });
+
+    // --- End Of Year State ---
+    const [criticalModal, setCriticalModal] = useState({ isOpen: false, title: '', message: '', onConfirm: null });
+    const [archiveLabel, setArchiveLabel] = useState('');
 
     // Initialization
     useEffect(() => {
@@ -209,12 +217,91 @@ export default function SettingsPage() {
         } catch (error) { toast.error(error.message, { id: toastId }); }
     };
     const generateRecoveryKey = async () => {
-        if (!confirm("توليد مفتاح جديد؟")) return;
-        const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-        let key = "";
-        for (let i = 0; i < 20; i++) { if (i > 0 && i % 4 === 0) key += "-"; key += chars.charAt(Math.floor(Math.random() * chars.length)); }
-        await setDoc(doc(db, "settings", "global"), { recoveryKeyHash: key }, { merge: true });
-        setGeneratedKey(key);
+        setConfirmModal({
+            isOpen: true,
+            title: "توليد مفتاح أمان جديد",
+            message: "هل أنت متأكد؟ سيؤدي هذا إلى إبطال المفتاح القديم.",
+            isDestructive: true,
+            onConfirm: async () => {
+                const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+                let key = "";
+                for (let i = 0; i < 20; i++) { if (i > 0 && i % 4 === 0) key += "-"; key += chars.charAt(Math.floor(Math.random() * chars.length)); }
+                await setDoc(doc(db, "settings", "global"), { recoveryKeyHash: key }, { merge: true });
+                setGeneratedKey(key);
+                setConfirmModal(prev => ({ ...prev, isOpen: false }));
+            }
+        });
+    };
+
+    // --- End Of Year Logic (Nuclear) ---
+    const handleStartNewYear = () => {
+        if (!archiveLabel) return toast.error("الرجاء إدخال اسم للأرشيف (مثلاً: عام 2024-2025)");
+
+        setCriticalModal({
+            isOpen: true,
+            title: "بدء عام دراسي جديد",
+            message: "هل أنت متأكد تماماً؟ سيتم أرشفة جميع الأنشطة الحالية وتصفير نقاط جميع الطلاب. لا يمكن التراجع عن هذا الإجراء بسهولة.",
+            onConfirm: async () => {
+                setCriticalModal(prev => ({ ...prev, isOpen: false }));
+                const toastId = toast.loading("جاري معالجة البيانات (قد يستغرق وقتاً)...");
+
+                try {
+                    // 1. Archive Events
+                    const eventsRef = collection(db, 'events');
+                    // Fetch ALL events first (safer than compound queries without index)
+                    const eventsSnap = await getDocs(eventsRef);
+                    const eventsToArchive = eventsSnap.docs.filter(d => d.data().status !== 'archived');
+
+                    // 2. Reset Students
+                    const studentsRef = collection(db, 'students');
+                    const studentsSnap = await getDocs(studentsRef);
+
+                    // 3. Prepare Batch Ops
+                    const allOps = [];
+
+                    // Event Ops
+                    eventsToArchive.forEach(docSnap => {
+                        allOps.push({ type: 'update', ref: doc(db, 'events', docSnap.id), data: { status: 'archived', archiveLabel } });
+                    });
+
+                    // Student Ops
+                    studentsSnap.docs.forEach(docSnap => {
+                        const currentData = docSnap.data();
+                        // Store history
+                        const history = currentData.history || {};
+                        history[archiveLabel] = currentData.totalPoints || 0;
+
+                        allOps.push({
+                            type: 'update',
+                            ref: doc(db, 'students', docSnap.id),
+                            data: { totalPoints: 0, history }
+                        });
+                    });
+
+                    // Execute Batches (Chunk 400 for safety)
+                    const CHUNK_SIZE = 400;
+                    for (let i = 0; i < allOps.length; i += CHUNK_SIZE) {
+                        const chunk = allOps.slice(i, i + CHUNK_SIZE);
+                        const batch = writeBatch(db);
+
+                        chunk.forEach(op => {
+                            if (op.type === 'update') batch.update(op.ref, op.data);
+                        });
+
+                        await batch.commit();
+                        // Update toast 
+                        toast.loading(`تمت معالجة ${Math.min(i + CHUNK_SIZE, allOps.length)} من ${allOps.length}...`, { id: toastId });
+                    }
+
+                    toast.success("تم بدء العام الجديد بنجاح!", { id: toastId });
+                    setArchiveLabel('');
+
+                } catch (e) {
+                    console.error(e);
+                    toast.error("حدث خطأ أثناء المعالجة: " + e.message, { id: toastId });
+                }
+            }
+        });
     };
 
     if (!settings) return <div className="text-white p-10 text-center">جاري التحميل...</div>;
@@ -234,6 +321,7 @@ export default function SettingsPage() {
                         { id: 'time', label: 'التوقيت', icon: Clock },
                         { id: 'schemas', label: 'هيكلة الأنشطة', icon: List },
                         { id: 'security', label: 'الأمان', icon: Shield },
+                        { id: 'data', label: 'إدارة البيانات', icon: AlertTriangle },
                     ].map(tab => (
                         <button
                             key={tab.id}
@@ -636,6 +724,70 @@ export default function SettingsPage() {
 
             {/* 5. CLASSES BUILDER */}
             {activeTab === 'classes' && <ClassesManager />}
+
+            {/* 6. DATA MANAGEMENT (DANGER ZONE) */}
+            {activeTab === 'data' && (
+                <div className="max-w-2xl mx-auto w-full space-y-6 animate-fade-in">
+                    <div className="bg-red-900/10 backdrop-blur-md border border-red-500/30 p-8 rounded-2xl shadow-xl relative overflow-hidden">
+                        <div className="absolute top-0 left-0 w-32 h-32 bg-red-500/10 rounded-full blur-3xl -translate-y-1/2 -translate-x-1/2 pointer-events-none"></div>
+
+                        <h2 className="text-xl font-bold text-red-200 flex items-center mb-6 border-b border-red-500/20 pb-4">
+                            <AlertTriangle className="ml-3 text-red-400" /> إدارة نهاية العام (End of Year)
+                        </h2>
+
+                        <p className="text-gray-400 mb-6 leading-relaxed bg-black/20 p-4 rounded-xl border border-red-500/10">
+                            هذه المنطقة مخصصة للإجراءات الحساسة. استخدم هذا القسم عند انتهاء العام الدراسي لبدء عام جديد.
+                            <br /><br />
+                            <span className="text-red-300 font-bold block mb-1">ماذا سيحدث عند البدء؟</span>
+                            <ul className="list-disc list-inside space-y-1 text-sm">
+                                <li>سيتم أرشفة جميع الأنشطة الحالية تحت الاسم الذي تختاره.</li>
+                                <li>سيتم تصفير نقاط جميع الطلاب (مع حفظ النقاط السابقة في السجل).</li>
+                                <li>لن يتم حذف ملفات الطلاب أو الحسابات.</li>
+                            </ul>
+                        </p>
+
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-red-300/80 mb-2 font-bold text-sm">تسمية الأرشيف (مطلوب)</label>
+                                <input
+                                    type="text"
+                                    className="w-full bg-black/30 border border-red-500/30 rounded-xl p-3 text-white placeholder-gray-600 focus:border-red-500 outline-none transition-colors"
+                                    placeholder="مثال: العام الدراسي 1445-1446"
+                                    value={archiveLabel}
+                                    onChange={e => setArchiveLabel(e.target.value)}
+                                />
+                            </div>
+
+                            <button
+                                onClick={handleStartNewYear}
+                                disabled={!archiveLabel}
+                                className="w-full bg-gradient-to-r from-red-700 to-rose-800 hover:from-red-600 hover:to-rose-700 text-white py-4 rounded-xl font-bold shadow-lg shadow-red-900/30 flex items-center justify-center gap-2 group disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                            >
+                                <AlertTriangle className="group-hover:rotate-12 transition-transform" />
+                                أرشفة وبدء عام جديد
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            <ConfirmModal
+                isOpen={confirmModal.isOpen}
+                onClose={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+                onConfirm={confirmModal.onConfirm}
+                title={confirmModal.title}
+                message={confirmModal.message}
+                isDestructive={confirmModal.isDestructive}
+            />
+
+            <CriticalActionModal
+                isOpen={criticalModal.isOpen}
+                onClose={() => setCriticalModal(prev => ({ ...prev, isOpen: false }))}
+                onConfirm={criticalModal.onConfirm}
+                title={criticalModal.title}
+                message={criticalModal.message}
+                verificationText="تأكيد"
+            />
         </div>
     );
 }
@@ -645,7 +797,8 @@ function ClassesManager() {
     const { classes, updateClasses } = useSettings();
     const [localClasses, setLocalClasses] = useState([]);
     const [editingGrade, setEditingGrade] = useState(null); // { id, name, sections: [] }
-    const [newSection, setNewSection] = useState('');
+
+    const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: '', message: '', onConfirm: null, isDestructive: false });
 
     useEffect(() => {
         setLocalClasses(classes || []);
@@ -665,9 +818,17 @@ function ClassesManager() {
     };
 
     const removeGrade = (id) => {
-        if (!confirm("حذف هذا الصف؟")) return;
-        setLocalClasses(localClasses.filter(c => c.id !== id));
-        if (editingGrade?.id === id) setEditingGrade(null);
+        setConfirmModal({
+            isOpen: true,
+            title: "حذف الصف",
+            message: "هل أنت متأكد من حذف هذا الصف وكافة شعبه؟",
+            isDestructive: true,
+            onConfirm: () => {
+                setLocalClasses(localClasses.filter(c => c.id !== id));
+                if (editingGrade?.id === id) setEditingGrade(null);
+                setConfirmModal(prev => ({ ...prev, isOpen: false }));
+            }
+        });
     };
 
     const updateGradeName = (val) => {
@@ -766,7 +927,16 @@ function ClassesManager() {
                     <div className="h-full flex items-center justify-center text-gray-500">اختر صفاً للتعديل</div>
                 )}
             </div>
-        </div>
+
+            <ConfirmModal
+                isOpen={confirmModal.isOpen}
+                onClose={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+                onConfirm={confirmModal.onConfirm}
+                title={confirmModal.title}
+                message={confirmModal.message}
+                isDestructive={confirmModal.isDestructive}
+            />
+        </div >
     );
 }
 

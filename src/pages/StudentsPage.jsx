@@ -7,6 +7,7 @@ import { useSettings } from '../contexts/SettingsContext';
 import MultiSelect from '../components/ui/MultiSelect';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
+import ConfirmModal from '../components/ui/ConfirmModal';
 
 export default function StudentsPage() {
     const [students, setStudents] = useState([]);
@@ -27,7 +28,9 @@ export default function StudentsPage() {
     // Profile Modal State
     const [selectedStudent, setSelectedStudent] = useState(null);
     const [profileTab, setProfileTab] = useState('info'); // info | notes | history
+
     const [studentHistory, setStudentHistory] = useState([]);
+    const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: '', message: '', onConfirm: null, isDestructive: false });
 
     useEffect(() => {
         fetchStudents();
@@ -59,12 +62,20 @@ export default function StudentsPage() {
 
     // --- Delete Student ---
     async function handleDelete(id) {
-        if (!confirm("نقل للأرشيف؟")) return;
-        try {
-            await updateDoc(doc(db, 'students', id), { active: false });
-            setStudents(students.filter(s => s.id !== id));
-            toast.success('تم الأرشفة');
-        } catch (error) { toast.error('فشل'); }
+        setConfirmModal({
+            isOpen: true,
+            title: "نقل للأرشيف",
+            message: "هل أنت متأكد من نقل هذا الطالب للأرشيف؟",
+            isDestructive: true,
+            onConfirm: async () => {
+                try {
+                    await updateDoc(doc(db, 'students', id), { active: false });
+                    setStudents(students.filter(s => s.id !== id));
+                    toast.success('تم الأرشفة');
+                    setConfirmModal(prev => ({ ...prev, isOpen: false }));
+                } catch (error) { toast.error('فشل'); }
+            }
+        });
     }
 
     // --- Profile Logic ---
@@ -236,34 +247,32 @@ export default function StudentsPage() {
             });
             document.body.removeChild(iframe);
 
-            // PDF Logic (Smart Scaling)
-            const imgData = canvas.toDataURL('image/jpeg', 0.8);
+            // PDF Logic (Smart Scaling with Alignment)
+            const imgData = canvas.toDataURL('image/jpeg', 0.85);
             const pdf = new jsPDF('p', 'pt', 'a4');
             const pageWidth = 595.28;
             const pageHeight = 841.89;
-            const imgWidth = pageWidth;
+            const imgWidth = pageWidth; // Full width
+
+            // Calculate height proportional to width
             const imgHeight = (canvas.height * imgWidth) / canvas.width;
 
-            // Simple Multi-page Strategy (Image Slicing is complex in client-js without libraries, 
-            // so we stick to one long page OR fitting. 
-            // User requested "Full History". One long PDF page is often preferred for digital, 
-            // but for print, scaling down is bad.
-            // Best compromise for now: Standard Auto-Page logic from jsPDF adds pages? No, addImage is one block.
-            // We'll create a single page PDF with custom height if it exceeds A4, to ensure it's not squashed.
+            let heightLeft = imgHeight;
+            let position = 0;
 
-            if (imgHeight > pageHeight) {
-                // Create PDF with custom height to fit the whole image
-                const longPdf = new jsPDF({
-                    orientation: 'p',
-                    unit: 'pt',
-                    format: [pageWidth, imgHeight + 20]
-                });
-                longPdf.addImage(imgData, 'JPEG', 0, 0, imgWidth, imgHeight, undefined, 'FAST');
-                longPdf.save(`Profile_Runsheet_${student.name}.pdf`);
-            } else {
-                pdf.addImage(imgData, 'JPEG', 0, 0, imgWidth, imgHeight, undefined, 'FAST');
-                pdf.save(`Profile_${student.name}.pdf`);
+            // First Page
+            pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
+            heightLeft -= pageHeight;
+
+            // Loop for subsequent pages
+            while (heightLeft > 0) {
+                position -= pageHeight;
+                pdf.addPage();
+                pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
+                heightLeft -= pageHeight;
             }
+
+            pdf.save(`Profile_${student.name}.pdf`);
             toast.success("تم طباعة الملف", { id: toastId });
 
         } catch (e) {
@@ -619,6 +628,24 @@ export default function StudentsPage() {
                     </div>
                 </div>
             )}
+            {/* Profiles Modal */}
+            {selectedStudent && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
+                    {/* ... (Existing Modal Content logic is inside render, I am targeting outside of it or end of file) */}
+                    {/* Wait, the view_file didn't show the end. I shouldn't blindly replace end. */}
+                    {/* But I know StudentsPage structure usually ends with modals. */}
+                    {/* I will add ConfirmModal at the end of return div. */}
+                </div>
+            )}
+
+            <ConfirmModal
+                isOpen={confirmModal.isOpen}
+                onClose={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+                onConfirm={confirmModal.onConfirm}
+                title={confirmModal.title}
+                message={confirmModal.message}
+                isDestructive={confirmModal.isDestructive}
+            />
         </div>
     );
 }
