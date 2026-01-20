@@ -489,7 +489,7 @@ export default function StudentsPage() {
 
             {/* --- PROFILE MODAL --- */}
             {selectedStudent && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
                     <div className="bg-gray-900 border border-white/20 rounded-2xl w-full max-w-3xl h-[85vh] flex flex-col shadow-2xl animate-scale-in overflow-hidden">
                         {/* Modal Header */}
                         <div className="p-6 bg-gradient-to-l from-indigo-900/50 to-transparent border-b border-white/10 flex justify-between items-start">

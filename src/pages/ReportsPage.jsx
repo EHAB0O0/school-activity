@@ -92,6 +92,9 @@ export default function ReportsPage() {
     const [sectionFilter, setSectionFilter] = useState('');
     const [specFilter, setSpecFilter] = useState('All');
     const [pointsRange, setPointsRange] = useState({ min: 0, max: 2000 });
+    // Legacy support to prevent crash if referenced
+    const [minPoints, setMinPoints] = useState(0);
+    const [maxPoints, setMaxPoints] = useState(2000);
 
     // Asset Filters
     const [assetStatusFilter, setAssetStatusFilter] = useState('All');

@@ -301,7 +301,7 @@ export default function Scheduler() {
                     scale: 2,
                     useCORS: true,
                     logging: false,
-                    backgroundColor: '#1a1a20', // Capture dark theme background
+                    backgroundColor: '#1f2937', // Explicit Hex for Tailwind compat
                     ignoreElements: (element) => element.classList.contains('no-print') // Helper to hide buttons if needed
                 });
 
