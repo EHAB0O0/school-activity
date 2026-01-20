@@ -480,6 +480,7 @@ export default function Scheduler() {
     const handleEventClick = (e, ev) => {
         e.stopPropagation();
         setModalData({
+            id: ev.id, // Explicitly pass ID to ensure Edit Mode
             ...ev,
             startTime: ev.startTime?.toDate ? format(ev.startTime.toDate(), 'HH:mm') : ev.startTime,
             endTime: ev.endTime?.toDate ? format(ev.endTime.toDate(), 'HH:mm') : ev.endTime,
