@@ -305,7 +305,7 @@ export default function Scheduler() {
                     ignoreElements: (element) => element.classList.contains('no-print') // Helper to hide buttons if needed
                 });
 
-                const imgData = canvas.toDataURL('image/jpeg', 0.9);
+                const imgData = canvas.toDataURL('image/jpeg', 0.9); // Defined HERE
                 const pdf = new jsPDF('l', 'pt', 'a4'); // Landscape for visual
                 const pdfWidth = 841.89;
                 const pdfHeight = 595.28;
@@ -769,7 +769,10 @@ export default function Scheduler() {
                                                             `}
                                                             style={{
                                                                 right: `${style.left}%`,
-                                                                width: `${style.width}%`
+                                                                width: `${style.width}%`,
+                                                                background: ev.status === 'Done'
+                                                                    ? 'linear-gradient(to bottom right, #064e3b, #134e4a)' // Emerald-900 to Teal-900
+                                                                    : 'linear-gradient(to bottom right, #312e81, #581c87)'  // Indigo-900 to Purple-900
                                                             }}
                                                         >
                                                             <div className="flex items-start justify-between min-w-0">

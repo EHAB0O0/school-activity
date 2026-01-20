@@ -9,6 +9,11 @@ import { collection, query, where, getDocs, Timestamp } from "firebase/firestore
 export async function checkConflicts(newEvent) {
     const { start, end, venueId, participatingStudents = [], assets = [], id: excludeId } = newEvent;
 
+    // GUARD CLAUSE: Prevent DB queries if essential fields are undefined
+    if (!venueId || !start || !end) {
+        return { hasConflict: false };
+    }
+
     // Convert JS Dates to Firestore Timestamps for Query
     // We use a "Time Window" query to fetch ALL potential overlaps from the server.
     // This is NOT a simulation; it is a scoped DB query.

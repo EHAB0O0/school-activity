@@ -259,9 +259,8 @@ export default function ReportsPage() {
             if (selectedTypes.length > 0) filtered = filtered.filter(item => selectedTypes.includes(item.type));
 
         } else if (activeTab === 'students') {
-            if (minPoints > 0) filtered = filtered.filter(item => item.points >= minPoints);
-            if (maxPoints < 2000) filtered = filtered.filter(item => item.points <= pointsRange.max);
             if (pointsRange.min > 0) filtered = filtered.filter(item => item.points >= pointsRange.min);
+            if (pointsRange.max < 2000) filtered = filtered.filter(item => item.points <= pointsRange.max);
 
 
             if (gradeFilter) filtered = filtered.filter(item => item.grade === gradeFilter);
