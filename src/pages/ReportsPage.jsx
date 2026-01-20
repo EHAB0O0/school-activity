@@ -141,7 +141,7 @@ export default function ReportsPage() {
     // --- 2. Filter Logic ---
     useEffect(() => {
         applyFilters();
-    }, [rawData, dateRange, minPoints, maxPoints, assetFilter, gradeFilter, sectionFilter, venueFilter, activeTab]);
+    }, [rawData, dateRange, minPoints, maxPoints, assetStatusFilter, gradeFilter, sectionFilter, venueFilter, activeTab]);
 
     // --- 3. Handlers ---
     const handleEditClick = async (event) => {

@@ -489,153 +489,155 @@ export default function StudentsPage() {
 
             {/* --- PROFILE MODAL --- */}
             {selectedStudent && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
-                    <div className="bg-gray-900 border border-white/20 rounded-2xl w-full max-w-3xl h-[85vh] flex flex-col shadow-2xl animate-scale-in overflow-hidden">
-                        {/* Modal Header */}
-                        <div className="p-6 bg-gradient-to-l from-indigo-900/50 to-transparent border-b border-white/10 flex justify-between items-start">
-                            <div className="flex items-center">
-                                <div className="w-16 h-16 rounded-full bg-indigo-500 flex items-center justify-center text-3xl font-bold text-white shadow-xl">
-                                    {selectedStudent.name.charAt(0)}
-                                </div>
-                                <div className="mr-4">
-                                    <h2 className="text-2xl font-bold text-white mb-1">{selectedStudent.name}</h2>
-                                    <div className="flex items-center space-x-3 space-x-reverse text-sm">
-                                        <span className="text-gray-400 bg-white/5 px-2 py-0.5 rounded">{selectedStudent.class}</span>
-                                        <span className="text-amber-400 flex items-center font-bold px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/20">
-                                            <Award size={14} className="ml-1" /> {selectedStudent.totalPoints} نقطة
-                                        </span>
-                                    </div>
-                                </div>
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <button
-                                    onClick={() => generateStudentProfilePDF(selectedStudent, studentHistory)}
-                                    className="bg-white/10 hover:bg-white/20 text-white p-2 rounded-lg flex items-center transition-all border border-white/5 shadow-sm"
-                                    title="طباعة الملف"
-                                >
-                                    <Printer size={20} />
-                                </button>
-                                <button onClick={() => setSelectedStudent(null)} className="text-gray-400 hover:text-white bg-white/5 p-2 rounded-full hover:bg-white/10"><X size={24} /></button>
-                            </div>
-                        </div>
 
-                        {/* Tabs */}
-                        <div className="flex border-b border-white/10 px-6 bg-black/20">
-                            {[
-                                { id: 'info', label: 'البيانات الأساسية', icon: User },
-                                { id: 'notes', label: 'ملاحظات المعلم', icon: FileText },
-                                { id: 'history', label: 'سجل النشاط', icon: Clock },
-                            ].map(tab => (
-                                <button
-                                    key={tab.id}
-                                    onClick={() => setProfileTab(tab.id)}
-                                    className={`px-4 py-4 flex items-center space-x-2 space-x-reverse border-b-2 transition-all ${profileTab === tab.id ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-gray-400 hover:text-white'}`}
-                                >
-                                    <tab.icon size={18} /> <span>{tab.label}</span>
-                                </button>
-                            ))}
-                        </div>
+                <>
+                    {/* Backdrop */}
+                    <div
+                        className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm transition-opacity"
+                        onClick={() => setSelectedStudent(null)}
+                    />
 
-                        {/* Content */}
-                        <div className="flex-1 overflow-y-auto p-6 bg-black/10">
-                            {profileTab === 'info' && (
-                                <div className="space-y-6 max-w-lg mx-auto pt-4">
-                                    <div>
-                                        <label className="block text-gray-500 text-sm mb-1">الاسم الكامل</label>
-                                        <input className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-white focus:border-indigo-500 outline-none"
-                                            value={selectedStudent.name} onChange={e => setSelectedStudent({ ...selectedStudent, name: e.target.value })} />
+                    {/* Modal Container */}
+                    <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 pointer-events-none">
+                        <div className="bg-gray-900 border border-white/20 rounded-2xl w-full max-w-3xl h-[85vh] flex flex-col shadow-2xl overflow-hidden pointer-events-auto relative">
+                            {/* Removed animate-scale-in to be safe unless defined */}
+                            {/* Modal Header */}
+                            <div className="p-6 bg-gradient-to-l from-indigo-900/50 to-transparent border-b border-white/10 flex justify-between items-start">
+                                <div className="flex items-center">
+                                    <div className="w-16 h-16 rounded-full bg-indigo-500 flex items-center justify-center text-3xl font-bold text-white shadow-xl">
+                                        {selectedStudent.name.charAt(0)}
                                     </div>
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div>
-                                            <label className="block text-gray-500 text-sm mb-1">الفصل</label>
-                                            <input className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-white focus:border-indigo-500 outline-none"
-                                                value={selectedStudent.class} onChange={e => setSelectedStudent({ ...selectedStudent, class: e.target.value })} />
-                                        </div>
-                                        <div>
-                                            <label className="block text-gray-500 text-sm mb-1">رصيد النقاط (تعديل يدوي)</label>
-                                            <input type="number" className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-white focus:border-indigo-500 outline-none font-mono"
-                                                value={selectedStudent.totalPoints} onChange={e => setSelectedStudent({ ...selectedStudent, totalPoints: e.target.value })} />
+                                    <div className="mr-4">
+                                        <h2 className="text-2xl font-bold text-white mb-1">{selectedStudent.name}</h2>
+                                        <div className="flex items-center space-x-3 space-x-reverse text-sm">
+                                            <span className="text-gray-400 bg-white/5 px-2 py-0.5 rounded">{selectedStudent.class}</span>
+                                            <span className="text-amber-400 flex items-center font-bold px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/20">
+                                                <Award size={14} className="ml-1" /> {selectedStudent.totalPoints} نقطة
+                                            </span>
                                         </div>
                                     </div>
-
-                                    <div>
-                                        <MultiSelect
-                                            label="التخصصات / الفرق المسجلة"
-                                            placeholder="تعديل التخصصات..."
-                                            options={specOptions}
-                                            selectedValues={selectedStudent.specializations || []}
-                                            onChange={vals => setSelectedStudent({ ...selectedStudent, specializations: vals })}
-                                            icon={Tag}
-                                        />
-                                    </div>
-                                    <button onClick={saveProfileChanges} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-3 rounded-xl font-bold flex items-center justify-center shadow-lg">
-                                        <Save size={18} className="ml-2" /> حفظ التعديلات
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        onClick={() => generateStudentProfilePDF(selectedStudent, studentHistory)}
+                                        className="bg-white/10 hover:bg-white/20 text-white p-2 rounded-lg flex items-center transition-all border border-white/5 shadow-sm"
+                                        title="طباعة الملف"
+                                    >
+                                        <Printer size={20} />
                                     </button>
+                                    <button onClick={() => setSelectedStudent(null)} className="text-gray-400 hover:text-white bg-white/5 p-2 rounded-full hover:bg-white/10"><X size={24} /></button>
                                 </div>
-                            )}
+                            </div>
 
-                            {profileTab === 'notes' && (
-                                <div className="h-full flex flex-col">
-                                    <div className="bg-amber-500/5 border border-amber-500/10 p-4 rounded-xl mb-4 text-amber-200 text-sm flex items-center">
-                                        <FileText size={16} className="ml-2" /> هذه الملاحظات خاصة فقط بالإدارة ولا تظهر للطالب.
-                                    </div>
-                                    <textarea
-                                        className="flex-1 w-full bg-black/30 border border-white/10 rounded-xl p-4 text-white focus:border-indigo-500 outline-none resize-none"
-                                        placeholder="اكتب ملاحظاتك ومتابعاتك عن الطالب هنا..."
-                                        value={selectedStudent.notes || ''}
-                                        onChange={e => setSelectedStudent({ ...selectedStudent, notes: e.target.value })}
-                                    ></textarea>
-                                    <div className="mt-4 flex justify-end">
-                                        <button onClick={saveProfileChanges} className="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2 rounded-xl font-bold">حفظ الملاحظة</button>
-                                    </div>
-                                </div>
-                            )}
+                            {/* Tabs */}
+                            <div className="flex border-b border-white/10 px-6 bg-black/20">
+                                {[
+                                    { id: 'info', label: 'البيانات الأساسية', icon: User },
+                                    { id: 'notes', label: 'ملاحظات المعلم', icon: FileText },
+                                    { id: 'history', label: 'سجل النشاط', icon: Clock },
+                                ].map(tab => (
+                                    <button
+                                        key={tab.id}
+                                        onClick={() => setProfileTab(tab.id)}
+                                        className={`px-4 py-4 flex items-center space-x-2 space-x-reverse border-b-2 transition-all ${profileTab === tab.id ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-gray-400 hover:text-white'}`}
+                                    >
+                                        <tab.icon size={18} /> <span>{tab.label}</span>
+                                    </button>
+                                ))}
+                            </div>
 
-                            {profileTab === 'history' && (
-                                <div className="space-y-4">
-                                    <div className="flex justify-between items-center bg-white/5 p-3 rounded-xl border border-white/5">
-                                        <h3 className="text-white font-bold m-0 border-none">سجل الأنشطة الكامل ({studentHistory.length})</h3>
-                                        <button
-                                            onClick={() => generateStudentProfilePDF(selectedStudent, studentHistory)}
-                                            className="text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-lg flex items-center transition-all"
-                                        >
-                                            <Printer size={14} className="ml-1" /> طباعة السجل
+                            {/* Content */}
+                            <div className="flex-1 overflow-y-auto p-6 bg-black/10">
+                                {profileTab === 'info' && (
+                                    <div className="space-y-6 max-w-lg mx-auto pt-4">
+                                        <div>
+                                            <label className="block text-gray-500 text-sm mb-1">الاسم الكامل</label>
+                                            <input className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-white focus:border-indigo-500 outline-none"
+                                                value={selectedStudent.name} onChange={e => setSelectedStudent({ ...selectedStudent, name: e.target.value })} />
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="block text-gray-500 text-sm mb-1">الفصل</label>
+                                                <input className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-white focus:border-indigo-500 outline-none"
+                                                    value={selectedStudent.class} onChange={e => setSelectedStudent({ ...selectedStudent, class: e.target.value })} />
+                                            </div>
+                                            <div>
+                                                <label className="block text-gray-500 text-sm mb-1">رصيد النقاط (تعديل يدوي)</label>
+                                                <input type="number" className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-white focus:border-indigo-500 outline-none font-mono"
+                                                    value={selectedStudent.totalPoints} onChange={e => setSelectedStudent({ ...selectedStudent, totalPoints: e.target.value })} />
+                                            </div>
+                                        </div>
+
+                                        <div>
+                                            <MultiSelect
+                                                label="التخصصات / الفرق المسجلة"
+                                                placeholder="تعديل التخصصات..."
+                                                options={specOptions}
+                                                selectedValues={selectedStudent.specializations || []}
+                                                onChange={vals => setSelectedStudent({ ...selectedStudent, specializations: vals })}
+                                                icon={Tag}
+                                            />
+                                        </div>
+                                        <button onClick={saveProfileChanges} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-3 rounded-xl font-bold flex items-center justify-center shadow-lg">
+                                            <Save size={18} className="ml-2" /> حفظ التعديلات
                                         </button>
                                     </div>
-                                    {studentHistory.length > 0 ? studentHistory.map(evt => (
-                                        <div key={evt.id} className="bg-white/5 p-4 rounded-xl border border-white/5 flex items-center justify-between hover:bg-white/10 transition-colors">
-                                            <div className="flex items-center">
-                                                <div className={`w-2 h-12 rounded-full mr-4 ${evt.status === 'Done' ? 'bg-emerald-500' : 'bg-gray-600'}`}></div>
-                                                <div>
-                                                    <div className="font-bold text-white text-lg">{evt.title}</div>
-                                                    <div className="text-gray-400 text-sm">{evt.typeName} | {evt.venueId}</div>
+                                )}
+
+                                {profileTab === 'notes' && (
+                                    <div className="h-full flex flex-col">
+                                        <div className="bg-amber-500/5 border border-amber-500/10 p-4 rounded-xl mb-4 text-amber-200 text-sm flex items-center">
+                                            <FileText size={16} className="ml-2" /> هذه الملاحظات خاصة فقط بالإدارة ولا تظهر للطالب.
+                                        </div>
+                                        <textarea
+                                            className="flex-1 w-full bg-black/30 border border-white/10 rounded-xl p-4 text-white focus:border-indigo-500 outline-none resize-none"
+                                            placeholder="اكتب ملاحظاتك ومتابعاتك عن الطالب هنا..."
+                                            value={selectedStudent.notes || ''}
+                                            onChange={e => setSelectedStudent({ ...selectedStudent, notes: e.target.value })}
+                                        ></textarea>
+                                        <div className="mt-4 flex justify-end">
+                                            <button onClick={saveProfileChanges} className="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2 rounded-xl font-bold">حفظ الملاحظة</button>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {profileTab === 'history' && (
+                                    <div className="space-y-4">
+                                        <div className="flex justify-between items-center bg-white/5 p-3 rounded-xl border border-white/5">
+                                            <h3 className="text-white font-bold m-0 border-none">سجل الأنشطة الكامل ({studentHistory.length})</h3>
+                                            <button
+                                                onClick={() => generateStudentProfilePDF(selectedStudent, studentHistory)}
+                                                className="text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-lg flex items-center transition-all"
+                                            >
+                                                <Printer size={14} className="ml-1" /> طباعة السجل
+                                            </button>
+                                        </div>
+                                        {studentHistory.length > 0 ? studentHistory.map(evt => (
+                                            <div key={evt.id} className="bg-white/5 p-4 rounded-xl border border-white/5 flex items-center justify-between hover:bg-white/10 transition-colors">
+                                                <div className="flex items-center">
+                                                    <div className={`w-2 h-12 rounded-full mr-4 ${evt.status === 'Done' ? 'bg-emerald-500' : 'bg-gray-600'}`}></div>
+                                                    <div>
+                                                        <div className="font-bold text-white text-lg">{evt.title}</div>
+                                                        <div className="text-gray-400 text-sm">{evt.typeName} | {evt.venueId}</div>
+                                                    </div>
+                                                </div>
+                                                <div className="text-left">
+                                                    <div className="text-emerald-400 font-bold font-mono">{evt.date || evt.startTime?.toDate().toLocaleDateString('en-GB')}</div>
+                                                    <div className="text-xs text-gray-500 mt-1">{evt.startTime?.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
                                                 </div>
                                             </div>
-                                            <div className="text-left">
-                                                <div className="text-emerald-400 font-bold font-mono">{evt.date || evt.startTime?.toDate().toLocaleDateString('en-GB')}</div>
-                                                <div className="text-xs text-gray-500 mt-1">{evt.startTime?.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                                        )) : (
+                                            <div className="text-center py-20 opacity-50">
+                                                <Clock size={48} className="mx-auto mb-4" />
+                                                <p>لا يوجد سجل أنشطة لهذا الطالب حتى الآن</p>
                                             </div>
-                                        </div>
-                                    )) : (
-                                        <div className="text-center py-20 opacity-50">
-                                            <Clock size={48} className="mx-auto mb-4" />
-                                            <p>لا يوجد سجل أنشطة لهذا الطالب حتى الآن</p>
-                                        </div>
-                                    )}
-                                </div>
-                            )}
+                                        )}
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     </div>
-                </div>
-            )}
-            {/* Profiles Modal */}
-            {selectedStudent && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
-                    {/* ... (Existing Modal Content logic is inside render, I am targeting outside of it or end of file) */}
-                    {/* Wait, the view_file didn't show the end. I shouldn't blindly replace end. */}
-                    {/* But I know StudentsPage structure usually ends with modals. */}
-                    {/* I will add ConfirmModal at the end of return div. */}
-                </div>
+                </>
             )}
 
             <ConfirmModal

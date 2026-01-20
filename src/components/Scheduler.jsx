@@ -76,7 +76,7 @@ export default function Scheduler() {
             // Client-side filtering is easier here given small dataset
             const querySnapshot = await getDocs(q);
             const eventsData = querySnapshot.docs
-                .map(doc => ({ id: doc.id, ...doc.data() }))
+                .map(doc => ({ ...doc.data(), id: doc.id })) // Fix: id last to prevent overwrite by data().id (if null)
                 .filter(ev => ev.status !== 'archived');
 
             setEvents(eventsData);
@@ -298,23 +298,24 @@ export default function Scheduler() {
                 if (!schedulerRef.current) throw new Error("Scheduler element not found");
 
                 const canvas = await html2canvas(schedulerRef.current, {
-                    scale: 2,
                     useCORS: true,
+                    backgroundColor: '#1f2937', // Force Hex background
+                    scale: 2,
                     logging: false,
-                    backgroundColor: '#1f2937', // Explicit Hex for Tailwind compat
-                    ignoreElements: (element) => element.classList.contains('no-print') // Helper to hide buttons if needed
+                    ignoreElements: (element) => element.classList.contains('no-print')
                 });
 
-                const imgData = canvas.toDataURL('image/jpeg', 0.9); // Defined HERE
-                const pdf = new jsPDF('l', 'pt', 'a4'); // Landscape for visual
+                const imgData = canvas.toDataURL('image/jpeg', 0.8); // Define it here
+                const pdf = new jsPDF('l', 'pt', 'a4'); // Landscape
                 const pdfWidth = 841.89;
                 const pdfHeight = 595.28;
+
                 const imgProps = pdf.getImageProperties(imgData);
                 const ratio = imgProps.width / imgProps.height;
                 const width = pdfWidth;
                 const height = width / ratio;
 
-                pdf.addImage(imgData, 'JPEG', 0, (pdfHeight - height) / 2, width, height);
+                pdf.addImage(imgData, 'JPEG', 0, (pdfHeight - height) / 2, width, height); // Use it here
                 pdf.save(`Scheduler_Visual_${format(new Date(), 'yyyy-MM-dd')}.pdf`);
 
             } else if (type === 'agenda') {
@@ -480,8 +481,8 @@ export default function Scheduler() {
     const handleEventClick = (e, ev) => {
         e.stopPropagation();
         setModalData({
-            id: ev.id, // Explicitly pass ID to ensure Edit Mode
             ...ev,
+            id: ev.id, // Explicitly pass ID LAST to ensure it survives
             startTime: ev.startTime?.toDate ? format(ev.startTime.toDate(), 'HH:mm') : ev.startTime,
             endTime: ev.endTime?.toDate ? format(ev.endTime.toDate(), 'HH:mm') : ev.endTime,
             date: ev.startTime?.toDate ? format(ev.startTime.toDate(), 'yyyy-MM-dd') : ev.date
