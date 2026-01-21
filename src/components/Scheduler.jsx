@@ -447,6 +447,7 @@ export default function Scheduler() {
                 let heightLeft = imgHeight;
                 let position = 0;
 
+                const imgData = canvas.toDataURL('image/jpeg', 0.8); // Fix: Define imgData for Agenda
                 pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
                 heightLeft -= pdfHeight;
 
