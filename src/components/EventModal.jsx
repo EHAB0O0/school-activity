@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { db } from '../firebase';
-import { collection, query, where, getDocs, Timestamp, doc, updateDoc } from 'firebase/firestore'; // Removed transactional/batch imports as logic is mostly handled in handlers, but conflicts uses fetch
+import { collection, query, where, getDocs, Timestamp, doc, updateDoc, limit, orderBy } from 'firebase/firestore'; // Removed transactional/batch imports as logic is mostly handled in handlers, but conflicts uses fetch
 import { checkConflicts } from '../utils/ConflictGuard';
 import { format, addDays } from 'date-fns';
 import { Plus, CheckCircle, Calendar, Clock, MapPin, AlertTriangle, Users, Box, Trash2, X, Search, Lock } from 'lucide-react';
@@ -174,20 +174,64 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
     };
 
     // --- Smart Import Logic ---
+    // --- Smart Import Logic ---
+    useEffect(() => {
+        if (showImport && pastEvents.length === 0) {
+            // Fetch recent events for "Smart Suggestion"
+            const fetchRecent = async () => {
+                try {
+                    const q = query(
+                        collection(db, 'events'),
+                        where('status', '!=', 'Draft') // prefer completed events
+                        // orderBy('date', 'desc'), // Requires index. Let's rely on default or simple query + client sort if needed, or just fetch random recent
+                        // limit(50)
+                    );
+                    // To avoid index issues, let's just fetch a reasonable batch or use what we have if possible.
+                    // Actually, simple query is safer without composite index.
+                    // Let's try fetching by date descending if possible, but might fail strict index.
+                    // SAFE APPROUCH: query limit 50. Client side Sort/Dedup.
+                    const qSafe = query(collection(db, 'events'), limit(50));
+
+                    const snap = await getDocs(qSafe);
+                    const rawEvents = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+                    // Client-side Dedup by Title & Sort by Date Desc
+                    const uniqueMap = new Map();
+                    rawEvents.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+                    rawEvents.forEach(ev => {
+                        if (!uniqueMap.has(ev.title)) {
+                            uniqueMap.set(ev.title, ev);
+                        }
+                    });
+
+                    setPastEvents(Array.from(uniqueMap.values()));
+                } catch (e) {
+                    console.error("Failed to fetch past events", e);
+                }
+            };
+            fetchRecent();
+        }
+    }, [showImport]);
+
     const handleImportSearch = async (term) => {
         setImportSearch(term);
         if (term.length < 2) return;
+        // Simple search
         const q = query(
             collection(db, 'events'),
             where('title', '>=', term),
             where('title', '<=', term + '\uf8ff'),
+            limit(10)
         );
         const snap = await getDocs(q);
-        setPastEvents(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        // We assume search results are what they are. No strict dedup needed here or maybe yes?
+        const hits = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        setPastEvents(hits);
     };
 
     const applyImport = (importedEvent) => {
-        // Copy everything EXCEPT date/time
+        // Smart Copy: Fill details but KEEP current Date/Time
         setFormData(prev => ({
             ...prev,
             title: importedEvent.title,
@@ -197,9 +241,10 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
             studentIds: importedEvent.participatingStudents || [],
             assetIds: importedEvent.assets || [],
             customFields: importedEvent.customData || {}
+            // Date, StartTime, EndTime are explicitly PRESERVED from 'prev' (or not touched)
         }));
         setShowImport(false);
-        toast.success("تم استيراد بيانات النشاط");
+        toast.success("تم نسخ بيانات النشاط بنجاح");
     };
 
     const activeType = eventTypes?.find(t => String(t?.id) === String(formData?.typeId));
@@ -334,7 +379,7 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                         </h2>
                         {!initialData?.id && (
                             <button onClick={() => setShowImport(!showImport)} className="text-xs bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 px-3 py-1.5 rounded-lg hover:bg-indigo-600/30 transition-all flex items-center">
-                                📥 استيراد من سابق
+                                📥 نسخ من نشاط سابق
                             </button>
                         )}
                     </div>

@@ -84,9 +84,9 @@ export function SettingsProvider({ children }) {
         });
     }
 
-    async function updateClasses(classesStructure) {
+    async function updateGrades(gradesStructure) {
         await updateDoc(doc(db, "settings", "global"), {
-            classes: classesStructure // [{ id, name, sections: [] }]
+            grades: gradesStructure // [{ id, name, sections: [] }]
         });
     }
 
@@ -105,9 +105,9 @@ export function SettingsProvider({ children }) {
         updateEventTypes,
         saveTimeProfile,
         updateSchoolInfo,
-        updateClasses,
+        updateGrades,
         updateHolidaysAndWeekends,
-        classes: settings?.classes || [],
+        grades: settings?.grades || [],
         eventTypes: settings?.eventTypes || [],
         schoolInfo: settings?.schoolInfo || {},
         weekends: settings?.weekends || [], // Default to empty if not set

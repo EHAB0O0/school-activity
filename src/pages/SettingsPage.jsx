@@ -793,151 +793,228 @@ export default function SettingsPage() {
     );
 }
 
-// Sub-Component for Cleanliness
+// Sub-Component for Classes & Sections Helper
 function ClassesManager() {
-    const { classes, updateClasses } = useSettings();
-    const [localClasses, setLocalClasses] = useState([]);
-    const [editingGrade, setEditingGrade] = useState(null); // { id, name, sections: [] }
-
-    const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: '', message: '', onConfirm: null, isDestructive: false });
+    const { grades, updateGrades } = useSettings();
+    const [localGrades, setLocalGrades] = useState([]);
+    const [editingGrade, setEditingGrade] = useState({ id: null, name: '', sections: [] });
+    const [isEditing, setIsEditing] = useState(false);
 
     useEffect(() => {
-        setLocalClasses(classes || []);
-    }, [classes]);
+        if (grades) setLocalGrades(grades);
+    }, [grades]);
 
-    const handleSaveAll = async () => {
+    const handleSaveGrade = async () => {
+        if (!editingGrade.name) return toast.error("اسم الصف مطلوب");
+
+        let newGrades = [...localGrades];
+        if (editingGrade.id) {
+            // Update existing
+            const index = newGrades.findIndex(g => g.id === editingGrade.id);
+            if (index > -1) newGrades[index] = editingGrade;
+        } else {
+            // Create new
+            const newG = { ...editingGrade, id: Date.now().toString() };
+            newGrades.push(newG);
+            setEditingGrade(newG); // Keep editing it to add sections
+        }
+
         try {
-            await updateClasses(localClasses);
-            toast.success("تم تحديث هيكلة الصفوف");
-        } catch (e) { toast.error("فشل الحفظ"); }
+            await updateGrades(newGrades);
+            toast.success("تم حفظ الصف الدراسية");
+            setLocalGrades(newGrades);
+            if (!editingGrade.id) setIsEditing(true); // Switch to edit mode after create
+        } catch (e) {
+            toast.error("فشل الحفظ");
+        }
     };
 
-    const addGrade = () => {
-        const newG = { id: Date.now(), name: 'صف جديد', sections: [] };
-        setLocalClasses([...localClasses, newG]);
-        setEditingGrade(newG);
-    };
-
-    const removeGrade = (id) => {
-        setConfirmModal({
-            isOpen: true,
-            title: "حذف الصف",
-            message: "هل أنت متأكد من حذف هذا الصف وكافة شعبه؟",
-            isDestructive: true,
-            onConfirm: () => {
-                setLocalClasses(localClasses.filter(c => c.id !== id));
-                if (editingGrade?.id === id) setEditingGrade(null);
-                setConfirmModal(prev => ({ ...prev, isOpen: false }));
+    const handleDeleteGrade = async (gradeId) => {
+        if (!window.confirm("هل أنت متأكد من حذف هذا الصف؟ سيتم حذف جميع الشعب بداخله.")) return;
+        const newGrades = localGrades.filter(g => g.id !== gradeId);
+        try {
+            await updateGrades(newGrades);
+            setLocalGrades(newGrades);
+            if (editingGrade.id === gradeId) {
+                setEditingGrade({ id: null, name: '', sections: [] });
+                setIsEditing(false);
             }
-        });
+            toast.success("تم حذف الصف");
+        } catch (e) {
+            toast.error("فشل الحذف");
+        }
     };
 
-    const updateGradeName = (val) => {
-        if (!editingGrade) return;
-        const updated = { ...editingGrade, name: val };
-        setEditingGrade(updated);
-        setLocalClasses(localClasses.map(c => c.id === editingGrade.id ? updated : c));
+    const handleAddSection = async () => {
+        const sectionName = prompt("أدخل اسم الشعبة (مثال: أ، ب، 1، 2)");
+        if (!sectionName) return;
+
+        // Check if exists
+        if (editingGrade.sections.some(s => s.name === sectionName)) return toast.error("الشعبة موجودة بالفعل");
+
+        const newSection = { id: Date.now().toString(), name: sectionName };
+        const updatedGrade = {
+            ...editingGrade,
+            sections: [...editingGrade.sections, newSection]
+        };
+
+        setEditingGrade(updatedGrade);
+
+        // Save immediately as requested
+        let newGrades = [...localGrades];
+        const index = newGrades.findIndex(g => g.id === editingGrade.id);
+        if (index > -1) {
+            newGrades[index] = updatedGrade;
+            try {
+                await updateGrades(newGrades);
+                toast.success("تم إضافة الشعبة");
+            } catch (e) {
+                toast.error("فشل الحفظ");
+            }
+        }
     };
 
-    const addSection = () => {
-        if (!newSection || !editingGrade) return;
-        const currentSections = editingGrade.sections || [];
-        if (currentSections.includes(newSection)) return toast.error("الشعبة موجودة مسبقاً");
+    const handleDeleteSection = async (sectionId) => {
+        if (!window.confirm("حذف الشعبة؟")) return;
+        const updatedSections = editingGrade.sections.filter(s => s.id !== sectionId);
+        const updatedGrade = { ...editingGrade, sections: updatedSections };
 
-        const updated = { ...editingGrade, sections: [...currentSections, newSection] };
-        setEditingGrade(updated);
-        setLocalClasses(localClasses.map(c => c.id === editingGrade.id ? updated : c));
-        setNewSection('');
-        toast.success("تم إضافة الشعبة (تذكر حفظ التغييرات النهائية)");
-    };
+        setEditingGrade(updatedGrade);
 
-    const removeSection = (sec) => {
-        if (!editingGrade) return;
-        const updated = { ...editingGrade, sections: editingGrade.sections.filter(s => s !== sec) };
-        setEditingGrade(updated);
-        setLocalClasses(localClasses.map(c => c.id === editingGrade.id ? updated : c));
+        // Save immediately
+        let newGrades = [...localGrades];
+        const index = newGrades.findIndex(g => g.id === editingGrade.id);
+        if (index > -1) {
+            newGrades[index] = updatedGrade;
+            await updateGrades(newGrades);
+            toast.success("تم حذف الشعبة");
+        }
     };
 
     return (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 h-[600px] animate-fade-in text-right">
-            {/* List */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 h-[600px] animate-fade-in">
+            {/* Left: List */}
             <div className="bg-white/5 border border-white/10 rounded-2xl p-4 overflow-y-auto">
                 <div className="flex justify-between items-center mb-4">
                     <h3 className="font-bold text-white">الصفوف الدراسية</h3>
-                    <button onClick={addGrade} className="bg-indigo-600 p-2 rounded-lg text-white hover:bg-indigo-500"><Plus size={16} /></button>
+                    <button
+                        onClick={() => {
+                            setEditingGrade({ id: null, name: '', sections: [] });
+                            setIsEditing(true);
+                        }}
+                        className="bg-indigo-600 p-2 rounded-lg text-white hover:bg-indigo-500"
+                    >
+                        <Plus size={16} />
+                    </button>
                 </div>
                 <div className="space-y-2">
-                    {localClasses.map(c => (
+                    {localGrades.map(g => (
                         <div
-                            key={c.id}
-                            onClick={() => setEditingGrade(c)}
-                            className={`p-3 rounded-xl cursor-pointer transition-all border flex justify-between items-center ${editingGrade?.id === c.id ? 'bg-indigo-600/30 border-indigo-500 text-white' : 'bg-black/20 border-white/5 text-gray-400 hover:bg-white/10'}`}
+                            key={g.id}
+                            onClick={() => {
+                                setEditingGrade(g);
+                                setIsEditing(true);
+                            }}
+                            className={`p-3 rounded-xl cursor-pointer transition-all border flex justify-between items-center ${editingGrade.id === g.id ? 'bg-indigo-600/30 border-indigo-500 text-white' : 'bg-black/20 border-white/5 text-gray-400 hover:bg-white/10'
+                                }`}
                         >
-                            <span>{c.name}</span>
-                            <span className="text-xs bg-black/40 px-2 py-1 rounded text-gray-500">{c.sections?.length || 0} شعب</span>
+                            <span>{g.name}</span>
+                            <span className="text-xs bg-white/10 px-2 py-1 rounded-full">{g.sections?.length || 0} شعب</span>
                         </div>
                     ))}
-                </div>
-                <div className="mt-6 pt-4 border-t border-white/10">
-                    <button onClick={handleSaveAll} className="w-full bg-emerald-600 text-white py-2 rounded-xl font-bold shadow-lg">حفظ التغييرات</button>
+                    {localGrades.length === 0 && <p className="text-center text-gray-500 text-sm py-4">لا يوجد صفوف مضافة</p>}
                 </div>
             </div>
 
-            {/* Editor */}
+            {/* Right: Editor */}
             <div className="md:col-span-2 bg-white/5 border border-white/10 rounded-2xl p-6 overflow-y-auto">
-                {editingGrade ? (
+                {isEditing ? (
                     <div className="space-y-6">
-                        <div>
-                            <label className="block text-gray-400 text-sm mb-1">اسم المرحلة / الصف</label>
-                            <div className="flex gap-2">
+                        <div className="flex justify-between items-end border-b border-white/10 pb-4">
+                            <div className="flex-1 ml-4">
+                                <label className="block text-gray-400 text-sm mb-1">اسم الصف (مثال: الصف الأول الثانوي)</label>
                                 <input
-                                    className="flex-1 bg-black/30 border border-white/10 rounded-xl px-4 py-2 text-white font-bold text-lg focus:border-indigo-500 outline-none"
+                                    className="w-full bg-black/30 border border-white/10 rounded-xl px-4 py-2 text-white font-bold text-lg focus:border-indigo-500 outline-none"
                                     value={editingGrade.name}
-                                    onChange={e => updateGradeName(e.target.value)}
+                                    onChange={e => setEditingGrade({ ...editingGrade, name: e.target.value })}
                                 />
-                                <button onClick={() => removeGrade(editingGrade.id)} className="bg-red-500/10 text-red-400 px-4 rounded-xl hover:bg-red-500/20"><Trash2 size={20} /></button>
+                            </div>
+                            <div className="flex space-x-2 space-x-reverse">
+                                {editingGrade.id && (
+                                    <button
+                                        onClick={() => handleDeleteGrade(editingGrade.id)}
+                                        className="bg-red-500/20 text-red-400 border border-red-500/50 px-3 py-3 rounded-xl hover:bg-red-500/30"
+                                    >
+                                        <Trash2 size={18} />
+                                    </button>
+                                )}
+                                <button onClick={handleSaveGrade} className="bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-indigo-500 shadow-lg">
+                                    <Save size={18} className="ml-2 inline" /> حفظ
+                                </button>
                             </div>
                         </div>
 
-                        <div className="border-t border-white/10 pt-4">
-                            <h4 className="text-white font-bold mb-4">الشعب الدراسية (Sections)</h4>
+                        {editingGrade.id ? (
+                            <div>
+                                <div className="flex justify-between items-center mb-4">
+                                    <h4 className="text-white font-bold flex items-center"><Box className="ml-2 text-indigo-400" size={18} /> الشعب الدراسية</h4>
+                                    <button onClick={handleAddSection} className="text-emerald-400 hover:text-emerald-300 text-sm flex items-center font-bold px-3 py-1 bg-emerald-500/10 rounded-lg border border-emerald-500/20 transition-all hover:bg-emerald-500/20">
+                                        <Plus size={14} className="ml-1" /> إضافة شعبة
+                                    </button>
+                                </div>
 
-                            <div className="flex gap-2 mb-4">
-                                <input
-                                    className="flex-1 bg-black/30 border border-white/10 rounded-xl px-4 py-2 text-white focus:border-indigo-500 outline-none"
-                                    placeholder="اسم الشعبة (مثال: 1/2، أ، Group A)"
-                                    value={newSection}
-                                    onChange={e => setNewSection(e.target.value)}
-                                    onKeyDown={e => e.key === 'Enter' && addSection()}
-                                />
-                                <button onClick={addSection} className="bg-indigo-600 text-white px-4 rounded-xl hover:bg-indigo-500"><Plus size={20} /></button>
-                            </div>
+                                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                                    {editingGrade.sections?.map(section => (
+                                        <div key={section.id} className="group relative bg-black/30 border border-white/10 rounded-xl p-4 flex flex-col items-center justify-center hover:border-indigo-500 transition-colors">
+                                            <span className="text-2xl font-bold text-white mb-1">{section.name}</span>
+                                            <span className="text-xs text-gray-500">شعبة</span>
 
-                            <div className="flex flex-wrap gap-2">
-                                {editingGrade.sections?.map((sec, idx) => (
-                                    <span key={idx} className="bg-indigo-900/40 text-indigo-200 border border-indigo-500/30 px-3 py-1.5 rounded-lg flex items-center gap-2">
-                                        {sec}
-                                        <button onClick={() => removeSection(sec)} className="hover:text-white"><X size={14} /></button>
-                                    </span>
-                                ))}
-                                {(!editingGrade.sections || editingGrade.sections.length === 0) && <span className="text-gray-500 text-sm">لا يوجد شعب مضافة</span>}
+                                            <button
+                                                onClick={() => handleDeleteSection(section.id)}
+                                                className="absolute top-1 right-1 p-1 text-gray-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                                            >
+                                                <X size={14} />
+                                            </button>
+                                        </div>
+                                    ))}
+                                    {(!editingGrade.sections || editingGrade.sections.length === 0) && (
+                                        <div className="col-span-full text-center py-8 text-gray-500 border border-dashed border-white/10 rounded-xl">
+                                            لا يوجد شعب مضافة لهذا الصف
+                                        </div>
+                                    )}
+                                </div>
                             </div>
-                        </div>
+                        ) : (
+                            <div className="text-amber-400/80 bg-amber-500/10 p-4 rounded-xl text-center text-sm border border-amber-500/20">
+                                يرجى حفظ اسم الصف أولاً لإضافة الشعب
+                            </div>
+                        )}
                     </div>
                 ) : (
-                    <div className="h-full flex items-center justify-center text-gray-500">اختر صفاً للتعديل</div>
+                    <div className="h-full flex flex-col items-center justify-center text-gray-500 space-y-4">
+                        <Box size={48} className="text-gray-700 mb-2" />
+                        <p>اختر صفاً للتعديل أو أنشئ صفاً جديداً</p>
+                    </div>
                 )}
             </div>
-
-            <ConfirmModal
-                isOpen={confirmModal.isOpen}
-                onClose={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
-                onConfirm={confirmModal.onConfirm}
-                title={confirmModal.title}
-                message={confirmModal.message}
-                isDestructive={confirmModal.isDestructive}
-            />
-        </div >
+        </div>
     );
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

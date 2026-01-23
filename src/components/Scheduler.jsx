@@ -569,6 +569,56 @@ export default function Scheduler() {
         };
     };
 
+    // --- Visual Merging Helper ---
+    const getMergedEvents = (dayEvents) => {
+        if (!dayEvents || dayEvents.length === 0) return [];
+
+        // 1. Sort by Start Time
+        const sorted = [...dayEvents].sort((a, b) => {
+            const tA = a.startTime?.toDate ? a.startTime.toDate() : new Date(a.startTime);
+            const tB = b.startTime?.toDate ? b.startTime.toDate() : new Date(b.startTime);
+            return tA - tB;
+        });
+
+        const merged = [];
+        let current = null;
+
+        for (const ev of sorted) {
+            if (!current) {
+                current = { ...ev, originalCount: 1, originalIds: [ev.id] };
+                continue;
+            }
+
+            // Check if contiguous and identical
+            const prevEnd = current.endTime?.toDate ? current.endTime.toDate() : new Date(current.endTime);
+            const currStart = ev.startTime?.toDate ? ev.startTime.toDate() : new Date(ev.startTime);
+
+            // Time Diff (allow < 1 min gap for floating point safety, effectively identical)
+            const diff = Math.abs(currStart - prevEnd);
+            const isContiguous = diff < 60000; // less than 1 minute gap
+
+            const isSameTitle = current.title === ev.title;
+            const isSameVenue = current.venueId === ev.venueId;
+            const isSameType = current.typeId === ev.typeId;
+
+            if (isContiguous && isSameTitle && isSameVenue && isSameType) {
+                // Merge
+                // Extend End Time
+                current.endTime = ev.endTime;
+                current.originalCount += 1;
+                current.originalIds.push(ev.id);
+                // We keep the ID of the first one for the key and click handler
+            } else {
+                // Push current and start new
+                merged.push(current);
+                current = { ...ev, originalCount: 1, originalIds: [ev.id] };
+            }
+        }
+        if (current) merged.push(current);
+
+        return merged;
+    };
+
     return (
         <div className="space-y-6 animate-fade-in font-cairo pb-20">
             {/* Header Controls */}
@@ -756,8 +806,28 @@ export default function Scheduler() {
                                                 })}
 
                                                 {/* Events Rendering */}
-                                                {!isBlocked && dayEvents.map(ev => {
+                                                {!isBlocked && getMergedEvents(dayEvents).map(ev => {
                                                     const style = getEventStyle(ev);
+
+                                                    // Calculate Duration for Badge
+                                                    const startT = ev.startTime.toDate ? ev.startTime.toDate() : new Date(ev.startTime);
+                                                    const endT = ev.endTime.toDate ? ev.endTime.toDate() : new Date(ev.endTime);
+                                                    const durationMins = (endT - startT) / 60000;
+
+                                                    // Dynamic Slot Duration Check
+                                                    let slotDuration = 45; // Default fallback
+                                                    const eventStartStr = format(startT, 'HH:mm');
+
+                                                    // Find the slot this event starts in (or closest to)
+                                                    const matchedSlot = slots?.find(s => s.start === eventStartStr);
+                                                    if (matchedSlot) {
+                                                        const [h1, m1] = matchedSlot.start.split(':').map(Number);
+                                                        const [h2, m2] = matchedSlot.end.split(':').map(Number);
+                                                        slotDuration = (h2 * 60 + m2) - (h1 * 60 + m1);
+                                                    }
+
+                                                    const showDurationBadge = durationMins < slotDuration;
+
                                                     return (
                                                         <div
                                                             key={ev.id}
@@ -781,6 +851,11 @@ export default function Scheduler() {
                                                             <div className="flex items-start justify-between min-w-0">
                                                                 <div className="font-bold text-white text-xs truncate leading-tight">
                                                                     {ev.title}
+                                                                    {showDurationBadge && (
+                                                                        <span className="mr-2 inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                                                                            ⏱️ {durationMins}د
+                                                                        </span>
+                                                                    )}
                                                                 </div>
                                                                 {ev.status === 'Done' && <CheckCircle size={12} className="text-emerald-400 shrink-0 mr-1" />}
                                                             </div>
@@ -789,10 +864,15 @@ export default function Scheduler() {
                                                                 <>
                                                                     <div className="text-[10px] text-gray-300 truncate opacity-80 flex items-center mt-1">
                                                                         <MapPin size={10} className="ml-1" /> {ev.venueId}
+                                                                        {ev.originalCount > 1 && (
+                                                                            <span className="mr-2 text-indigo-300 text-[9px] bg-indigo-500/20 px-1 rounded border border-indigo-500/20">
+                                                                                🔗 مدمج ({ev.originalCount})
+                                                                            </span>
+                                                                        )}
                                                                     </div>
                                                                     <div className="text-[10px] text-white/40 mt-auto flex justify-between font-mono bg-black/20 p-1 rounded-md">
-                                                                        <span>{format(ev.startTime.toDate ? ev.startTime.toDate() : new Date(), 'HH:mm')}</span>
-                                                                        <span>{format(ev.endTime.toDate ? ev.endTime.toDate() : new Date(), 'HH:mm')}</span>
+                                                                        <span>{format(ev.startTime.toDate ? ev.startTime.toDate() : new Date(ev.startTime), 'HH:mm')}</span>
+                                                                        <span>{format(ev.endTime.toDate ? ev.endTime.toDate() : new Date(ev.endTime), 'HH:mm')}</span>
                                                                     </div>
                                                                 </>
                                                             )}

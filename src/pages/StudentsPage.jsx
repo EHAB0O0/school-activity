@@ -13,9 +13,10 @@ export default function StudentsPage() {
     const [students, setStudents] = useState([]);
     const [searchTerm, setSearchTerm] = useState('');
     const [sortBy, setSortBy] = useState('name'); // name | points
-    const [specFilter, setSpecFilter] = useState('All'); // 'All' | 'General' | 'Radio' ...
+    const [gradeFilter, setGradeFilter] = useState('');
+    const [sectionFilter, setSectionFilter] = useState('');
 
-    const { eventTypes, classes } = useSettings();
+    const { eventTypes, grades } = useSettings();
     const [isAddModalOpen, setIsAddModalOpen] = useState(false);
     const [newStudent, setNewStudent] = useState({ name: '', class: '', grade: '', section: '', specializations: [] });
 
@@ -113,6 +114,8 @@ export default function StudentsPage() {
             await updateDoc(doc(db, 'students', selectedStudent.id), {
                 name: selectedStudent.name,
                 class: selectedStudent.class,
+                grade: selectedStudent.grade || '',
+                section: selectedStudent.section || '',
                 totalPoints: Number(selectedStudent.totalPoints),
                 notes: selectedStudent.notes || '',
                 specializations: selectedStudent.specializations || []
@@ -289,7 +292,14 @@ export default function StudentsPage() {
             const matchesSpec = specFilter === 'All'
                 ? true
                 : (s.specializations && s.specializations.includes(specFilter));
-            return matchesSearch && matchesSpec;
+
+            const matchesGrade = !gradeFilter || s.grade === gradeFilter;
+            const matchesSection = !sectionFilter || s.section === sectionFilter;
+
+            // Optional fallback for old data if needed, but strict filtering is safer
+            // Add legacy check if user wants to search old "class" string? No, let's migrate forward.
+
+            return matchesSearch && matchesSpec && matchesGrade && matchesSection;
         })
         .sort((a, b) => {
             if (sortBy === 'points') return b.totalPoints - a.totalPoints;
@@ -333,24 +343,52 @@ export default function StudentsPage() {
                     {sortBy === 'points' ? 'الأعلى نقاطاً' : 'ترتيب أبجدي'}
                 </button>
 
-                <div className="md:col-span-4 flex items-center gap-2 overflow-x-auto pb-2">
-                    <Filter size={16} className="text-indigo-400 shrink-0" />
-                    <span className="text-gray-400 text-sm font-bold shrink-0">تصفية حسب التخصص:</span>
-                    <button
-                        onClick={() => setSpecFilter('All')}
-                        className={`px-3 py-1 rounded-full text-xs font-bold transition-all whitespace-nowrap ${specFilter === 'All' ? 'bg-white text-black' : 'bg-white/5 text-gray-400 hover:text-white'}`}
+                <div className="md:col-span-4 flex flex-col md:flex-row items-center gap-4 bg-white/5 p-3 rounded-xl border border-white/10">
+                    <div className="flex items-center gap-2 w-full md:w-auto">
+                        <Filter size={18} className="text-indigo-400 shrink-0" />
+                        <span className="text-gray-400 text-sm font-bold shrink-0">تصفية:</span>
+                    </div>
+
+                    <select
+                        className="bg-black/30 border border-white/10 text-white text-sm rounded-lg px-3 py-2 outline-none focus:border-indigo-500 w-full md:w-48"
+                        value={gradeFilter}
+                        onChange={e => { setGradeFilter(e.target.value); setSectionFilter(''); }}
                     >
-                        الكل
-                    </button>
-                    {specOptions.map(opt => (
+                        <option value="">جميع الصفوف</option>
+                        {grades?.map(g => <option key={g.id} value={g.name}>{g.name}</option>)}
+                    </select>
+
+                    <select
+                        className="bg-black/30 border border-white/10 text-white text-sm rounded-lg px-3 py-2 outline-none focus:border-indigo-500 w-full md:w-48 disabled:opacity-50"
+                        value={sectionFilter}
+                        onChange={e => setSectionFilter(e.target.value)}
+                        disabled={!gradeFilter}
+                    >
+                        <option value="">جميع الشعب</option>
+                        {grades?.find(g => g.name === gradeFilter)?.sections?.map(s => (
+                            <option key={s.id} value={s.name}>{s.name}</option>
+                        ))}
+                    </select>
+
+                    <div className="h-6 w-px bg-white/10 hidden md:block mx-2"></div>
+
+                    <div className="flex items-center gap-2 overflow-x-auto w-full md:w-auto pb-1 md:pb-0">
                         <button
-                            key={opt.value}
-                            onClick={() => setSpecFilter(opt.value)}
-                            className={`px-3 py-1 rounded-full text-xs font-bold transition-all whitespace-nowrap ${specFilter === opt.value ? 'bg-indigo-600 text-white' : 'bg-white/5 text-gray-400 hover:text-white'}`}
+                            onClick={() => setSpecFilter('All')}
+                            className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all whitespace-nowrap ${specFilter === 'All' ? 'bg-white text-black' : 'bg-white/5 text-gray-400 hover:text-white'}`}
                         >
-                            {opt.label}
+                            الكل
                         </button>
-                    ))}
+                        {specOptions.map(opt => (
+                            <button
+                                key={opt.value}
+                                onClick={() => setSpecFilter(opt.value)}
+                                className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all whitespace-nowrap ${specFilter === opt.value ? 'bg-indigo-600 text-white' : 'bg-white/5 text-gray-400 hover:text-white'}`}
+                            >
+                                {opt.label}
+                            </button>
+                        ))}
+                    </div>
                 </div>
             </div>
 
@@ -439,12 +477,12 @@ export default function StudentsPage() {
                                         className="w-full bg-black/30 border border-gray-700 rounded-xl px-4 py-3 text-white focus:border-indigo-500 outline-none"
                                         value={newStudent.grade || ''}
                                         onChange={e => {
-                                            const g = classes?.find(c => c.name === e.target.value);
+                                            const g = grades?.find(c => c.name === e.target.value);
                                             setNewStudent({ ...newStudent, grade: e.target.value, section: '', class: `${e.target.value} - ` });
                                         }}
                                     >
                                         <option value="">اختر الصف...</option>
-                                        {classes?.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                                        {grades?.map(g => <option key={g.id} value={g.name}>{g.name}</option>)}
                                     </select>
                                 </div>
                                 <div>
@@ -461,8 +499,8 @@ export default function StudentsPage() {
                                         disabled={!newStudent.grade}
                                     >
                                         <option value="">اختر الشعبة...</option>
-                                        {classes?.find(c => c.name === newStudent.grade)?.sections?.map(s => (
-                                            <option key={s} value={s}>{s}</option>
+                                        {grades?.find(g => g.name === newStudent.grade)?.sections?.map(s => (
+                                            <option key={s.id} value={s.name}>{s.name}</option>
                                         ))}
                                     </select>
                                 </div>
@@ -557,15 +595,47 @@ export default function StudentsPage() {
                                         </div>
                                         <div className="grid grid-cols-2 gap-4">
                                             <div>
-                                                <label className="block text-gray-500 text-sm mb-1">الفصل</label>
-                                                <input className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-white focus:border-indigo-500 outline-none"
-                                                    value={selectedStudent.class} onChange={e => setSelectedStudent({ ...selectedStudent, class: e.target.value })} />
+                                                <label className="block text-gray-500 text-sm mb-1">الصف</label>
+                                                <select
+                                                    className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-white focus:border-indigo-500 outline-none"
+                                                    value={selectedStudent.grade || ''}
+                                                    onChange={e => {
+                                                        const g = grades?.find(c => c.name === e.target.value);
+                                                        setSelectedStudent({
+                                                            ...selectedStudent,
+                                                            grade: e.target.value,
+                                                            section: '',
+                                                            class: `${e.target.value} - `
+                                                        });
+                                                    }}
+                                                >
+                                                    <option value="">اختر الصف...</option>
+                                                    {grades?.map(g => <option key={g.id} value={g.name}>{g.name}</option>)}
+                                                </select>
                                             </div>
                                             <div>
-                                                <label className="block text-gray-500 text-sm mb-1">رصيد النقاط (تعديل يدوي)</label>
-                                                <input type="number" className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-white focus:border-indigo-500 outline-none font-mono"
-                                                    value={selectedStudent.totalPoints} onChange={e => setSelectedStudent({ ...selectedStudent, totalPoints: e.target.value })} />
+                                                <label className="block text-gray-500 text-sm mb-1">الشعبة</label>
+                                                <select
+                                                    className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-white focus:border-indigo-500 outline-none"
+                                                    value={selectedStudent.section || ''}
+                                                    onChange={e => setSelectedStudent({
+                                                        ...selectedStudent,
+                                                        section: e.target.value,
+                                                        class: `${selectedStudent.grade} - ${e.target.value}`
+                                                    })}
+                                                    disabled={!selectedStudent.grade}
+                                                >
+                                                    <option value="">اختر الشعبة...</option>
+                                                    {grades?.find(g => g.name === selectedStudent.grade)?.sections?.map(s => (
+                                                        <option key={s.id} value={s.name}>{s.name}</option>
+                                                    ))}
+                                                </select>
                                             </div>
+                                        </div>
+                                        <div>
+                                            <label className="block text-gray-500 text-sm mb-1">رصيد النقاط (تعديل يدوي)</label>
+                                            <input type="number" className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-white focus:border-indigo-500 outline-none font-mono"
+                                                value={selectedStudent.totalPoints} onChange={e => setSelectedStudent({ ...selectedStudent, totalPoints: e.target.value })} />
                                         </div>
 
                                         <div>

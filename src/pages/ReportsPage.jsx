@@ -74,7 +74,7 @@ const PrintControls = ({ event, onPrint }) => {
 import { useSettings } from '../contexts/SettingsContext';
 
 export default function ReportsPage() {
-    const { classes, eventTypes, activeProfile } = useSettings(); // Use Global Classes
+    const { grades, eventTypes, activeProfile } = useSettings(); // Use Global Grades
     const [activeTab, setActiveTab] = useState('activities'); // activities | students | assets
     const [loading, setLoading] = useState(false);
 
@@ -117,8 +117,8 @@ export default function ReportsPage() {
     const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: '', message: '', onConfirm: null, isDestructive: false });
 
     // Filter Options (computed from Settings)
-    const gradeOptions = Object.keys(classes || {});
-    const sectionOptions = (gradeFilter && classes[gradeFilter]?.sections) ? classes[gradeFilter].sections : [];
+    const gradeOptions = grades?.map(g => g.name) || [];
+    const sectionOptions = grades?.find(g => g.name === gradeFilter)?.sections?.map(s => s.name) || [];
 
     // --- 1. Fetch Data Logic ---
     useEffect(() => {
@@ -934,7 +934,7 @@ export default function ReportsPage() {
                                 <select className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-white outline-none"
                                     value={gradeFilter} onChange={e => { setGradeFilter(e.target.value); setSectionFilter(''); }}>
                                     <option value="">الكل</option>
-                                    {Object.keys(classes || {}).map(g => <option key={g} value={g}>{g}</option>)}
+                                    {grades?.map(g => <option key={g.id} value={g.name}>{g.name}</option>)}
                                 </select>
                             </div>
 
@@ -944,7 +944,9 @@ export default function ReportsPage() {
                                     <select className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-white outline-none"
                                         value={sectionFilter} onChange={e => setSectionFilter(e.target.value)}>
                                         <option value="">الكل</option>
-                                        {classes[gradeFilter]?.sections?.map(s => <option key={s} value={s}>{s}</option>)}
+                                        {grades?.find(g => g.name === gradeFilter)?.sections?.map(s => (
+                                            <option key={s.id} value={s.name}>{s.name}</option>
+                                        ))}
                                     </select>
                                 </div>
                             )}
