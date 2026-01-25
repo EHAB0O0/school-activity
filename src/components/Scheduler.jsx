@@ -353,11 +353,22 @@ export default function Scheduler() {
 
                 const rowsHtml = eventsByDay.map(dayGroup => {
                     if (dayGroup.events.length === 0) return '';
-                    const dayTitle = format(dayGroup.date, 'EEEE d MMMM', { locale: ar });
+                    // Ehab's Request: Add Hijri Date
+                    const dayTitle = `${format(dayGroup.date, 'EEEE d MMMM', { locale: ar })} (${getHijriDate(dayGroup.date)})`;
 
                     const eventsHtml = dayGroup.events.map(ev => {
                         const startT = ev.startTime && ev.startTime.toDate ? format(ev.startTime.toDate(), 'HH:mm') : '??:??';
                         const endT = ev.endTime && ev.endTime.toDate ? format(ev.endTime.toDate(), 'HH:mm') : '??:??';
+
+                        // Custom Fields HTML
+                        const customFieldsHtml = ev.customData && Object.keys(ev.customData).length > 0 ? `
+                            <div class="custom-fields">
+                                ${Object.entries(ev.customData).map(([k, v]) => `
+                                    <span class="field-pill"><strong>${k}:</strong> ${v}</span>
+                                `).join('')}
+                            </div>
+                        ` : '';
+
                         return `
                             <div class="event-row">
                                 <span class="time">${startT} - ${endT}</span>
@@ -366,7 +377,10 @@ export default function Scheduler() {
                                     <div class="meta">
                                         <span class="venue">📍 ${ev.venueId}</span>
                                         ${ev.typeName ? `<span class="type">🏷️ ${ev.typeName}</span>` : ''}
+                                        <span class="metric">⭐ ${ev.points || 10} نقطة</span>
+                                        <span class="metric">👤 ${ev.participatingStudents?.length || 0} طالب</span>
                                     </div>
+                                    ${customFieldsHtml}
                                 </div>
                             </div>
                          `;
@@ -388,38 +402,54 @@ export default function Scheduler() {
                     <head>
                         <style>
                             body { font-family: 'Arial', sans-serif; padding: 40px; color: #333; background: #fff; }
-                            h1 { text-align: center; color: #4f46e5; margin-bottom: 10px; }
+                            h1 { text-align: center; color: #4f46e5; margin-bottom: 5px; }
                             .subtitle { text-align: center; color: #666; font-size: 14px; margin-bottom: 40px; }
                             
-                            .day-group { margin-bottom: 30px; page-break-inside: avoid; }
+                            .day-group { margin-bottom: 25px; page-break-inside: avoid; }
                             .day-header { 
                                 background-color: #f3f4f6; 
                                 color: #111827; 
-                                padding: 10px 15px; 
-                                border-radius: 8px; 
-                                font-size: 18px; 
-                                margin-bottom: 15px;
+                                padding: 8px 15px; 
+                                border-radius: 6px; 
+                                font-size: 16px; 
+                                margin-bottom: 10px;
                                 border-right: 4px solid #4f46e5;
+                                display: flex;
+                                align-items: center;
+                                justify-content: space-between;
                             }
                             .event-row { 
                                 display: flex; 
-                                padding: 12px; 
+                                padding: 10px 12px; 
                                 border-bottom: 1px solid #eee;
-                                align-items: center;
+                                align-items: flex-start;
                             }
                             .event-row:last-child { border-bottom: none; }
                             .time { 
                                 font-family: monospace; 
                                 font-weight: bold; 
                                 color: #4b5563; 
-                                width: 120px; 
+                                width: 100px; 
                                 flex-shrink: 0;
+                                font-size: 13px;
+                                margin-top: 2px;
                             }
-                            .details { flex: 1; margin-right: 20px; }
-                            .title { font-weight: bold; font-size: 16px; margin-bottom: 4px; }
-                            .meta { font-size: 12px; color: #6b7280; display: flex; gap: 15px; }
-                            .venue { color: #059669; }
+                            .details { flex: 1; margin-right: 15px; }
+                            .title { font-weight: bold; font-size: 15px; margin-bottom: 4px; color: #111827; }
+                            .meta { font-size: 11px; color: #6b7280; display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 4px; align-items: center; }
+                            .venue { color: #059669; font-weight: 600; }
                             .type { color: #6366f1; }
+                            .metric { color: #d97706; display: flex; align-items: center; gap: 2px; }
+                            
+                            .custom-fields { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+                            .field-pill {
+                                background: #f9fafb;
+                                border: 1px solid #e5e7eb;
+                                padding: 2px 6px;
+                                border-radius: 4px;
+                                font-size: 10px;
+                                color: #4b5563;
+                            }
                         </style>
                     </head>
                     <body>
@@ -431,7 +461,7 @@ export default function Scheduler() {
                 `);
                 doc.close();
 
-                await new Promise(r => setTimeout(r, 500)); // Wait for render
+                await new Promise(r => setTimeout(r, 800)); // Increased wait slightly for fonts
 
                 const canvas = await html2canvas(doc.body, { scale: 2 });
                 document.body.removeChild(iframe);
@@ -440,14 +470,16 @@ export default function Scheduler() {
                 const pdfWidth = 595.28;
                 const pdfHeight = 841.89;
 
-                // Smart Slicing (same as ReportsPage) - simplified here: fit to width, multi-page if needed
+                // Smart Slicing
                 const imgWidth = pdfWidth;
                 const imgHeight = (canvas.height * imgWidth) / canvas.width;
 
                 let heightLeft = imgHeight;
                 let position = 0;
 
-                const imgData = canvas.toDataURL('image/jpeg', 0.8); // Fix: Define imgData for Agenda
+                // FIXED: Define imgData in scope
+                const imgData = canvas.toDataURL('image/jpeg', 0.85);
+
                 pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
                 heightLeft -= pdfHeight;
 
