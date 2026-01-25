@@ -15,6 +15,7 @@ export default function StudentsPage() {
     const [sortBy, setSortBy] = useState('name'); // name | points
     const [gradeFilter, setGradeFilter] = useState('');
     const [sectionFilter, setSectionFilter] = useState('');
+    const [specFilter, setSpecFilter] = useState('All');
 
     const { eventTypes, grades } = useSettings();
     const [isAddModalOpen, setIsAddModalOpen] = useState(false);
