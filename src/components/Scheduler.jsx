@@ -869,8 +869,8 @@ export default function Scheduler() {
                                                             }}
                                                             className={`absolute top-2 bottom-2 rounded-xl shadow-lg border p-3 cursor-pointer hover:scale-[1.05] hover:z-50 transition-all z-20 flex flex-col justify-between overflow-hidden
                                                                 ${ev.status === 'Done'
-                                                                    ? 'bg-gradient-to-br from-emerald-900/90 to-teal-900/90 border-emerald-500/40 shadow-emerald-900/20'
-                                                                    : 'bg-gradient-to-br from-indigo-900/90 to-purple-900/90 border-indigo-500/40 shadow-indigo-900/20'}
+                                                                    ? 'border-emerald-500 shadow-emerald-900'
+                                                                    : 'border-indigo-500 shadow-indigo-900'}
                                                             `}
                                                             style={{
                                                                 right: `${style.left}%`,
