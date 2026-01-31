@@ -304,19 +304,39 @@ export default function Scheduler() {
                     logging: false,
                     ignoreElements: (element) => element.classList.contains('no-print'),
                     onclone: (clonedDoc) => {
-                        // LOCKSTEP COLOR SANITIZER
-                        // Traverses original and cloned DOM in parallel to force resolved RGB values
-                        // bypassing any 'oklch' or modern color functions from Tailwind v4
+                        // LOCKSTEP COLOR SANITIZER (CANVAS BACKED)
+                        // Uses Canvas 2D context to force-serialize modern colors (oklch) to Hex/RGB
+                        const ctx = document.createElement('canvas').getContext('2d');
+                        const forceRGB = (color) => {
+                            if (!color || color === 'transparent' || color === 'inherit') return color;
+                            // Optimistically return if already safe
+                            if (color.startsWith('#') || (color.startsWith('rgb') && !color.includes('oklch'))) return color;
+
+                            try {
+                                ctx.fillStyle = color;
+                                return ctx.fillStyle; // Browsers normalize to hex or rgba
+                            } catch (e) {
+                                return color;
+                            }
+                        };
+
                         const sanitize = (orig, clone) => {
                             if (!orig || !clone) return;
                             if (orig.nodeType !== 1 || clone.nodeType !== 1) return;
 
                             const computed = window.getComputedStyle(orig);
+                            const props = [
+                                'color', 'backgroundColor', 'borderColor',
+                                'borderTopColor', 'borderRightColor', 'borderBottomColor', 'borderLeftColor',
+                                'outlineColor', 'textDecorationColor', 'columnRuleColor'
+                            ];
 
-                            // Force explicit RGB/RGBA values
-                            if (computed.backgroundColor) clone.style.backgroundColor = computed.backgroundColor;
-                            if (computed.color) clone.style.color = computed.color;
-                            if (computed.borderColor) clone.style.borderColor = computed.borderColor;
+                            props.forEach(prop => {
+                                const val = computed[prop];
+                                if (val) {
+                                    clone.style[prop] = forceRGB(val);
+                                }
+                            });
 
                             // Parallel traversal
                             const len = Math.min(orig.children.length, clone.children.length);
@@ -325,8 +345,6 @@ export default function Scheduler() {
                             }
                         };
 
-                        // Assume the captured element is relevant to the first child of the cloned body
-                        // or matches structure. 
                         sanitize(schedulerRef.current, clonedDoc.body);
                     }
                 });
