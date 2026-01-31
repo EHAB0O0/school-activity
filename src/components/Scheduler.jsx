@@ -798,7 +798,7 @@ export default function Scheduler() {
                                     return (
                                         <div key={day.toString()} className={`flex h-36 group relative ${isBlocked ? 'bg-[rgba(136,19,55,0.05)]' : 'hover:bg-[rgba(255,255,255,0.05)]'} transition-colors`}>
                                             {/* Day Label */}
-                                            <div className="w-32 shrink-0 border-l border-white/10 p-4 bg-[#1a1a20]/95 backdrop-blur sticky right-0 z-20 flex flex-col justify-center shadow-2xl">
+                                            <div className="w-32 shrink-0 border-l border-[rgba(255,255,255,0.1)] p-4 bg-[rgba(26,26,32,0.95)] backdrop-blur sticky right-0 z-20 flex flex-col justify-center shadow-2xl">
                                                 <span className={`text-lg font-bold ${isBlocked ? 'text-rose-400' : 'text-white'}`}>{format(day, 'EEEE', { locale: ar })}</span>
                                                 <span className="text-sm text-gray-400 font-mono opacity-60">
                                                     {calendarSystem === 'hijri' ? getHijriDate(day) : format(day, 'd MMM')}
@@ -810,7 +810,7 @@ export default function Scheduler() {
                                                 {/* Blocked Overlay */}
                                                 {isBlocked && (
                                                     <div className="absolute inset-0 z-10 bg-stripes-rose opacity-10 flex items-center justify-center pointer-events-none">
-                                                        <span className="bg-black/50 px-3 py-1 rounded text-rose-300 text-xs border border-rose-500/30 rotate-3">{blockReason}</span>
+                                                        <span className="bg-[rgba(0,0,0,0.5)] px-3 py-1 rounded text-rose-300 text-xs border border-[rgba(244,63,94,0.3)] rotate-3">{blockReason}</span>
                                                     </div>
                                                 )}
 
@@ -820,8 +820,8 @@ export default function Scheduler() {
                                                     return (
                                                         <div key={idx}
                                                             onClick={() => handleCellClick(day, slot)}
-                                                            className={`absolute inset-y-0 border-l border-white/5 cursor-pointer hover:bg-white/5 transition-colors group/slot
-                                                                ${slot.type !== 'Class' ? 'bg-black/20 pointer-events-none' : ''}
+                                                            className={`absolute inset-y-0 border-l border-[rgba(255,255,255,0.05)] cursor-pointer hover:bg-[rgba(255,255,255,0.05)] transition-colors group/slot
+                                                                ${slot.type !== 'Class' ? 'bg-[rgba(0,0,0,0.2)] pointer-events-none' : ''}
                                                             `}
                                                             style={{
                                                                 right: `${pos.left}%`,
@@ -829,7 +829,7 @@ export default function Scheduler() {
                                                             }}
                                                         >
                                                             {slot.type === 'Class' && (
-                                                                <div className="opacity-0 group-hover/slot:opacity-100 absolute inset-0 flex items-center justify-center text-white/10">
+                                                                <div className="opacity-0 group-hover/slot:opacity-100 absolute inset-0 flex items-center justify-center text-[rgba(255,255,255,0.1)]">
                                                                     <Plus />
                                                                 </div>
                                                             )}
