@@ -302,7 +302,33 @@ export default function Scheduler() {
                     backgroundColor: '#1f2937', // Force Hex background
                     scale: 2,
                     logging: false,
-                    ignoreElements: (element) => element.classList.contains('no-print')
+                    ignoreElements: (element) => element.classList.contains('no-print'),
+                    onclone: (clonedDoc) => {
+                        // LOCKSTEP COLOR SANITIZER
+                        // Traverses original and cloned DOM in parallel to force resolved RGB values
+                        // bypassing any 'oklch' or modern color functions from Tailwind v4
+                        const sanitize = (orig, clone) => {
+                            if (!orig || !clone) return;
+                            if (orig.nodeType !== 1 || clone.nodeType !== 1) return;
+
+                            const computed = window.getComputedStyle(orig);
+
+                            // Force explicit RGB/RGBA values
+                            if (computed.backgroundColor) clone.style.backgroundColor = computed.backgroundColor;
+                            if (computed.color) clone.style.color = computed.color;
+                            if (computed.borderColor) clone.style.borderColor = computed.borderColor;
+
+                            // Parallel traversal
+                            const len = Math.min(orig.children.length, clone.children.length);
+                            for (let i = 0; i < len; i++) {
+                                sanitize(orig.children[i], clone.children[i]);
+                            }
+                        };
+
+                        // Assume the captured element is relevant to the first child of the cloned body
+                        // or matches structure. 
+                        sanitize(schedulerRef.current, clonedDoc.body);
+                    }
                 });
 
                 const imgData = canvas.toDataURL('image/jpeg', 0.8); // Define it here
