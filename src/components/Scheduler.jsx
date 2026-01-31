@@ -869,8 +869,8 @@ export default function Scheduler() {
                                                             }}
                                                             className={`absolute top-2 bottom-2 rounded-xl shadow-lg border p-3 cursor-pointer hover:scale-[1.05] hover:z-50 transition-all z-20 flex flex-col justify-between overflow-hidden
                                                                 ${ev.status === 'Done'
-                                                                    ? 'border-emerald-500 shadow-emerald-900'
-                                                                    : 'border-indigo-500 shadow-indigo-900'}
+                                                                    ? 'border-emerald-500 shadow-lg'
+                                                                    : 'border-indigo-500 shadow-lg'}
                                                             `}
                                                             style={{
                                                                 right: `${style.left}%`,
@@ -884,7 +884,7 @@ export default function Scheduler() {
                                                                 <div className="font-bold text-white text-xs truncate leading-tight">
                                                                     {ev.title}
                                                                     {showDurationBadge && (
-                                                                        <span className="mr-2 inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                                                                        <span className="mr-2 inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium bg-[rgba(245,158,11,0.2)] text-amber-300 border border-[rgba(245,158,11,0.3)]">
                                                                             ⏱️ {durationMins}د
                                                                         </span>
                                                                     )}
@@ -1006,8 +1006,8 @@ export default function Scheduler() {
                                                             className={`
                                                             text-[10px] px-2 py-1 rounded truncate border
                                                             ${ev.status === 'Done'
-                                                                    ? 'bg-emerald-900/40 border-emerald-500/20 text-emerald-200'
-                                                                    : 'bg-indigo-900/40 border-indigo-500/20 text-indigo-200'}
+                                                                    ? 'bg-[rgba(6,78,59,0.4)] border-[rgba(16,185,129,0.2)] text-emerald-200'
+                                                                    : 'bg-[rgba(49,46,129,0.4)] border-[rgba(99,102,241,0.2)] text-indigo-200'}
                                                         `}
                                                             title={ev.title}
                                                         >
