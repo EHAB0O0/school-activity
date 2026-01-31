@@ -743,18 +743,18 @@ export default function Scheduler() {
             </div>
 
             {/* Content Area */}
-            <div className="flex-1 min-h-0 bg-white/5 rounded-3xl border border-white/10 relative overflow-hidden shadow-2xl" ref={schedulerRef}>
+            <div className="flex-1 min-h-0 bg-[rgba(255,255,255,0.05)] rounded-3xl border border-[rgba(255,255,255,0.1)] relative overflow-hidden" style={{ boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)' }} ref={schedulerRef}>
                 {isLoading && (
-                    <div className="absolute inset-0 z-20 bg-black/50 flex items-center justify-center backdrop-blur-sm">
+                    <div className="absolute inset-0 z-20 bg-[rgba(0,0,0,0.5)] flex items-center justify-center backdrop-blur-sm">
                         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500"></div>
                     </div>
                 )}
 
                 {/* WEEKLY TIMELINE VIEW */}
                 {view === 'week' && (
-                    <div className="overflow-x-auto rounded-2xl border border-[rgba(255,255,255,0.1)] shadow-2xl bg-[rgba(0,0,0,0.2)] relative min-h-[400px] select-none text-right" dir="rtl">
+                    <div className="overflow-x-auto rounded-2xl border border-[rgba(255,255,255,0.1)] bg-[rgba(0,0,0,0.2)] relative min-h-[400px] select-none text-right" style={{ boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)' }} dir="rtl">
                         {isLoading && (
-                            <div className="absolute inset-0 z-20 bg-black/50 flex items-center justify-center backdrop-blur-sm">
+                            <div className="absolute inset-0 z-20 bg-[rgba(0,0,0,0.5)] flex items-center justify-center backdrop-blur-sm">
                                 <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500"></div>
                             </div>
                         )}
@@ -798,7 +798,7 @@ export default function Scheduler() {
                                     return (
                                         <div key={day.toString()} className={`flex h-36 group relative ${isBlocked ? 'bg-[rgba(136,19,55,0.05)]' : 'hover:bg-[rgba(255,255,255,0.05)]'} transition-colors`}>
                                             {/* Day Label */}
-                                            <div className="w-32 shrink-0 border-l border-[rgba(255,255,255,0.1)] p-4 bg-[rgba(26,26,32,0.95)] backdrop-blur sticky right-0 z-20 flex flex-col justify-center shadow-2xl">
+                                            <div className="w-32 shrink-0 border-l border-[rgba(255,255,255,0.1)] p-4 bg-[rgba(26,26,32,0.95)] backdrop-blur sticky right-0 z-20 flex flex-col justify-center" style={{ boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)' }}>
                                                 <span className={`text-lg font-bold ${isBlocked ? 'text-rose-400' : 'text-white'}`}>{format(day, 'EEEE', { locale: ar })}</span>
                                                 <span className="text-sm text-gray-400 font-mono opacity-60">
                                                     {calendarSystem === 'hijri' ? getHijriDate(day) : format(day, 'd MMM')}
@@ -809,7 +809,7 @@ export default function Scheduler() {
                                             <div className="flex-1 relative">
                                                 {/* Blocked Overlay */}
                                                 {isBlocked && (
-                                                    <div className="absolute inset-0 z-10 bg-stripes-rose opacity-10 flex items-center justify-center pointer-events-none">
+                                                    <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none" style={{ background: 'repeating-linear-gradient(45deg, rgba(244, 63, 94, 0.05), rgba(244, 63, 94, 0.05) 10px, rgba(244, 63, 94, 0.1) 10px, rgba(244, 63, 94, 0.1) 20px)' }}>
                                                         <span className="bg-[rgba(0,0,0,0.5)] px-3 py-1 rounded text-rose-300 text-xs border border-[rgba(244,63,94,0.3)] rotate-3">{blockReason}</span>
                                                     </div>
                                                 )}
@@ -867,12 +867,13 @@ export default function Scheduler() {
                                                                 e.stopPropagation();
                                                                 handleEventClick(e, ev);
                                                             }}
-                                                            className={`absolute top-2 bottom-2 rounded-xl shadow-lg border p-3 cursor-pointer hover:scale-[1.05] hover:z-50 transition-all z-20 flex flex-col justify-between overflow-hidden
+                                                            className={`absolute top-2 bottom-2 rounded-xl border p-3 cursor-pointer hover:scale-[1.05] hover:z-50 transition-all z-20 flex flex-col justify-between overflow-hidden
                                                                 ${ev.status === 'Done'
-                                                                    ? 'border-emerald-500 shadow-lg'
-                                                                    : 'border-indigo-500 shadow-lg'}
+                                                                    ? 'border-emerald-500'
+                                                                    : 'border-indigo-500'}
                                                             `}
                                                             style={{
+                                                                boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)',
                                                                 right: `${style.left}%`,
                                                                 width: `${style.width}%`,
                                                                 background: ev.status === 'Done'
@@ -922,7 +923,7 @@ export default function Scheduler() {
 
                 {/* MONTHLY VIEW */}
                 {view === 'month' && (
-                    <div className="bg-[rgba(0,0,0,0.2)] rounded-2xl border border-[rgba(255,255,255,0.1)] overflow-x-auto shadow-2xl custom-scrollbar">
+                    <div className="bg-[rgba(0,0,0,0.2)] rounded-2xl border border-[rgba(255,255,255,0.1)] overflow-x-auto custom-scrollbar" style={{ boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)' }}>
                         <div className="min-w-[800px]">
                             {/* Days Header */}
                             <div className="grid grid-cols-7 bg-[rgba(255,255,255,0.05)] border-b border-[rgba(255,255,255,0.1)]">
