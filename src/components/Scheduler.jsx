@@ -752,7 +752,7 @@ export default function Scheduler() {
 
                 {/* WEEKLY TIMELINE VIEW */}
                 {view === 'week' && (
-                    <div className="overflow-x-auto rounded-2xl border border-white/10 shadow-2xl bg-black/20 relative min-h-[400px] select-none text-right" dir="rtl">
+                    <div className="overflow-x-auto rounded-2xl border border-[rgba(255,255,255,0.1)] shadow-2xl bg-[rgba(0,0,0,0.2)] relative min-h-[400px] select-none text-right" dir="rtl">
                         {isLoading && (
                             <div className="absolute inset-0 z-20 bg-black/50 flex items-center justify-center backdrop-blur-sm">
                                 <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500"></div>
@@ -761,14 +761,14 @@ export default function Scheduler() {
 
                         <div className="min-w-[1000px]">
                             {/* Timeline Header */}
-                            <div className="h-12 bg-[#1a1a20] border-b border-white/10 flex sticky top-0 z-30">
-                                <div className="w-32 shrink-0 border-l border-white/10 p-3 text-right font-bold text-gray-400 sticky right-0 bg-[#1a1a20] z-40 shadow-xl">اليوم</div>
+                            <div className="h-12 bg-[#1a1a20] border-b border-[rgba(255,255,255,0.1)] flex sticky top-0 z-30">
+                                <div className="w-32 shrink-0 border-l border-[rgba(255,255,255,0.1)] p-3 text-right font-bold text-gray-400 sticky right-0 bg-[#1a1a20] z-40 shadow-xl">اليوم</div>
                                 <div className="flex-1 relative">
                                     {slots.map((slot, idx) => {
                                         const pos = getPositionStyle(slot.start, slot.end);
                                         return (
                                             <div key={idx}
-                                                className="absolute h-full flex items-center justify-center border-l border-white/5 text-[10px] text-gray-500 font-mono tracking-tighter"
+                                                className="absolute h-full flex items-center justify-center border-l border-[rgba(255,255,255,0.05)] text-[10px] text-gray-500 font-mono tracking-tighter"
                                                 style={{
                                                     right: `${pos.left}%`, // RTL: Use right instead of left
                                                     width: `${pos.width}%`
@@ -782,7 +782,7 @@ export default function Scheduler() {
                             </div>
 
                             {/* Days Rows */}
-                            <div className="divide-y divide-white/5">
+                            <div className="divide-y divide-[rgba(255,255,255,0.05)]">
                                 {weekDays.map(day => {
                                     const dayStr = format(day, 'yyyy-MM-dd');
                                     const dayEvents = events.filter(e => {
@@ -796,7 +796,7 @@ export default function Scheduler() {
                                     const blockReason = holiday ? `إجازة: ${holiday.reason}` : 'عطلة أسبوعية';
 
                                     return (
-                                        <div key={day.toString()} className={`flex h-36 group relative ${isBlocked ? 'bg-rose-900/5' : 'hover:bg-white/5'} transition-colors`}>
+                                        <div key={day.toString()} className={`flex h-36 group relative ${isBlocked ? 'bg-[rgba(136,19,55,0.05)]' : 'hover:bg-[rgba(255,255,255,0.05)]'} transition-colors`}>
                                             {/* Day Label */}
                                             <div className="w-32 shrink-0 border-l border-white/10 p-4 bg-[#1a1a20]/95 backdrop-blur sticky right-0 z-20 flex flex-col justify-center shadow-2xl">
                                                 <span className={`text-lg font-bold ${isBlocked ? 'text-rose-400' : 'text-white'}`}>{format(day, 'EEEE', { locale: ar })}</span>
@@ -897,12 +897,12 @@ export default function Scheduler() {
                                                                     <div className="text-[10px] text-gray-300 truncate opacity-80 flex items-center mt-1">
                                                                         <MapPin size={10} className="ml-1" /> {ev.venueId}
                                                                         {ev.originalCount > 1 && (
-                                                                            <span className="mr-2 text-indigo-300 text-[9px] bg-indigo-500/20 px-1 rounded border border-indigo-500/20">
+                                                                            <span className="mr-2 text-indigo-300 text-[9px] bg-[rgba(99,102,241,0.2)] px-1 rounded border border-[rgba(99,102,241,0.2)]">
                                                                                 🔗 مدمج ({ev.originalCount})
                                                                             </span>
                                                                         )}
                                                                     </div>
-                                                                    <div className="text-[10px] text-white/40 mt-auto flex justify-between font-mono bg-black/20 p-1 rounded-md">
+                                                                    <div className="text-[10px] text-[rgba(255,255,255,0.4)] mt-auto flex justify-between font-mono bg-[rgba(0,0,0,0.2)] p-1 rounded-md">
                                                                         <span>{format(ev.startTime.toDate ? ev.startTime.toDate() : new Date(ev.startTime), 'HH:mm')}</span>
                                                                         <span>{format(ev.endTime.toDate ? ev.endTime.toDate() : new Date(ev.endTime), 'HH:mm')}</span>
                                                                     </div>
@@ -922,12 +922,12 @@ export default function Scheduler() {
 
                 {/* MONTHLY VIEW */}
                 {view === 'month' && (
-                    <div className="bg-black/20 rounded-2xl border border-white/10 overflow-x-auto shadow-2xl custom-scrollbar">
+                    <div className="bg-[rgba(0,0,0,0.2)] rounded-2xl border border-[rgba(255,255,255,0.1)] overflow-x-auto shadow-2xl custom-scrollbar">
                         <div className="min-w-[800px]">
                             {/* Days Header */}
-                            <div className="grid grid-cols-7 bg-white/5 border-b border-white/10">
+                            <div className="grid grid-cols-7 bg-[rgba(255,255,255,0.05)] border-b border-[rgba(255,255,255,0.1)]">
                                 {['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'].map(d => (
-                                    <div key={d} className="p-4 text-center font-bold text-white border-l border-white/5 last:border-0">
+                                    <div key={d} className="p-4 text-center font-bold text-white border-l border-[rgba(255,255,255,0.05)] last:border-0">
                                         {d}
                                     </div>
                                 ))}
@@ -970,10 +970,10 @@ export default function Scheduler() {
                                                 key={dayFormatted}
                                                 onClick={() => !isBlocked && handleCellClick(day, { type: 'Class', start: '08:00', end: '09:00' })}
                                                 className={`
-                                                p-2 border-b border-l border-white/5 relative transition-all group
-                                                ${!isCurrentMonth ? 'bg-black/40 opacity-50' : ''}
-                                                ${isBlocked ? 'bg-rose-900/10 cursor-not-allowed' : 'hover:bg-white/5 cursor-pointer'}
-                                                ${isToday ? 'bg-indigo-500/10' : ''}
+                                                p-2 border-b border-l border-[rgba(255,255,255,0.05)] relative transition-all group
+                                                ${!isCurrentMonth ? 'bg-[rgba(0,0,0,0.4)] opacity-50' : ''}
+                                                ${isBlocked ? 'bg-[rgba(136,19,55,0.1)] cursor-not-allowed' : 'hover:bg-[rgba(255,255,255,0.05)] cursor-pointer'}
+                                                ${isToday ? 'bg-[rgba(99,102,241,0.1)]' : ''}
                                             `}
                                             >
                                                 {/* Date Numbers */}
@@ -991,7 +991,7 @@ export default function Scheduler() {
                                                 {/* Blocked Overlay Label */}
                                                 {isBlocked && (
                                                     <div className="absolute inset-x-0 bottom-2 text-center">
-                                                        <span className="text-[10px] text-rose-400/70 border border-rose-500/20 px-1 rounded bg-rose-900/20">
+                                                        <span className="text-[10px] text-[rgba(251,113,133,0.7)] border border-[rgba(244,63,94,0.2)] px-1 rounded bg-[rgba(136,19,55,0.2)]">
                                                             {blockReason}
                                                         </span>
                                                     </div>
