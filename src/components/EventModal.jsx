@@ -126,7 +126,7 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                 endTime: et,
                 studentIds: initialData.participatingStudents || [],
                 assetIds: initialData.assets || [],
-                customFields: initialData.customData || {}
+                customFields: initialData.customData || initialData.customFields || {}
             }));
         }
     }, [initialData]);
@@ -601,15 +601,22 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                                             <label className="block text-sm text-gray-400 mb-1">{field.label}</label>
                                             {field.type === 'select' ? (
                                                 <select disabled={isReadOnly} className="w-full bg-purple-900/10 border border-purple-500/30 rounded-xl p-3 text-white focus:border-purple-500 outline-none disabled:opacity-50"
+                                                    value={formData.customFields?.[field.label] || ''}
                                                     onChange={e => handleCustomFieldChange(field.label, e.target.value)}>
                                                     <option value="">اختر...</option>
-                                                    <option value="Option 1">خيار 1</option>
-                                                    <option value="Option 2">خيار 2</option>
+                                                    {field.options && field.options.length > 0 ? (
+                                                        field.options.map((opt, i) => (
+                                                            <option key={i} value={opt}>{opt}</option>
+                                                        ))
+                                                    ) : (
+                                                        <option disabled>لا يوجد خيارات معرفة</option>
+                                                    )}
                                                 </select>
                                             ) : (
                                                 <input disabled={isReadOnly} type={field.type === 'number' ? 'number' : 'text'}
                                                     className="w-full bg-purple-900/10 border border-purple-500/30 rounded-xl p-3 text-white focus:border-purple-500 outline-none disabled:opacity-50"
                                                     placeholder={`أدخل ${field.label}`}
+                                                    value={formData.customFields?.[field.label] || ''}
                                                     onChange={e => handleCustomFieldChange(field.label, e.target.value)}
                                                 />
                                             )}

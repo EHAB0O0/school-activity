@@ -680,6 +680,17 @@ export default function SettingsPage() {
                                                         <option value="select">قائمة</option>
                                                     </select>
                                                 </div>
+                                                {field.type === 'select' && (
+                                                    <div className="flex-1">
+                                                        <label className="text-xs text-gray-500 block mb-1">الخيارات (مفصولة بفاصلة)</label>
+                                                        <input
+                                                            className="w-full bg-black/40 border border-white/10 rounded-lg px-2 py-1 text-white text-sm"
+                                                            placeholder="مثال: أحمر, أخضر, أزرق"
+                                                            value={Array.isArray(field.options) ? field.options.join(',') : (field.options || '')}
+                                                            onChange={e => handleFieldChange(idx, 'options', e.target.value.split(',').map(s => s.trim()))}
+                                                        />
+                                                    </div>
+                                                )}
                                                 <div className="pt-5">
                                                     <button onClick={() => {
                                                         const newF = [...editingType.fields];
