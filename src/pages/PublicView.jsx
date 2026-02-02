@@ -14,7 +14,24 @@ export default function PublicView() {
     const [view, setView] = useState('week'); // week | month
     const [loading, setLoading] = useState(false);
 
+    const [calendarSystem, setCalendarSystem] = useState('gregory'); // gregory | hijri
+
     const { activeProfile, weekends, holidays } = useSettings();
+
+    // --- Helpers ---
+    const getHijriDate = (date) => {
+        return new Intl.DateTimeFormat('ar-SA-u-ca-islamic-umalqura', { day: 'numeric', month: 'long', year: 'numeric' }).format(date);
+    };
+    const getHijriDay = (date) => {
+        return new Intl.DateTimeFormat('ar-SA-u-ca-islamic-umalqura', { day: 'numeric' }).format(date);
+    };
+
+    const getMonthTitle = (date) => {
+        if (calendarSystem === 'hijri') {
+            return new Intl.DateTimeFormat('ar-SA-u-ca-islamic-umalqura', { month: 'long', year: 'numeric' }).format(date);
+        }
+        return format(date, 'MMMM yyyy', { locale: ar });
+    };
 
     // --- Real-time Fetch ---
     useEffect(() => {
@@ -48,8 +65,6 @@ export default function PublicView() {
         return () => unsubscribe();
     }, [currentDate, view]);
 
-    // --- Helpers ---
-    const getMonthTitle = (date) => format(date, 'MMMM yyyy', { locale: ar });
 
     // --- Navigation ---
     const next = () => setCurrentDate(view === 'week' ? addWeeks(currentDate, 1) : addMonths(currentDate, 1));
@@ -59,8 +74,12 @@ export default function PublicView() {
     const getEventStyle = (event) => {
         if (!event.startTime || !event.endTime || !activeProfile?.slots) return { top: 0, height: 'auto', left: 0, width: '100%' };
 
-        const eStart = event.startTime.toDate ? format(event.startTime.toDate(), 'HH:mm') : event.startTime;
-        const eEnd = event.endTime.toDate ? format(event.endTime.toDate(), 'HH:mm') : event.endTime;
+        let eStart = event.startTime.toDate ? format(event.startTime.toDate(), 'HH:mm') : event.startTime;
+        let eEnd = event.endTime.toDate ? format(event.endTime.toDate(), 'HH:mm') : event.endTime;
+
+        // Fallback for full day or missing times
+        if (!eStart) eStart = "08:00";
+        if (!eEnd) eEnd = "09:00";
 
         const allSlots = activeProfile.slots;
         if (allSlots.length === 0) return {};
@@ -70,6 +89,7 @@ export default function PublicView() {
 
         // Calculate total minutes in school day
         const getMinutes = (t) => {
+            if (!t) return 0;
             const [h, m] = t.split(':').map(Number);
             return h * 60 + m;
         };
@@ -82,8 +102,8 @@ export default function PublicView() {
         const widthPercent = (durationMin / totalMinutes) * 100;
 
         return {
-            left: startPercent,
-            width: widthPercent
+            left: `${Math.max(0, startPercent)}%`,
+            width: `${Math.min(100, widthPercent)}%`
         };
     };
 
@@ -114,9 +134,17 @@ export default function PublicView() {
                     <button onClick={next} className="p-2 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-colors"><ChevronLeft size={20} /></button>
                 </div>
 
-                <div className="flex bg-black/30 p-1 rounded-xl border border-white/5">
-                    <button onClick={() => setView('week')} className={`px-4 py-1.5 rounded-lg text-sm font-bold transition-all ${view === 'week' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}>أسبوعي</button>
-                    <button onClick={() => setView('month')} className={`px-4 py-1.5 rounded-lg text-sm font-bold transition-all ${view === 'month' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}>شهري</button>
+                <div className="flex items-center gap-2">
+                    {/* Calendar Toggle */}
+                    <div className="flex bg-black/30 p-1 rounded-xl border border-white/5 ml-2">
+                        <button onClick={() => setCalendarSystem('gregory')} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${calendarSystem === 'gregory' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white'}`}>ميلادي</button>
+                        <button onClick={() => setCalendarSystem('hijri')} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${calendarSystem === 'hijri' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white'}`}>هجري</button>
+                    </div>
+
+                    <div className="flex bg-black/30 p-1 rounded-xl border border-white/5">
+                        <button onClick={() => setView('week')} className={`px-4 py-1.5 rounded-lg text-sm font-bold transition-all ${view === 'week' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}>أسبوعي</button>
+                        <button onClick={() => setView('month')} className={`px-4 py-1.5 rounded-lg text-sm font-bold transition-all ${view === 'month' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}>شهري</button>
+                    </div>
                 </div>
             </div>
 
@@ -134,8 +162,6 @@ export default function PublicView() {
                             </div>
                             <div className="flex-1 relative">
                                 {activeProfile?.slots?.map((slot, idx) => {
-                                    // Calculate Width % based on total minutes
-                                    // Re-using logic from getEventStyle but for headers
                                     const allSlots = activeProfile.slots;
                                     const first = allSlots[0].start;
                                     const last = allSlots[allSlots.length - 1].end;
@@ -164,21 +190,39 @@ export default function PublicView() {
 
                                 // Blocked?
                                 const isWeekend = weekends?.includes(dayDate.getDay());
-                                const isHoliday = holidays?.find(h => h.date >= dayStr && h.date <= dayStr);
+                                const holiday = holidays?.find(h => h.date >= dayStr && h.date <= dayStr); // Assuming range or specific date needs check
+                                const isBlocked = isWeekend || !!holiday;
+                                const blockReason = holiday ? holiday.reason : (isWeekend ? 'عطلة نهاية الأسبوع' : '');
 
-                                const dayEvents = events.filter(e => e.date === dayStr);
+                                const dayEvents = events.filter(e => {
+                                    // Handle both Firestore timestamp and string dates
+                                    const eDate = e.startTime?.toDate ? format(e.startTime.toDate(), 'yyyy-MM-dd') : e.date;
+                                    return eDate === dayStr;
+                                });
 
                                 return (
                                     <div key={dayStr} className={`min-h-[100px] border-b border-white/5 flex group ${isToday ? 'bg-indigo-900/10' : ''}`}>
                                         {/* Date Label */}
-                                        <div className={`w-32 border-l border-white/10 flex flex-col items-center justify-center p-2 ${isWeekend || isHoliday ? 'bg-red-900/10 text-red-300' : 'text-gray-300'}`}>
+                                        <div className={`w-32 shrink-0 border-l border-white/10 flex flex-col items-center justify-center p-2 ${isBlocked ? 'bg-[rgba(136,19,55,0.1)] text-rose-300' : 'text-gray-300'}`}>
                                             <span className="font-bold text-lg">{dayName}</span>
-                                            <span className="text-xs opacity-60 font-mono">{dayStr}</span>
-                                            {isHoliday && <span className="text-[10px] bg-red-500/20 px-2 rounded mt-1">عطلة</span>}
+                                            <span className="text-xs opacity-60 font-mono">
+                                                {calendarSystem === 'hijri' ? getHijriDate(dayDate) : dayStr}
+                                            </span>
+                                            {isBlocked && (
+                                                <span className="text-[10px] bg-[rgba(136,19,55,0.2)] border border-[rgba(244,63,94,0.2)] px-2 rounded mt-1 text-rose-300 text-center">
+                                                    {blockReason}
+                                                </span>
+                                            )}
                                         </div>
 
                                         {/* Timeline */}
                                         <div className="flex-1 relative bg-black/20">
+                                            {/* Blocked Overlay */}
+                                            {isBlocked && (
+                                                <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none" style={{ background: 'repeating-linear-gradient(45deg, rgba(244, 63, 94, 0.05), rgba(244, 63, 94, 0.05) 10px, rgba(244, 63, 94, 0.1) 10px, rgba(244, 63, 94, 0.1) 20px)' }}>
+                                                </div>
+                                            )}
+
                                             {/* Grid Lines */}
                                             {activeProfile?.slots?.map((slot, idx) => {
                                                 const allSlots = activeProfile.slots;
@@ -194,7 +238,7 @@ export default function PublicView() {
                                             })}
 
                                             {/* Events */}
-                                            {dayEvents.map(ev => {
+                                            {!isBlocked && dayEvents.map(ev => {
                                                 const style = getEventStyle(ev);
                                                 return (
                                                     <div key={ev.id}
@@ -203,7 +247,7 @@ export default function PublicView() {
                                                                 ? 'bg-emerald-900/80 border-emerald-500/30'
                                                                 : 'bg-indigo-900/80 border-indigo-500/30'}
                                                         `}
-                                                        style={{ right: `${style.left}%`, width: `${style.width}%` }}
+                                                        style={style}
                                                     >
                                                         <div className="font-bold truncate">{ev.title}</div>
                                                         <div className="flex items-center gap-1 opacity-70 truncate text-[10px] mt-1">
@@ -243,20 +287,44 @@ export default function PublicView() {
                                     const dStr = format(day, 'yyyy-MM-dd');
                                     const isMonth = isSameDay(day, mStart) || (day >= mStart && day <= mEnd);
                                     const isToday = isSameDay(day, new Date());
-                                    const evs = events.filter(e => e.date === dStr);
+
+                                    // Blocking Logic
+                                    const isWeekend = weekends?.includes(day.getDay());
+                                    const holiday = holidays?.find(h => h.date === dStr);
+                                    const isBlocked = isWeekend || !!holiday;
+                                    const blockReason = holiday ? holiday.reason : (isWeekend ? 'عطلة' : '');
+
+                                    const evs = events.filter(e => {
+                                        const eDate = e.startTime?.toDate ? format(e.startTime.toDate(), 'yyyy-MM-dd') : e.date;
+                                        return eDate === dStr;
+                                    });
 
                                     return (
-                                        <div key={idx} className={`bg-[#18181b] min-h-[120px] p-2 flex flex-col ${!isMonth ? 'opacity-30' : ''}`}>
-                                            <div className={`text-sm font-bold mb-2 w-7 h-7 flex items-center justify-center rounded-full ${isToday ? 'bg-indigo-600 text-white' : 'text-gray-400'}`}>
-                                                {format(day, 'd')}
+                                        <div key={idx} className={`bg-[#18181b] min-h-[120px] p-2 flex flex-col ${!isMonth ? 'opacity-30' : ''} ${isBlocked ? 'bg-[rgba(136,19,55,0.05)]' : ''}`}>
+                                            <div className="flex justify-between items-start mb-2">
+                                                <div className={`text-sm font-bold w-7 h-7 flex items-center justify-center rounded-full ${isToday ? 'bg-indigo-600 text-white' : (isBlocked ? 'text-rose-400' : 'text-gray-400')}`}>
+                                                    {format(day, 'd')}
+                                                </div>
+                                                {calendarSystem === 'hijri' && (
+                                                    <span className={`text-[10px] font-bold ${isBlocked ? 'text-rose-400' : 'text-emerald-400'}`}>
+                                                        {getHijriDay(day)}
+                                                    </span>
+                                                )}
                                             </div>
+
+                                            {isBlocked && (
+                                                <div className="text-[10px] bg-[rgba(136,19,55,0.2)] border border-[rgba(244,63,94,0.2)] px-1 py-0.5 rounded text-rose-300 text-center mb-1 truncate">
+                                                    {blockReason}
+                                                </div>
+                                            )}
+
                                             <div className="flex-1 space-y-1">
-                                                {evs.slice(0, 3).map(ev => (
+                                                {!isBlocked && evs.slice(0, 3).map(ev => (
                                                     <div key={ev.id} className="text-[10px] bg-white/5 border border-white/10 rounded px-1.5 py-1 truncate text-gray-300">
                                                         {ev.title}
                                                     </div>
                                                 ))}
-                                                {evs.length > 3 && <div className="text-[10px] text-center text-gray-500">+{evs.length - 3} المزيد</div>}
+                                                {!isBlocked && evs.length > 3 && <div className="text-[10px] text-center text-gray-500">+{evs.length - 3} المزيد</div>}
                                             </div>
                                         </div>
                                     )
