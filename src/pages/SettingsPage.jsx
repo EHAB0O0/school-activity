@@ -184,17 +184,34 @@ export default function SettingsPage() {
     };
 
     const handleSaveSchema = async () => {
+        // Sanitize fields: Convert options string to array if needed
+        const sanitizedType = {
+            ...editingType,
+            fields: editingType.fields.map(f => {
+                if (f.type === 'select' && typeof f.options === 'string') {
+                    return {
+                        ...f,
+                        options: f.options.split(',').map(s => s.trim()).filter(Boolean)
+                    };
+                }
+                return f;
+            })
+        };
+
         // Find index in localTypes
         let newLocalTypes = [...localTypes];
-        const existingIndex = newLocalTypes.findIndex(t => t.id === editingType.id);
+        const existingIndex = newLocalTypes.findIndex(t => t.id === sanitizedType.id);
 
         if (existingIndex >= 0) {
-            newLocalTypes[existingIndex] = editingType;
+            newLocalTypes[existingIndex] = sanitizedType;
         } else {
-            newLocalTypes.push(editingType);
+            newLocalTypes.push(sanitizedType);
         }
 
         setLocalTypes(newLocalTypes);
+        // Update editingType to match sanitized version so UI reflects the array (optional, but good for consistency)
+        setEditingType(sanitizedType);
+
         try {
             await updateEventTypes(newLocalTypes);
             toast.success("تم تحديث هيكل الأنشطة");
@@ -687,7 +704,7 @@ export default function SettingsPage() {
                                                             className="w-full bg-black/40 border border-white/10 rounded-lg px-2 py-1 text-white text-sm"
                                                             placeholder="مثال: أحمر, أخضر, أزرق"
                                                             value={Array.isArray(field.options) ? field.options.join(',') : (field.options || '')}
-                                                            onChange={e => handleFieldChange(idx, 'options', e.target.value.split(',').map(s => s.trim()))}
+                                                            onChange={e => handleFieldChange(idx, 'options', e.target.value)}
                                                         />
                                                     </div>
                                                 )}
