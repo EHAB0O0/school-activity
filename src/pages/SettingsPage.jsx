@@ -191,7 +191,7 @@ export default function SettingsPage() {
                 if (f.type === 'select' && typeof f.options === 'string') {
                     return {
                         ...f,
-                        options: f.options.split(',').map(s => s.trim()).filter(Boolean)
+                        options: f.options.split('\n').map(s => s.trim()).filter(Boolean)
                     };
                 }
                 return f;
@@ -682,39 +682,43 @@ export default function SettingsPage() {
 
                                     <div className="space-y-3">
                                         {editingType.fields.map((field, idx) => (
-                                            <div key={idx} className="flex space-x-3 space-x-reverse items-center bg-black/20 p-3 rounded-xl border border-white/5">
-                                                <div className="flex-1">
-                                                    <label className="text-xs text-gray-500 block mb-1">اسم الحقل</label>
-                                                    <input className="w-full bg-black/40 border border-white/10 rounded-lg px-2 py-1 text-white text-sm"
-                                                        value={field.label} onChange={e => handleFieldChange(idx, 'label', e.target.value)} />
-                                                </div>
-                                                <div className="w-32">
-                                                    <label className="text-xs text-gray-500 block mb-1">نوع البيانات</label>
-                                                    <select className="w-full bg-black/40 border border-white/10 rounded-lg px-2 py-1 text-white text-sm"
-                                                        value={field.type} onChange={e => handleFieldChange(idx, 'type', e.target.value)}>
-                                                        <option value="text">نص</option>
-                                                        <option value="number">رقم</option>
-                                                        <option value="select">قائمة</option>
-                                                    </select>
-                                                </div>
-                                                {field.type === 'select' && (
+                                            <div key={idx} className="bg-black/20 p-3 rounded-xl border border-white/5 mb-2">
+                                                <div className="flex space-x-3 space-x-reverse items-end">
                                                     <div className="flex-1">
-                                                        <label className="text-xs text-gray-500 block mb-1">الخيارات (مفصولة بفاصلة)</label>
-                                                        <input
-                                                            className="w-full bg-black/40 border border-white/10 rounded-lg px-2 py-1 text-white text-sm"
-                                                            placeholder="مثال: أحمر, أخضر, أزرق"
-                                                            value={Array.isArray(field.options) ? field.options.join(',') : (field.options || '')}
+                                                        <label className="text-xs text-gray-500 block mb-1">اسم الحقل</label>
+                                                        <input className="w-full bg-black/40 border border-white/10 rounded-lg px-2 py-2 text-white text-sm"
+                                                            value={field.label} onChange={e => handleFieldChange(idx, 'label', e.target.value)} />
+                                                    </div>
+                                                    <div className="w-32">
+                                                        <label className="text-xs text-gray-500 block mb-1">نوع البيانات</label>
+                                                        <select className="w-full bg-black/40 border border-white/10 rounded-lg px-2 py-2 text-white text-sm"
+                                                            value={field.type} onChange={e => handleFieldChange(idx, 'type', e.target.value)}>
+                                                            <option value="text">نص</option>
+                                                            <option value="number">رقم</option>
+                                                            <option value="select">قائمة</option>
+                                                        </select>
+                                                    </div>
+                                                    <div>
+                                                        <button onClick={() => {
+                                                            const newF = [...editingType.fields];
+                                                            newF.splice(idx, 1);
+                                                            setEditingType({ ...editingType, fields: newF });
+                                                        }} className="text-red-400 hover:text-red-300 p-2"><Trash2 size={18} /></button>
+                                                    </div>
+                                                </div>
+
+                                                {field.type === 'select' && (
+                                                    <div className="mt-3 animate-fade-in">
+                                                        <label className="text-xs text-gray-400 block mb-1 font-bold">الخيارات (كل خيار في سطر منفصل)</label>
+                                                        <textarea
+                                                            dir="auto"
+                                                            className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-white text-sm min-h-[100px] focus:border-purple-500 outline-none resize-y placeholder-gray-600"
+                                                            placeholder={"مثال:\nحكم\nمنظم\nمسعف"}
+                                                            value={Array.isArray(field.options) ? field.options.join('\n') : (field.options || '')}
                                                             onChange={e => handleFieldChange(idx, 'options', e.target.value)}
                                                         />
                                                     </div>
                                                 )}
-                                                <div className="pt-5">
-                                                    <button onClick={() => {
-                                                        const newF = [...editingType.fields];
-                                                        newF.splice(idx, 1);
-                                                        setEditingType({ ...editingType, fields: newF });
-                                                    }} className="text-red-400 hover:text-red-300"><Trash2 size={18} /></button>
-                                                </div>
                                             </div>
                                         ))}
                                         {editingType.fields.length === 0 && <p className="text-center text-gray-500 py-4">لا يوجد حقول مخصصة</p>}
