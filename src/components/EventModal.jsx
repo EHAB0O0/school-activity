@@ -3,7 +3,7 @@ import { db } from '../firebase';
 import { collection, query, where, getDocs, Timestamp, doc, updateDoc, limit, orderBy } from 'firebase/firestore'; // Removed transactional/batch imports as logic is mostly handled in handlers, but conflicts uses fetch
 import { checkConflicts } from '../utils/ConflictGuard';
 import { format, addDays } from 'date-fns';
-import { Plus, CheckCircle, Calendar, Clock, MapPin, AlertTriangle, Users, Box, Trash2, X, Search, Lock } from 'lucide-react';
+import { Plus, CheckCircle, Calendar, Clock, MapPin, AlertTriangle, Users, Box, Trash2, X, Search, Lock, Filter } from 'lucide-react';
 import toast from 'react-hot-toast';
 import MultiSelect from './ui/MultiSelect';
 import { useSettings } from '../contexts/SettingsContext';
@@ -62,7 +62,10 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
     const [checking, setChecking] = useState(false);
     const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: '', message: '', onConfirm: null, isDestructive: false });
 
-    // Fetch Resources on Mount
+    // Student Filters
+    const [selectedGrade, setSelectedGrade] = useState('');
+    const [selectedSection, setSelectedSection] = useState('');
+    const { weekends, holidays, grades } = useSettings(); // Use Global Settings directly
     useEffect(() => {
         const fetchResources = async () => {
             try {
@@ -70,8 +73,12 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                 const studentsSnap = await getDocs(collection(db, 'students'));
                 setStudentsList(studentsSnap.docs.map(d => ({
                     value: d.id,
+                    name: d.data().name,
                     label: d.data().name,
-                    specializations: d.data().specializations || []
+                    specializations: d.data().specializations || [],
+                    gradeId: d.data().gradeId,
+                    sectionId: d.data().sectionId,
+                    active: d.data().active !== false // Default to active
                 })));
 
                 const assetsSnap = await getDocs(collection(db, 'assets'));
@@ -130,8 +137,6 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
             }));
         }
     }, [initialData]);
-
-    const { weekends, holidays } = useSettings(); // Use Global Settings directly
 
     // Helper to check blocked dates
     const isDateBlocked = (dateStr) => {
@@ -250,13 +255,40 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
     const activeType = eventTypes?.find(t => String(t?.id) === String(formData?.typeId));
 
     const filteredStudents = useMemo(() => {
-        if (!activeType) return studentsList;
-        return studentsList.filter(s => {
-            if (s.specializations && s.specializations.includes('General')) return true;
-            if (s.specializations && s.specializations.includes(activeType.name)) return true;
-            return false;
+        let list = studentsList;
+
+        // 1. Filter Archived (Soft Filter): Exclude inactive UNLESS already selected
+        list = list.filter(s => s.active || formData.studentIds.includes(s.value));
+
+        // 2. Filter by Grade/Section
+        if (selectedGrade) {
+            list = list.filter(s => s.gradeId === selectedGrade);
+            if (selectedSection) {
+                list = list.filter(s => s.sectionId === selectedSection);
+            }
+        }
+
+        // 3. Filter by Specialization
+        if (activeType) {
+            list = list.filter(s => {
+                if (s.specializations && s.specializations.includes('General')) return true;
+                if (s.specializations && s.specializations.includes(activeType.name)) return true;
+                return false;
+            });
+        }
+
+        // 4. Map to Options with Class Name
+        return list.map(s => {
+            const grade = grades.find(g => g.id === s.gradeId);
+            const section = grade?.sections?.find(sec => sec.id === s.sectionId);
+            const classLabel = section ? `(${grade.name} - ${section.name})` : (grade ? `(${grade.name})` : '');
+
+            return {
+                ...s,
+                label: `${s.name} ${classLabel}`
+            };
         });
-    }, [studentsList, activeType]);
+    }, [studentsList, activeType, selectedGrade, selectedSection, grades, formData.studentIds]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -629,6 +661,41 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                         {/* Resources Section */}
                         <div className="border-t border-white/10 pt-4 space-y-4 mt-4">
                             <h3 className="font-bold text-white flex items-center"><Users size={16} className="ml-2 text-emerald-400" /> المشاركون والموارد</h3>
+
+                            {/* Student Filters */}
+                            <div className="bg-black/20 p-3 rounded-xl border border-white/5 flex flex-wrap gap-3 items-end">
+                                <div className="flex-1 min-w-[150px]">
+                                    <label className="text-xs text-gray-500 block mb-1">تصفية حسب الصف</label>
+                                    <select
+                                        className="w-full bg-black/40 border border-white/10 rounded-lg px-2 py-1.5 text-white text-sm focus:border-indigo-500 outline-none"
+                                        value={selectedGrade}
+                                        onChange={e => { setSelectedGrade(e.target.value); setSelectedSection(''); }}
+                                    >
+                                        <option value="">كل الصفوف</option>
+                                        {grades.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                                    </select>
+                                </div>
+                                <div className="flex-1 min-w-[150px]">
+                                    <label className="text-xs text-gray-500 block mb-1">الشعبة</label>
+                                    <select
+                                        className="w-full bg-black/40 border border-white/10 rounded-lg px-2 py-1.5 text-white text-sm focus:border-indigo-500 outline-none"
+                                        value={selectedSection}
+                                        disabled={!selectedGrade}
+                                        onChange={e => setSelectedSection(e.target.value)}
+                                    >
+                                        <option value="">الكل</option>
+                                        {selectedGrade && grades.find(g => g.id === selectedGrade)?.sections?.map(s => (
+                                            <option key={s.id} value={s.id}>{s.name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div className="pb-0.5">
+                                    <button type="button" onClick={() => { setSelectedGrade(''); setSelectedSection(''); }} className="p-2 text-gray-500 hover:text-white bg-white/5 rounded-lg border border-white/5" title="إلغاء التصفية">
+                                        <Filter size={16} className={selectedGrade ? "text-indigo-400" : ""} />
+                                    </button>
+                                </div>
+                            </div>
+
                             <MultiSelect
                                 label="الطلاب المشاركون"
                                 placeholder={activeType ? `طلاب ${activeType.name} + العام...` : "اختر الطلاب..."}
