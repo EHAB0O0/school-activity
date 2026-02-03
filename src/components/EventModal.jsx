@@ -19,7 +19,6 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
     // User Requirement: "Edit button for past activities... Recalculate Points". So it MUST be editable.
     // We will relax isReadOnly check or allow override via prop.
     // Let's assume onSave handles the "Recalculation" so we just need to let the user edit fields.
-
     // HOWEVER, changing TIME of a past event is weird. Usually we edit Points/Students.
     // Let's introduce a prop `allowPastEdit` or similar. If not passed, default relevant behavior.
     // For now, let's keep it editable but maybe warn?
@@ -262,9 +261,9 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
 
         // 2. Filter by Grade/Section
         if (selectedGrade) {
-            list = list.filter(s => s.gradeId === selectedGrade);
+            list = list.filter(s => String(s.gradeId) === String(selectedGrade));
             if (selectedSection) {
-                list = list.filter(s => s.sectionId === selectedSection);
+                list = list.filter(s => String(s.sectionId) === String(selectedSection));
             }
         }
 
@@ -464,7 +463,6 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                                 <input required disabled={isReadOnly} className="w-full bg-black/40 border border-white/10 rounded-xl p-3 text-white focus:border-indigo-500 outline-none disabled:opacity-50 disabled:cursor-not-allowed"
                                     value={formData.title} onChange={e => handleChange('title', e.target.value)} />
                             </div>
-
                             <div>
                                 <label className="block text-sm text-gray-400 mb-1">نوع النشاط</label>
                                 <select disabled={isReadOnly} className="w-full bg-black/40 border border-white/10 rounded-xl p-3 text-white focus:border-indigo-500 outline-none disabled:opacity-50"
