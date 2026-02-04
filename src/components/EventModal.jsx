@@ -75,9 +75,9 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                     name: d.data().name,
                     label: d.data().name,
                     specializations: d.data().specializations || [],
-                    gradeId: d.data().gradeId,
-                    sectionId: d.data().sectionId,
-                    active: d.data().active !== false // Default to active
+                    grade: d.data().grade, // Use Name
+                    section: d.data().section, // Use Name
+                    active: d.data().active !== false
                 })));
 
                 const assetsSnap = await getDocs(collection(db, 'assets'));
@@ -261,9 +261,9 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
 
         // 2. Filter by Grade/Section
         if (selectedGrade) {
-            list = list.filter(s => String(s.gradeId) === String(selectedGrade));
+            list = list.filter(s => s.grade === selectedGrade || formData.studentIds.includes(s.value));
             if (selectedSection) {
-                list = list.filter(s => String(s.sectionId) === String(selectedSection));
+                list = list.filter(s => s.section === selectedSection || formData.studentIds.includes(s.value));
             }
         }
 
@@ -670,7 +670,7 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                                         onChange={e => { setSelectedGrade(e.target.value); setSelectedSection(''); }}
                                     >
                                         <option value="">كل الصفوف</option>
-                                        {grades.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                                        {grades.map(g => <option key={g.id} value={g.name}>{g.name}</option>)}
                                     </select>
                                 </div>
                                 <div className="flex-1 min-w-[150px]">
@@ -682,8 +682,8 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                                         onChange={e => setSelectedSection(e.target.value)}
                                     >
                                         <option value="">الكل</option>
-                                        {selectedGrade && grades.find(g => g.id === selectedGrade)?.sections?.map(s => (
-                                            <option key={s.id} value={s.id}>{s.name}</option>
+                                        {selectedGrade && grades.find(g => g.name === selectedGrade)?.sections?.map(s => (
+                                            <option key={s.id} value={s.name}>{s.name}</option>
                                         ))}
                                     </select>
                                 </div>
