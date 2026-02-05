@@ -120,14 +120,31 @@ export default function ReportsPage() {
     const gradeOptions = grades?.map(g => g.name) || [];
     const sectionOptions = grades?.find(g => g.name === gradeFilter)?.sections?.map(s => s.name) || [];
 
+    const [assetMap, setAssetMap] = useState({});
+
     // --- 1. Fetch Data Logic ---
     useEffect(() => {
         const loadInitialData = async () => {
-            // Load Students Map First for lookups
-            const sSnap = await getDocs(collection(db, 'students'));
+            // Load Students & Assets Maps for lookups
+            const [sSnap, aSnap] = await Promise.all([
+                getDocs(collection(db, 'students')),
+                getDocs(collection(db, 'assets'))
+            ]);
+
             const sMap = {};
-            sSnap.docs.forEach(d => { sMap[d.id] = d.data().name; });
+            sSnap.docs.forEach(d => {
+                const sData = d.data();
+                sMap[d.id] = {
+                    name: sData.name,
+                    grade: sData.grade || '',
+                    section: sData.section || ''
+                };
+            });
             setStudentMap(sMap);
+
+            const aMap = {};
+            aSnap.docs.forEach(d => { aMap[d.id] = d.data().name; });
+            setAssetMap(aMap);
         };
         loadInitialData();
     }, []);
@@ -136,7 +153,7 @@ export default function ReportsPage() {
         if (Object.keys(studentMap).length > 0 || activeTab !== 'activities') {
             fetchData();
         }
-    }, [activeTab, studentMap]); // Refetch when tab changes or map is ready
+    }, [activeTab, studentMap, assetMap]); // Refetch when tab changes or map is ready
 
     // --- 2. Filter Logic ---
     useEffect(() => {
@@ -204,7 +221,10 @@ export default function ReportsPage() {
                 const snap = await getDocs(query(collection(db, 'events'), orderBy('startTime', 'desc')));
                 data = snap.docs.map(d => {
                     const pd = d.data();
-                    const studentNames = pd.participatingStudents?.map(id => studentMap[id] || 'طالب غير معروف') || [];
+                    const participatingStudents = pd.participatingStudents?.map(id => {
+                        const s = studentMap[id];
+                        return s ? { ...s, id } : { name: 'طالب غير معروف', grade: '', section: '' };
+                    }) || [];
                     return {
                         id: d.id,
                         title: pd.title,
@@ -217,10 +237,10 @@ export default function ReportsPage() {
                         status: getStatusLabel(pd.status || 'Draft'),
                         rawStatus: pd.status || 'Draft',
                         rawParticipatingStudents: pd.participatingStudents || [],
-                        studentsCount: studentNames.length,
-                        studentNames: studentNames,
+                        studentsCount: participatingStudents.length,
+                        studentNames: participatingStudents, // Now Array of Objects {name, grade, section}
                         type: pd.typeName || 'عام',
-                        assets: pd.assets || [], // Raw IDs
+                        assets: pd.assets?.map(id => assetMap[id] || id) || [], // Map ID to Name
                         customData: pd.customData || {},
                         points: pd.points || 10 // Sortable
                     };
@@ -356,13 +376,31 @@ export default function ReportsPage() {
                     let detailsRow = '';
                     let detailsContent = '';
 
-                    // 1. Students
+                    // 1. Students (Grouped by Class)
                     if (reportOptions.showStudents && item.studentNames && item.studentNames.length > 0) {
-                        const studentTags = item.studentNames.map(s => `<span class="student-tag">${s}</span>`).join('');
+                        // Group by Class
+                        const studentsByClass = item.studentNames.reduce((acc, s) => {
+                            const className = (s.grade && s.section) ? `${s.grade} - ${s.section}` : (s.grade || 'أخرى');
+                            if (!acc[className]) acc[className] = [];
+                            acc[className].push(s.name);
+                            return acc;
+                        }, {});
+
+                        let groupsHtml = '';
+                        Object.entries(studentsByClass).forEach(([cls, names]) => {
+                            const tags = names.map(n => `<span class="student-tag">${n}</span>`).join('');
+                            groupsHtml += `
+                                <div class="class-group">
+                                    <div class="class-header">${cls} (${names.length})</div>
+                                    <div class="tags-container">${tags}</div>
+                                </div>
+                             `;
+                        });
+
                         detailsContent += `
                             <div class="details-section">
                                 <div class="details-title">الطلاب المشاركون (${item.studentNames.length}):</div>
-                                <div class="tags-container">${studentTags}</div>
+                                ${groupsHtml}
                             </div>
                         `;
                     }
@@ -530,18 +568,27 @@ export default function ReportsPage() {
                             color: #64748b;
                             margin-bottom: 5px;
                         }
+                        .class-group { margin-bottom: 8px; border-right: 2px solid #e2e8f0; padding-right: 8px; }
+                        .class-header { font-size: 11px; font-weight: bold; color: #475569; margin-bottom: 4px; }
+                        
                         .tags-container {
                             display: flex;
                             flex-wrap: wrap;
-                            gap: 5px;
+                            gap: 6px;
+                            align-items: center;
                         }
                         .student-tag {
+                            display: inline-flex;
+                            align-items: center;
+                            justify-content: center;
                             background-color: #fff;
                             border: 1px solid #cbd5e1;
-                            padding: 2px 8px;
+                            padding: 3px 8px; /* Corrected padding */
                             border-radius: 4px;
                             font-size: 11px;
                             color: #334155;
+                            line-height: 1.3;
+                            margin-bottom: 2px;
                         }
 
                         .details-section { margin-top: 8px; margin-bottom: 8px; }
