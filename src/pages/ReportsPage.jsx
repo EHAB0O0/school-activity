@@ -874,11 +874,26 @@ export default function ReportsPage() {
             // OPTIMIZATION: JPEG 0.75 quality reduction
             const imgData = canvas.toDataURL('image/jpeg', 0.70);
             const imgWidth = 595.28;
+            const pageHeight = 841.89;
             const imgHeight = (canvas.height * imgWidth) / canvas.width;
 
             const pdf = new jsPDF('p', 'pt', 'a4');
-            // 'FAST' compression
-            pdf.addImage(imgData, 'JPEG', 0, 0, imgWidth, imgHeight, undefined, 'FAST');
+
+            let heightLeft = imgHeight;
+            let position = 0;
+
+            // First Page
+            pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
+            heightLeft -= pageHeight;
+
+            // Subsequent Pages
+            while (heightLeft > 0) {
+                position -= pageHeight;
+                pdf.addPage();
+                pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
+                heightLeft -= pageHeight;
+            }
+
             pdf.save(`Activity_${event.title}_${theme}.pdf`);
 
             toast.success("تم تحميل تقرير النشاط", { id: toastId });
