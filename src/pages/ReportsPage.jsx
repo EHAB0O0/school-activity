@@ -631,6 +631,35 @@ export default function ReportsPage() {
 
             await new Promise(r => setTimeout(r, 100)); // Render wait
 
+            // --- SMART PAGINATION LOGIC (Bulk) ---
+            const pageHeightPx = 3394; // 1200px * 2 (scale) -> A4 Ratio = ~3394px height
+            const rows = doc.querySelectorAll('tr'); // Target table rows
+
+            rows.forEach(row => {
+                const rect = row.getBoundingClientRect();
+                const top = rect.top + window.scrollY;
+                const height = rect.height;
+
+                const startPage = Math.floor(top / pageHeightPx);
+                const endPage = Math.floor((top + height) / pageHeightPx);
+
+                if (endPage > startPage) {
+                    // Row crosses page boundary -> Push to next page start
+                    // Use CSS transform or margin on cells since tr margin is tricky
+                    // Better to find the <td> content and pad it? Or simpler: 
+                    // Add a spacer row? 
+                    // Actually, margin-top works on block-display elements. 
+                    // Let's try adding a spacer div *before* the row using insertBefore? 
+                    // Or simpler: set row display to block? No, breaks table.
+                    // Solution: Add a spacer row.
+
+                    const spacer = doc.createElement('tr');
+                    spacer.style.height = `${(endPage * pageHeightPx) - top + 40}px`;
+                    spacer.style.background = 'transparent';
+                    row.parentNode.insertBefore(spacer, row);
+                }
+            });
+
             // 4. Capture & PDF
             const canvas = await html2canvas(doc.body, {
                 scale: 2,
@@ -857,6 +886,26 @@ export default function ReportsPage() {
             doc.close();
 
             await new Promise(r => setTimeout(r, 100));
+
+            // --- SMART PAGINATION LOGIC ---
+            const pageHeightPx = 2262; // 800px * 2 (scale) -> A4 Ratio = ~2262px height
+            const items = doc.querySelectorAll('.item'); // Target student rows
+
+            items.forEach(item => {
+                const rect = item.getBoundingClientRect();
+                const top = rect.top + window.scrollY; // Handle relative to doc
+                const height = rect.height;
+
+                const startPage = Math.floor(top / pageHeightPx);
+                const endPage = Math.floor((top + height) / pageHeightPx);
+
+                if (endPage > startPage) {
+                    // Item crosses page boundary -> Push to next page start
+                    const nextPageStart = endPage * pageHeightPx;
+                    const push = nextPageStart - top + 40; // +40px safe margin (header/padding)
+                    item.style.marginTop = `${push}px`;
+                }
+            });
 
             // 3. Capture Iframe Body
             const canvas = await html2canvas(doc.body, {
