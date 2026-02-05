@@ -220,6 +220,8 @@ export default function ReportsPage() {
                         studentsCount: studentNames.length,
                         studentNames: studentNames,
                         type: pd.typeName || 'عام',
+                        assets: pd.assets || [], // Raw IDs
+                        customData: pd.customData || {},
                         points: pd.points || 10 // Sortable
                     };
                 });
@@ -352,20 +354,60 @@ export default function ReportsPage() {
                     `;
 
                     let detailsRow = '';
-                    // Check if we should show details
+                    let detailsContent = '';
+
+                    // 1. Students
                     if (reportOptions.showStudents && item.studentNames && item.studentNames.length > 0) {
                         const studentTags = item.studentNames.map(s => `<span class="student-tag">${s}</span>`).join('');
+                        detailsContent += `
+                            <div class="details-section">
+                                <div class="details-title">الطلاب المشاركون (${item.studentNames.length}):</div>
+                                <div class="tags-container">${studentTags}</div>
+                            </div>
+                        `;
+                    }
+
+                    // 2. Assets (using item.assets - these are IDs, we might want names if available, but for now IDs or mapped names if map exists)
+                    // Note: fetch didn't map asset names, let's just display ID or fix fetch. (For now assuming IDs are okay or map unavailable locally in this scope easily)
+                    // Actually, let's check if we can show count or just list.
+                    if (reportOptions.showAssets && item.assets && item.assets.length > 0) {
+                        // We don't have asset map easily here, let's just join them.
+                        // But wait, user wants "Used Assets". simpler to just list them.
+                        const assetTags = item.assets.map(a => `<span class="asset-tag">${a}</span>`).join('');
+                        detailsContent += `
+                            <div class="details-section">
+                                <div class="details-title">الموارد المستخدمة (${item.assets.length}):</div>
+                                <div class="tags-container">${assetTags}</div>
+                            </div>
+                         `;
+                    }
+
+                    // 3. Custom Fields
+                    if (reportOptions.showCustomFields && item.customData && Object.keys(item.customData).length > 0) {
+                        const fieldTags = Object.entries(item.customData).map(([key, val]) =>
+                            `<div class="field-item"><strong>${key}:</strong> ${val}</div>`
+                        ).join('');
+
+                        detailsContent += `
+                            <div class="details-section">
+                                <div class="details-title">بيانات إضافية:</div>
+                                <div class="fields-container">${fieldTags}</div>
+                            </div>
+                        `;
+                    }
+
+                    if (detailsContent) {
                         detailsRow = `
                             <tr class="details-row">
                                 <td colspan="5">
                                     <div class="details-box">
-                                        <div class="details-title">الطلاب المشاركون (${item.studentNames.length}):</div>
-                                        <div class="tags-container">${studentTags}</div>
+                                        ${detailsContent}
                                     </div>
                                 </td>
                             </tr>
                          `;
                     }
+
                     return mainRow + detailsRow;
                 }).join('');
 
@@ -501,6 +543,11 @@ export default function ReportsPage() {
                             font-size: 11px;
                             color: #334155;
                         }
+
+                        .details-section { margin-top: 8px; margin-bottom: 8px; }
+                        .asset-tag { display: inline-block; background: #fffbeb; color: #92400e; padding: 2px 6px; border-radius: 4px; border: 1px solid #fcd34d; font-size: 10px; margin-left: 4px; }
+                        .fields-container { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; }
+                        .field-item { font-size: 11px; background: #f8fafc; padding: 4px; border-radius: 4px; border: 1px solid #e2e8f0; }
 
                         .footer {
                             margin-top: 40px;
@@ -921,6 +968,22 @@ export default function ReportsPage() {
                                         <input type="checkbox" className="hidden" checked={reportOptions.showStudents} onChange={e => setReportOptions({ ...reportOptions, showStudents: e.target.checked })} />
                                         <span className="text-gray-400 text-sm group-hover:text-white">إظهار قائمة الطلاب</span>
                                     </label>
+
+                                    <label className="flex items-center gap-2 cursor-pointer group">
+                                        <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${reportOptions.showAssets ? 'bg-indigo-600 border-indigo-600' : 'border-gray-500 bg-white/5'}`}>
+                                            {reportOptions.showAssets && <CheckSquare size={14} className="text-white" />}
+                                        </div>
+                                        <input type="checkbox" className="hidden" checked={reportOptions.showAssets} onChange={e => setReportOptions({ ...reportOptions, showAssets: e.target.checked })} />
+                                        <span className="text-gray-400 text-sm group-hover:text-white">إظهار الموارد المستخدمة</span>
+                                    </label>
+
+                                    <label className="flex items-center gap-2 cursor-pointer group">
+                                        <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${reportOptions.showCustomFields ? 'bg-indigo-600 border-indigo-600' : 'border-gray-500 bg-white/5'}`}>
+                                            {reportOptions.showCustomFields && <CheckSquare size={14} className="text-white" />}
+                                        </div>
+                                        <input type="checkbox" className="hidden" checked={reportOptions.showCustomFields} onChange={e => setReportOptions({ ...reportOptions, showCustomFields: e.target.checked })} />
+                                        <span className="text-gray-400 text-sm group-hover:text-white">إظهار الحقول الخاصة</span>
+                                    </label>
                                 </div>
                             </div>
                         </div>
@@ -1262,6 +1325,7 @@ export default function ReportsPage() {
             />
 
             <EventModal
+                key={editEventData?.id || 'new-modal'}
                 isOpen={isEditModalOpen}
                 onClose={() => setIsEditModalOpen(false)}
                 initialData={editEventData}
