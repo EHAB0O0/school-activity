@@ -726,10 +726,13 @@ export default function ReportsPage() {
             doc.open();
 
             const studentsListHtml = event.studentNames.length > 0
-                ? event.studentNames.map((name, i) =>
+                ? event.studentNames.map((s, i) =>
                     `<div class="item">
                         <span class="idx">${i + 1}</span>
-                        ${name}
+                        <div style="display: flex; flex-direction: column;">
+                            <span>${s.name}</span>
+                            ${(s.grade || s.section) ? `<span style="font-size: 10px; color: ${theme === 'light' ? '#6b7280' : '#9ca3af'}">${s.grade} - ${s.section}</span>` : ''}
+                        </div>
                      </div>`).join('')
                 : '<div class="empty">لا يوجد طلاب</div>';
 
@@ -1308,10 +1311,17 @@ export default function ReportsPage() {
                                     <div className="bg-black/20 rounded-xl border border-white/5 overflow-hidden">
                                         {selectedEvent.studentNames.length > 0 ? (
                                             <div className="max-h-[300px] overflow-y-auto custom-scrollbar divide-y divide-white/5">
-                                                {selectedEvent.studentNames.map((name, idx) => (
-                                                    <div key={idx} className="p-3 text-sm text-gray-300 flex items-center hover:bg-white/5">
-                                                        <span className="w-8 text-center text-gray-500 text-xs">{idx + 1}</span>
-                                                        {name}
+                                                {selectedEvent.studentNames.map((s, idx) => (
+                                                    <div key={idx} className="p-3 text-sm text-gray-300 flex items-center justify-between hover:bg-white/5">
+                                                        <div className="flex items-center gap-3">
+                                                            <span className="w-6 text-center text-gray-500 text-xs">{idx + 1}</span>
+                                                            <span className="text-white">{s.name}</span>
+                                                        </div>
+                                                        {(s.grade || s.section) && (
+                                                            <span className="text-[10px] bg-white/10 px-2 py-0.5 rounded text-gray-400">
+                                                                {s.grade} - {s.section}
+                                                            </span>
+                                                        )}
                                                     </div>
                                                 ))}
                                             </div>
