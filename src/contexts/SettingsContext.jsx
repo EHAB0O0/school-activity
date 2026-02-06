@@ -115,24 +115,13 @@ export function SettingsProvider({ children }) {
         updateEventTypes,
         updateGrades,
         updateHolidaysAndWeekends,
-        updateNotificationSettings
-    };
-
-    const value = {
-        settings,
-        activeProfile,
-        switchProfile,
-        updateEventTypes,
-        saveTimeProfile,
-        updateSchoolInfo,
-        updateGrades,
-        updateHolidaysAndWeekends,
+        updateNotificationSettings,
+        // Convenience Getters
         grades: settings?.grades || [],
         eventTypes: settings?.eventTypes || [],
         schoolInfo: settings?.schoolInfo || {},
-        weekends: settings?.weekends || [], // Default to empty if not set
-        holidays: settings?.holidays || [],
-        loading
+        weekends: settings?.weekends || [],
+        holidays: settings?.holidays || []
     };
 
     return (
