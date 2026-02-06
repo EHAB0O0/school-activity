@@ -9,6 +9,7 @@ import AssetsPage from './pages/AssetsPage';
 import SettingsPage from './pages/SettingsPage';
 import ReportsPage from './pages/ReportsPage';
 import PublicView from './pages/PublicView'; // NEW
+import NotificationManager from './components/NotificationManager';
 
 function PrivateRoute({ children }) {
   const { currentUser } = useAuth();
@@ -25,6 +26,7 @@ function App() {
         <Route path="/" element={
           <PrivateRoute>
             <Layout />
+            <NotificationManager />
           </PrivateRoute>
         }>
           <Route index element={<Dashboard />} />

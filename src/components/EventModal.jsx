@@ -39,7 +39,8 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
         points: 10,
         customFields: {},
         studentIds: [],
-        assetIds: []
+        assetIds: [],
+        reminders: initialData?.reminders || []
     });
 
     // Recurring State
@@ -64,7 +65,17 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
     // Student Filters
     const [selectedGrade, setSelectedGrade] = useState('');
     const [selectedSection, setSelectedSection] = useState('');
-    const { weekends, holidays, grades } = useSettings(); // Use Global Settings directly
+    const { weekends, holidays, grades, settings } = useSettings(); // Use Global Settings directly
+
+    // Load Default Reminders for NEW events
+    useEffect(() => {
+        if (!initialData?.id && settings?.notifications?.defaultReminders) {
+            setFormData(prev => ({
+                ...prev,
+                reminders: settings.notifications.defaultReminders
+            }));
+        }
+    }, [initialData, settings]);
     useEffect(() => {
         const fetchResources = async () => {
             try {
@@ -620,6 +631,65 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                                 )}
                             </div>
                         )}
+
+                        {/* Reminders Section */}
+                        <div className="mt-4 bg-white/5 p-4 rounded-xl border border-white/5">
+                            <h4 className="text-sm font-bold text-white mb-3 flex items-center gap-2">
+                                <Clock size={16} className="text-indigo-400" />
+                                التذكيرات والإشعارات
+                            </h4>
+                            <div className="space-y-2 mb-3">
+                                {formData.reminders?.map((rem, idx) => (
+                                    <div key={idx} className="flex items-center gap-2 bg-black/20 p-2 rounded-lg border border-white/5 text-sm">
+                                        <span className="text-gray-400">تنبيه قبل:</span>
+                                        <input
+                                            type="number"
+                                            value={rem.value}
+                                            onChange={(e) => {
+                                                const newRems = [...formData.reminders];
+                                                newRems[idx].value = parseInt(e.target.value);
+                                                setFormData({ ...formData, reminders: newRems });
+                                            }}
+                                            className="bg-black/30 border border-white/10 rounded px-2 py-1 text-white w-16 text-center"
+                                        />
+                                        <select
+                                            value={rem.type}
+                                            onChange={(e) => {
+                                                const newRems = [...formData.reminders];
+                                                newRems[idx].type = e.target.value;
+                                                setFormData({ ...formData, reminders: newRems });
+                                            }}
+                                            className="bg-black/30 border border-white/10 rounded px-2 py-1 text-white"
+                                        >
+                                            <option value="minutes">دقيقة</option>
+                                            <option value="hours">ساعة</option>
+                                            <option value="days">يوم</option>
+                                        </select>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                const newRems = [...formData.reminders];
+                                                newRems.splice(idx, 1);
+                                                setFormData({ ...formData, reminders: newRems });
+                                            }}
+                                            className="text-red-400 hover:bg-red-500/10 p-1 rounded"
+                                        >
+                                            <Trash2 size={14} />
+                                        </button>
+                                    </div>
+                                ))}
+                                {(!formData.reminders || formData.reminders.length === 0) && (
+                                    <p className="text-gray-500 text-xs italic">لا توجد تذكيرات نشطة لهذا النشاط</p>
+                                )}
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setFormData({ ...formData, reminders: [...(formData.reminders || []), { type: 'minutes', value: 15 }] })}
+                                className="text-indigo-400 hover:text-indigo-300 text-xs flex items-center gap-1"
+                            >
+                                <Plus size={14} /> إضافة تذكير
+                            </button>
+                        </div>
 
                         {/* Dynamic Fields Section */}
                         {activeType && activeType.fields && activeType.fields.length > 0 && (

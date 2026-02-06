@@ -98,6 +98,26 @@ export function SettingsProvider({ children }) {
         });
     }
 
+    async function updateNotificationSettings(data) {
+        // data = { defaultReminders: [...] }
+        await updateDoc(doc(db, "settings", "global"), {
+            notifications: data
+        });
+    }
+
+    const value = {
+        settings,
+        activeProfile,
+        loading,
+        switchProfile,
+        saveTimeProfile,
+        updateSchoolInfo,
+        updateEventTypes,
+        updateGrades,
+        updateHolidaysAndWeekends,
+        updateNotificationSettings
+    };
+
     const value = {
         settings,
         activeProfile,

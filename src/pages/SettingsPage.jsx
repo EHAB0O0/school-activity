@@ -6,7 +6,7 @@ import { doc, setDoc, writeBatch, collection, getDocs, query, where, updateDoc }
 import { updatePassword, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth';
 import {
     Save, Shield, Key, AlertTriangle, RefreshCw, Clock,
-    Settings, Plus, Trash2, List, Calendar, School, Edit3, CheckCircle, Box, X
+    Settings, Plus, Trash2, List, Calendar, School, Edit3, CheckCircle, Box, X, Bell
 } from 'lucide-react';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import CriticalActionModal from '../components/ui/CriticalActionModal';
@@ -22,7 +22,63 @@ export default function SettingsPage() {
     } = useSettings();
 
     const { currentUser } = useAuth();
-    const [activeTab, setActiveTab] = useState('general'); // general | time | schemas | security
+    const [activeTab, setActiveTab] = useState('general'); // general | time | schemas | security | notifications
+
+    // --- Notifications State ---
+    const [notifPermission, setNotifPermission] = useState('default');
+    const [defaultReminders, setDefaultReminders] = useState([]); // [{ type: 'minutes', value: 60 }]
+
+    useEffect(() => {
+        if ('Notification' in window) {
+            setNotifPermission(Notification.permission);
+        }
+        if (settings?.notifications?.defaultReminders) {
+            setDefaultReminders(settings.notifications.defaultReminders);
+        }
+    }, [settings]);
+
+    const requestNotifPermission = async () => {
+        if (!('Notification' in window)) {
+            toast.error("هذا المتصفح لا يدعم الإشعارات");
+            return;
+        }
+        const permission = await Notification.requestPermission();
+        setNotifPermission(permission);
+        if (permission === 'granted') {
+            toast.success("تم تفعيل الإشعارات");
+            new Notification("تجربة الإشعارات", { body: "نظام إدارة الأنشطة يعمل بنجاح!" });
+        } else {
+            toast.error("تم رفض الإذن");
+        }
+    };
+
+    const addDefaultReminder = () => {
+        setDefaultReminders([...defaultReminders, { type: 'minutes', value: 15 }]);
+    };
+
+    const removeDefaultReminder = (index) => {
+        const newReminders = [...defaultReminders];
+        newReminders.splice(index, 1);
+        setDefaultReminders(newReminders);
+    };
+
+    const updateDefaultReminder = (index, field, value) => {
+        const newReminders = [...defaultReminders];
+        newReminders[index][field] = value;
+        setDefaultReminders(newReminders);
+    };
+
+    const handleSaveNotifications = async () => {
+        try {
+            await useSettings().updateNotificationSettings({
+                defaultReminders
+            });
+            toast.success("تم حفظ إعدادات الإشعارات");
+        } catch (e) {
+            console.error(e);
+            toast.error("فشل الحفظ");
+        }
+    };
 
     // --- 1. General Info State ---
     const [infoForm, setInfoForm] = useState({ name: '', termStart: '', termEnd: '' });
@@ -340,6 +396,7 @@ export default function SettingsPage() {
                         { id: 'schemas', label: 'هيكلة الأنشطة', icon: List },
                         { id: 'security', label: 'الأمان', icon: Shield },
                         { id: 'data', label: 'إدارة البيانات', icon: AlertTriangle },
+                        { id: 'notifications', label: 'الإشعارات', icon: Bell },
                     ].map(tab => (
                         <button
                             key={tab.id}
@@ -535,6 +592,88 @@ export default function SettingsPage() {
                         </div>
                     </div>
                 </div>
+            )}
+
+
+
+            {/* --- 4. Notifications Tab --- */}
+            {activeTab === 'notifications' && (
+                <div className="space-y-8 max-w-4xl mx-auto w-full animate-fade-in">
+                    {/* Permission Section */}
+                    <div className="flex items-center justify-between bg-black/20 p-6 rounded-xl border border-white/5 backdrop-blur-md">
+                        <div>
+                            <h3 className="text-xl font-bold text-white mb-2">إذن الإشعارات</h3>
+                            <p className="text-gray-400 text-sm">
+                                حالة الإذن الحالية:
+                                <span className={`mx-2 font-bold ${notifPermission === 'granted' ? 'text-emerald-400' : 'text-red-400'}`}>
+                                    {notifPermission === 'granted' ? 'مفعل' : notifPermission === 'denied' ? 'مرفوض' : 'غير محدد'}
+                                </span>
+                            </p>
+                        </div>
+                        <button
+                            onClick={requestNotifPermission}
+                            disabled={notifPermission === 'granted'}
+                            className={`px-6 py-3 rounded-xl flex items-center gap-2 transition-all ${notifPermission === 'granted'
+                                ? 'bg-emerald-500/10 text-emerald-400 cursor-default border border-emerald-500/20'
+                                : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg'
+                                }`}
+                        >
+                            {notifPermission === 'granted' ? <CheckCircle size={20} /> : <Bell size={20} />}
+                            {notifPermission === 'granted' ? 'تم التفعيل' : 'تفعيل الإشعارات'}
+                        </button>
+                    </div>
+
+                    {/* Defaults Section */}
+                    <div className="bg-white/5 border border-white/10 rounded-2xl p-8 backdrop-blur-md shadow-xl">
+                        <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                            <Clock size={20} className="text-indigo-400" />
+                            التذكيرات الافتراضية
+                        </h3>
+                        <p className="text-gray-400 text-sm mb-6">ستضاف هذه التذكيرات تلقائياً عند إنشاء أي نشاط جديد، ويمكنك تعديلها لكل نشاط على حدة.</p>
+
+                        <div className="space-y-3 mb-6">
+                            {defaultReminders.map((rem, idx) => (
+                                <div key={idx} className="flex items-center gap-3 bg-black/20 p-3 rounded-xl border border-white/5">
+                                    <div className="text-gray-400 text-sm">تنبيه قبل:</div>
+                                    <input
+                                        type="number"
+                                        value={rem.value}
+                                        onChange={(e) => updateDefaultReminder(idx, 'value', parseInt(e.target.value))}
+                                        className="bg-black/30 border border-white/10 rounded-lg px-3 py-1 text-white w-20 text-center focus:border-indigo-500 outline-none"
+                                    />
+                                    <select
+                                        value={rem.type}
+                                        onChange={(e) => updateDefaultReminder(idx, 'type', e.target.value)}
+                                        className="bg-black/30 border border-white/10 rounded-lg px-3 py-1 text-white focus:border-indigo-500 outline-none"
+                                    >
+                                        <option value="minutes">دقيقة</option>
+                                        <option value="hours">ساعة</option>
+                                        <option value="days">يوم</option>
+                                    </select>
+                                    <button onClick={() => removeDefaultReminder(idx)} className="text-red-400 hover:bg-red-500/10 p-2 rounded-lg transition-colors">
+                                        <Trash2 size={16} />
+                                    </button>
+                                </div>
+                            ))}
+                            {defaultReminders.length === 0 && <div className="text-gray-500 text-sm italic text-center py-4 border border-dashed border-white/10 rounded-xl">لا يوجد تذكيرات افتراضية</div>}
+                        </div>
+
+                        <button onClick={addDefaultReminder} className="text-indigo-400 hover:text-indigo-300 text-sm flex items-center gap-2 font-bold mb-8">
+                            <Plus size={18} /> إضافة تذكير افتراضي
+                        </button>
+
+                        <div className="pt-6 border-t border-white/10 flex justify-end">
+                            <button
+                                onClick={handleSaveNotifications}
+                                className="px-8 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold shadow-lg flex items-center gap-2 transition-all"
+                            >
+                                <Save size={20} /> حفظ الإعدادات
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+
             )}
 
             {/* 2. TIME PROFILE BUILDER */}
