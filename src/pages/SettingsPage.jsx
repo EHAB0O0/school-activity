@@ -110,6 +110,10 @@ export default function SettingsPage() {
     const [criticalModal, setCriticalModal] = useState({ isOpen: false, title: '', message: '', onConfirm: null });
     const [archiveLabel, setArchiveLabel] = useState('');
 
+    // --- Secure Prompt State ---
+    const [securityPrompt, setSecurityPrompt] = useState({ isOpen: false, onVerified: null });
+    const [securityPwd, setSecurityPwd] = useState('');
+
     // Initialization
     useEffect(() => {
         if (settings) {
@@ -291,20 +295,41 @@ export default function SettingsPage() {
         } catch (error) { toast.error(error.message, { id: toastId }); }
     };
     const generateRecoveryKey = async () => {
-        setConfirmModal({
+        // Step 1: Open Security Prompt
+        setSecurityPrompt({
             isOpen: true,
-            title: "توليد مفتاح أمان جديد",
-            message: "هل أنت متأكد؟ سيؤدي هذا إلى إبطال المفتاح القديم.",
-            isDestructive: true,
-            onConfirm: async () => {
+            onVerified: async () => {
+                // Step 2: Actual Generation Logic (after verification)
                 const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
                 let key = "";
                 for (let i = 0; i < 20; i++) { if (i > 0 && i % 4 === 0) key += "-"; key += chars.charAt(Math.floor(Math.random() * chars.length)); }
                 await setDoc(doc(db, "settings", "global"), { recoveryKeyHash: key }, { merge: true });
                 setGeneratedKey(key);
-                setConfirmModal(prev => ({ ...prev, isOpen: false }));
+                toast.success("تم توليد مفتاح جديد بنجاح");
             }
         });
+    };
+
+    const handleSecurityVerify = async (e) => {
+        e.preventDefault();
+        const toastId = toast.loading("جاري التحقق...");
+        try {
+            const cred = EmailAuthProvider.credential(currentUser.email, securityPwd);
+            await reauthenticateWithCredential(currentUser, cred);
+
+            toast.success("تم التحقق", { id: toastId });
+            setSecurityPrompt({ ...securityPrompt, isOpen: false });
+            setSecurityPwd('');
+
+            // Execute the callback
+            if (securityPrompt.onVerified) {
+                await securityPrompt.onVerified();
+            }
+
+        } catch (error) {
+            console.error(error);
+            toast.error("كلمة المرور غير صحيحة", { id: toastId });
+        }
     };
 
     // --- End Of Year Logic (Nuclear) ---
@@ -412,6 +437,46 @@ export default function SettingsPage() {
             </div>
 
             {/* --- TAB CONTENT --- */}
+
+            {/* SECURITY PROMPT MODAL */}
+            {securityPrompt.isOpen && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-fade-in">
+                    <div className="bg-[#1e1e24] border border-white/10 rounded-2xl w-full max-w-sm shadow-2xl p-6">
+                        <div className="text-center mb-6">
+                            <div className="w-12 h-12 bg-indigo-500/20 rounded-full flex items-center justify-center mx-auto mb-3">
+                                <Shield size={24} className="text-indigo-400" />
+                            </div>
+                            <h3 className="text-xl font-bold text-white">تحقق أمني مطلوب</h3>
+                            <p className="text-gray-400 text-sm mt-1">الرجاء إدخال كلمة المرور الحالية للمتابعة</p>
+                        </div>
+
+                        <form onSubmit={handleSecurityVerify}>
+                            <input
+                                type="password"
+                                autoFocus
+                                required
+                                value={securityPwd}
+                                onChange={(e) => setSecurityPwd(e.target.value)}
+                                placeholder="كلمة المرور الحالية"
+                                className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-indigo-500 outline-none mb-6 text-center tracking-widest"
+                            />
+
+                            <div className="flex gap-3">
+                                <button type="submit" className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white py-2 rounded-xl font-bold transition-colors">
+                                    تحقق ومتابعة
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => { setSecurityPrompt({ ...securityPrompt, isOpen: false }); setSecurityPwd(''); }}
+                                    className="px-4 bg-white/5 hover:bg-white/10 text-gray-300 rounded-xl transition-colors"
+                                >
+                                    إلغاء
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
 
             {/* 1. GENERAL INFO */}
             {activeTab === 'general' && (

@@ -1,11 +1,14 @@
 import { useState, useEffect } from 'react';
 import { Outlet, useLocation, Link, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Users, Calendar, Settings, LogOut, Menu, X, Box, FileText, Shield } from 'lucide-react';
+import { LayoutDashboard, Users, Calendar, Settings, LogOut, Menu, X, Box, FileText, Shield, Lock, Mail, AlertTriangle } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { sendPasswordResetEmail } from 'firebase/auth';
+import { auth } from '../firebase';
+import toast from 'react-hot-toast';
 
 export default function Layout() {
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-    const { logout, currentUser } = useAuth();
+    const { logout, currentUser, isEmergency } = useAuth();
     const location = useLocation();
     const navigate = useNavigate();
 
@@ -20,6 +23,15 @@ export default function Layout() {
             navigate('/login');
         } catch (error) {
             console.error("Logout failed", error);
+        }
+    };
+
+    const handleSendReset = async () => {
+        try {
+            await sendPasswordResetEmail(auth, "admin@school.com");
+            toast.success("تم إرسال رابط الاستعادة إلى البريد الإلكتروني");
+        } catch (e) {
+            toast.error("فشل الإرسال: " + e.message);
         }
     };
 
@@ -41,6 +53,40 @@ export default function Layout() {
 
     return (
         <div className="flex h-screen w-full bg-slate-900 text-white overflow-hidden font-cairo" dir="rtl">
+            {/* --- EMERGENCY LOCKDOWN MODAL --- */}
+            {isEmergency && (
+                <div className="fixed inset-0 z-[999] bg-red-900/90 backdrop-blur-xl flex flex-col items-center justify-center text-center p-8">
+                    <div className="bg-black/40 p-10 rounded-3xl border border-red-500/50 shadow-2xl max-w-lg w-full animate-bounce-slow">
+                        <Lock className="w-24 h-24 text-red-500 mx-auto mb-6" />
+                        <h1 className="text-3xl font-bold text-white mb-4">⚠️ وضع الطوارئ نشط</h1>
+                        <p className="text-red-200 text-lg mb-8 leading-relaxed">
+                            لقد قمت بالدخول باستخدام مفتاح الاسترداد.
+                            <br />
+                            لدواعي الأمان، تم قفل النظام حتى تقوم بإعادة تعيين كلمة المرور.
+                        </p>
+
+                        <div className="space-y-4">
+                            <button
+                                onClick={handleSendReset}
+                                className="w-full py-4 bg-white text-red-900 font-bold rounded-xl hover:bg-gray-100 transition-transform transform hover:scale-105 flex items-center justify-center gap-2"
+                            >
+                                <Mail size={20} /> إرسال رابط تغيير كلمة المرور
+                            </button>
+
+                            <button
+                                onClick={handleLogout}
+                                className="w-full py-4 bg-red-800/50 hover:bg-red-800 text-white font-bold rounded-xl border border-red-500/30 transition-colors flex items-center justify-center gap-2"
+                            >
+                                <LogOut size={20} /> تسجيل الخروج والعودة
+                            </button>
+                        </div>
+
+                        <p className="mt-8 text-xs text-red-400">
+                            * ملاحظة: بعد تغيير كلمة المرور من البريد، قم بتسجيل الخروج والدخول بكلمة المرور الجديدة.
+                        </p>
+                    </div>
+                </div>
+            )}
             {/* --- MOBILE SIDEBAR OVERLAY --- */}
             {isSidebarOpen && (
                 <div
