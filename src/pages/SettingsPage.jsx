@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useSettings } from '../contexts/SettingsContext';
 import { useAuth } from '../contexts/AuthContext';
-import { db } from '../firebase';
+import { db, auth } from '../firebase';
 import { doc, setDoc, writeBatch, collection, getDocs, query, where, updateDoc, deleteDoc } from 'firebase/firestore';
 import { updatePassword, EmailAuthProvider, reauthenticateWithCredential, createUserWithEmailAndPassword } from 'firebase/auth';
 import {
