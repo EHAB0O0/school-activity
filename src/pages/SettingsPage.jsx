@@ -281,6 +281,78 @@ export default function SettingsPage() {
     };
 
 
+    // --- TestSprite Safety Logic ---
+    const handleCreateTestAccount = async () => {
+        const toastId = toast.loading('جاري إنشاء حساب الاختبار...');
+        try {
+            // 1. Create Auth User
+            const userCredential = await createUserWithEmailAndPassword(auth, "test_bot@school.com", "TestBot123!");
+            const user = userCredential.user;
+
+            // 2. Create User Profile in Firestore
+            await setDoc(doc(db, "users", user.uid), {
+                email: "test_bot@school.com",
+                name: "TestSprite Bot 🤖",
+                role: "admin", // Give admin to allow testing everything
+                avatar: "https://api.dicebear.com/7.x/bottts/svg?seed=TestBot", // Placeholder Robot
+                createdAt: new Date(),
+                isTestAccount: true
+            });
+
+            toast.success("تم إنشاء حساب TestSprite بنجاح! 🤖", { id: toastId });
+        } catch (error) {
+            console.error(error);
+            if (error.code === 'auth/email-already-in-use') {
+                toast.success("حساب الاختبار موجود مسبقاً", { id: toastId });
+            } else {
+                toast.error("فشلت العملية: " + error.message, { id: toastId });
+            }
+        }
+    };
+
+    const handlePurgeTestData = async () => {
+        setConfirmModal({
+            isOpen: true,
+            title: 'تنظيف بيانات الاختبار',
+            message: 'هل أنت متأكد من حذف جميع البيانات التي تبدأ بـ [TEST] أو TestSprite؟ لا يمكن التراجع عن هذا الإجراء.',
+            isDestructive: true,
+            onConfirm: async () => {
+                const toastId = toast.loading('جاري تنظيف بيانات الاختبار... 🧹');
+                try {
+                    let deletedCount = 0;
+                    const collectionsToCheck = ['events', 'students', 'assets'];
+
+                    for (const colName of collectionsToCheck) {
+                        const colRef = collection(db, colName);
+                        const snapshot = await getDocs(colRef);
+
+                        const batch = writeBatch(db);
+                        let batchCount = 0;
+
+                        snapshot.docs.forEach(docSnap => {
+                            const data = docSnap.data();
+                            const title = data.title || data.name || '';
+                            // Check for Test Prefixes
+                            const isTest = title.startsWith('[TEST]') || title.startsWith('TestSprite') || data.isTestData === true;
+
+                            if (isTest) {
+                                batch.delete(docSnap.ref);
+                                batchCount++;
+                                deletedCount++;
+                            }
+                        });
+
+                        if (batchCount > 0) await batch.commit();
+                    }
+                    toast.success(`تم تنظيف ${deletedCount} سجل تجريبي بنجاح! ✨`, { id: toastId });
+                } catch (error) {
+                    console.error(error);
+                    toast.error("حدث خطأ أثناء التنظيف", { id: toastId });
+                }
+            }
+        });
+    };
+
     // --- Security Logic from before ---
     const handlePassChange = async (e) => {
         e.preventDefault();
@@ -511,76 +583,47 @@ export default function SettingsPage() {
                         </div>
                     </div>
 
-                    {/* Holidays & Weekends Block */}
-                    <div className="bg-white/5 backdrop-blur-md border border-white/10 p-8 rounded-2xl shadow-xl animate-fade-in relative overflow-hidden">
-                        <div className="absolute top-0 right-0 w-32 h-32 bg-rose-500/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none"></div>
-                        <h2 className="text-xl font-bold text-white mb-6 border-b border-white/10 pb-4 flex items-center">
-                            <Calendar className="ml-2 text-rose-400" /> إدارة العطلات والدوام
-                        </h2>
+                    {/* TestSprite Zone (New) */}
+                    <div className="bg-red-900/10 border border-red-500/20 rounded-2xl p-6 relative overflow-hidden group hover:border-red-500/40 transition-colors animate-fade-in mb-6">
+                        <div className="absolute top-0 left-0 w-2 h-full bg-gradient-to-b from-red-500 to-orange-500"></div>
+                        <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+                            <Shield className="text-red-400" />
+                            منطقة الاختبار (TestSprite Zone)
+                        </h3>
 
-                        {/* 1. Weekend Selector */}
-                        <div className="mb-8">
-                            <label className="block text-gray-400 mb-3 text-sm font-bold">أيام العطلة الأسبوعية (الإجازة المتكررة)</label>
-                            <div className="flex flex-wrap gap-2">
-                                {['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'].map((day, idx) => (
-                                    <button
-                                        key={idx}
-                                        onClick={() => toggleWeekend(idx)}
-                                        className={`px-4 py-2 rounded-lg border transition-all ${selectedWeekends.includes(idx)
-                                            ? 'bg-rose-500/20 border-rose-500 text-rose-300 font-bold'
-                                            : 'bg-black/20 border-white/5 text-gray-500 hover:bg-white/5'}`}
-                                    >
-                                        {day}
-                                        {selectedWeekends.includes(idx) && <CheckCircle size={14} className="inline mr-2" />}
-                                    </button>
-                                ))}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div className="space-y-4">
+                                <div className="bg-black/30 p-4 rounded-xl border border-white/5">
+                                    <h4 className="text-orange-300 font-bold mb-2 flex items-center gap-2">
+                                        <Key size={16} /> بيانات حساب الاختبار
+                                    </h4>
+                                    <div className="text-sm space-y-1 font-mono text-gray-300" dir="ltr">
+                                        <div>Email: <span className="text-white">test_bot@school.com</span></div>
+                                        <div>Pass:  <span className="text-white">TestBot123!</span></div>
+                                    </div>
+                                    <p className="text-xs text-gray-500 mt-2 font-cairo">
+                                        * ملاحظة: استخدم البادئة <span className="text-yellow-400 font-bold">[TEST]</span> في بداية أي اسم لضمان حذفه لاحقاً.
+                                    </p>
+                                </div>
                             </div>
-                        </div>
 
-                        {/* 2. Official Holidays */}
-                        <div>
-                            <label className="block text-gray-400 mb-3 text-sm font-bold">قائمة العطلات الرسمية</label>
+                            <div className="flex flex-col gap-3 justify-center">
+                                <button
+                                    onClick={handleCreateTestAccount}
+                                    className="w-full py-3 bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 hover:text-white border border-indigo-500/30 rounded-xl transition-all flex items-center justify-center gap-2"
+                                >
+                                    <Plus size={18} />
+                                    إنشاء حساب الاختبار
+                                </button>
 
-                            {/* Add Form */}
-                            <div className="flex gap-2 mb-4">
-                                <input
-                                    type="date"
-                                    className="bg-black/30 border border-white/10 rounded-xl px-3 text-white focus:border-rose-500 outline-none"
-                                    value={newHoliday.date}
-                                    onChange={e => setNewHoliday({ ...newHoliday, date: e.target.value })}
-                                />
-                                <input
-                                    type="text"
-                                    placeholder="سبب الإجازة (مثال: يوم التأسيس)"
-                                    className="flex-1 bg-black/30 border border-white/10 rounded-xl px-3 text-white focus:border-rose-500 outline-none"
-                                    value={newHoliday.reason}
-                                    onChange={e => setNewHoliday({ ...newHoliday, reason: e.target.value })}
-                                />
-                                <button onClick={addHoliday} className="bg-rose-600 hover:bg-rose-500 text-white p-3 rounded-xl">
-                                    <Plus size={20} />
+                                <button
+                                    onClick={handlePurgeTestData}
+                                    className="w-full py-3 bg-red-600/20 hover:bg-red-600 text-red-400 hover:text-white border border-red-500/30 rounded-xl transition-all flex items-center justify-center gap-2"
+                                >
+                                    <Trash2 size={18} />
+                                    تنظيف بيانات الاختبار (Purge)
                                 </button>
                             </div>
-
-                            {/* List */}
-                            <div className="space-y-2 max-h-40 overflow-y-auto pr-1 custom-scrollbar">
-                                {holidaysList.length === 0 && <p className="text-gray-500 text-sm text-center py-2">لا يوجد عطلات مضافة</p>}
-                                {holidaysList.map((h, i) => (
-                                    <div key={i} className="flex justify-between items-center bg-white/5 p-3 rounded-xl border border-white/5 hover:border-white/10 transition-colors">
-                                        <div className="flex items-center">
-                                            <div className="w-2 h-2 rounded-full bg-rose-500 ml-3"></div>
-                                            <span className="text-rose-200 font-mono ml-3 font-bold">{h.date}</span>
-                                            <span className="text-gray-300 text-sm">{h.reason}</span>
-                                        </div>
-                                        <button onClick={() => removeHoliday(h.id)} className="text-gray-500 hover:text-red-400 transition-colors"><Trash2 size={16} /></button>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-
-                        <div className="mt-6 pt-4 border-t border-white/10">
-                            <button onClick={handleSaveHolidays} className="w-full bg-rose-600 hover:bg-rose-500 text-white py-3 rounded-xl font-bold shadow-lg shadow-rose-900/20">
-                                <Save className="inline ml-2" size={18} /> حفظ إعدادات العطلات
-                            </button>
                         </div>
                     </div>
 
@@ -656,6 +699,8 @@ export default function SettingsPage() {
                             </button>
                         </div>
                     </div>
+
+
                 </div>
             )}
 
