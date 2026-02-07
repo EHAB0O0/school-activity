@@ -2,8 +2,8 @@ import { useState, useEffect } from 'react';
 import { useSettings } from '../contexts/SettingsContext';
 import { useAuth } from '../contexts/AuthContext';
 import { db } from '../firebase';
-import { doc, setDoc, writeBatch, collection, getDocs, query, where, updateDoc } from 'firebase/firestore';
-import { updatePassword, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth';
+import { doc, setDoc, writeBatch, collection, getDocs, query, where, updateDoc, deleteDoc } from 'firebase/firestore';
+import { updatePassword, EmailAuthProvider, reauthenticateWithCredential, createUserWithEmailAndPassword } from 'firebase/auth';
 import {
     Save, Shield, Key, AlertTriangle, RefreshCw, Clock,
     Settings, Plus, Trash2, List, Calendar, School, Edit3, CheckCircle, Box, X, Bell
@@ -1170,6 +1170,7 @@ function ClassesManager() {
                             <div className="flex-1 ml-4">
                                 <label className="block text-gray-400 text-sm mb-1">اسم الصف (مثال: الصف الأول الثانوي)</label>
                                 <input
+                                    type="text"
                                     className="w-full bg-black/30 border border-white/10 rounded-xl px-4 py-2 text-white font-bold text-lg focus:border-indigo-500 outline-none"
                                     value={editingGrade.name}
                                     onChange={e => setEditingGrade({ ...editingGrade, name: e.target.value })}
