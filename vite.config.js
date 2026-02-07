@@ -16,6 +16,12 @@ export default defineConfig({
         theme_color: '#ffffff',
         icons: [
           {
+            src: 'logo.svg',
+            sizes: 'any',
+            type: 'image/svg+xml',
+            purpose: 'any maskable'
+          },
+          {
             src: 'pwa-192x192.png',
             sizes: '192x192',
             type: 'image/png'
