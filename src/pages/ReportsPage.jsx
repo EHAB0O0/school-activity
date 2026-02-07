@@ -311,6 +311,54 @@ export default function ReportsPage() {
         setPreviewData(filtered);
     }
 
+    // --- Excel Export ---
+    const handleExportExcel = () => {
+        if (!previewData || previewData.length === 0) return toast.error("لا توجد بيانات للتصدير");
+
+        // 1. Format Data for Excel
+        let exportData = [];
+        if (activeTab === 'activities') {
+            exportData = previewData.map(e => ({
+                "النشاط": e.title,
+                "النوع": e.type,
+                "التاريخ": e.formattedDate || e.date,
+                "الوقت": e.time,
+                "المكان": e.venue,
+                "الحالة": e.status,
+                "عدد الطلاب": e.studentsCount
+            }));
+        } else if (activeTab === 'students') {
+            exportData = previewData.map((s, i) => ({
+                "م": i + 1,
+                "الاسم": s.name,
+                "الفصل": s.class,
+                "إجمالي النقاط": s.points,
+                "التخصصات": s.specializations?.join(', ') || '-'
+            }));
+        } else if (activeTab === 'assets') {
+            exportData = previewData.map(a => ({
+                "المورد": a.name,
+                "النوع": a.type,
+                "الحالة": a.status
+            }));
+        }
+
+        // 2. Create Workbook
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.json_to_sheet(exportData, { rtl: true });
+
+        // Auto-width columns
+        const wscols = Object.keys(exportData[0] || {}).map(k => ({ wch: 20 }));
+        ws['!cols'] = wscols;
+
+        XLSX.utils.book_append_sheet(wb, ws, "تقرير");
+
+        // 3. Download
+        const fileName = `Export_${activeTab}_${format(new Date(), 'yyyy-MM-dd')}.xlsx`;
+        XLSX.writeFile(wb, fileName);
+        toast.success("تم تصدير ملف Excel بنجاح");
+    };
+
     // --- Bulk PDF (Refactored for Arabic Support via Iframe Isolation) ---
     const generateBulkPDF = async () => {
         const toastId = toast.loading('جاري تحضير التقرير الشامل...');
