@@ -8,6 +8,7 @@ import StudentsPage from './pages/StudentsPage';
 import AssetsPage from './pages/AssetsPage';
 import SettingsPage from './pages/SettingsPage';
 import ReportsPage from './pages/ReportsPage';
+import PublicView from './pages/PublicView';
 
 import NotificationManager from './components/NotificationManager';
 import LoadingScreen from './components/ui/LoadingScreen';
