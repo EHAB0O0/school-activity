@@ -9,6 +9,7 @@ import { ShieldAlert, Key, HelpCircle, Lock, ArrowLeft, Activity, Loader2 } from
 import AppLogo from '../components/ui/AppLogo';
 
 export default function Login() {
+    const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const { login, activateEmergencyMode } = useAuth();
     const navigate = useNavigate();
@@ -52,8 +53,8 @@ export default function Login() {
         setLoading(true);
         try {
             if (mode === 'login') {
-                // Hardcoded Email as requested
-                await login("admin@school.com", password);
+                // Use entered email instead of hardcoded one
+                await login(email, password);
                 navigate('/');
             } else {
                 // Recovery Mode
@@ -99,29 +100,51 @@ export default function Login() {
                     <h2 className="text-3xl font-bold text-white tracking-tight">
                         {mode === 'login' ? 'أهلاً بك مجدداً' : 'دخول الطوارئ'}
                     </h2>
-                    <p className="text-indigo-200 text-sm mt-2">
-                        {mode === 'login' ? 'الرجاء إدخال كلمة المرور الرئيسية للمتابعة' : 'بروتوكول فتح النظام الآمن'}
+                    <p className="text-indigo-200 opacity-80">
+                        {mode === 'login' ? 'الرجاء إدخال بيانات الدخول للمتابعة' : 'بروتوكول فتح النظام الآمن'}
                     </p>
                 </div>
 
                 <form onSubmit={handleSubmit} className="space-y-6">
                     {mode === 'login' ? (
-                        <div className="relative group">
-                            <input
-                                type="password"
-                                required
-                                placeholder=" "
-                                className="peer w-full px-5 py-3.5 bg-gray-900/50 border border-gray-600/50 rounded-xl text-white placeholder-transparent focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
-                                value={password}
-                                onChange={(e) => setPassword(e.target.value)}
-                            />
-                            <label className="absolute right-5 top-3.5 text-gray-400 text-sm transition-all peer-placeholder-shown:text-base peer-placeholder-shown:text-gray-400 peer-placeholder-shown:top-3.5 peer-focus:-top-2.5 peer-focus:text-indigo-400 peer-focus:text-xs bg-transparent pointer-events-none">
-                                كلمة المرور
-                            </label>
-                            <div className="absolute left-4 top-4 text-indigo-400">
-                                <Lock size={18} />
+                        <>
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium text-indigo-200 block mr-1">البريد الإلكتروني</label>
+                                <div className="relative group">
+                                    <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none text-indigo-400 group-focus-within:text-white transition-colors">
+                                        <Activity size={20} />
+                                    </div>
+                                    <input
+                                        type="email"
+                                        required
+                                        className="w-full bg-black/40 border border-indigo-500/30 text-white text-lg rounded-xl pr-10 pl-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all placeholder-gray-500"
+                                        placeholder="admin@school.com"
+                                        value={email}
+                                        onChange={(e) => setEmail(e.target.value)}
+                                        dir="ltr"
+                                    />
+                                </div>
                             </div>
-                        </div>
+                            <div className="space-y-2">
+                                <div className="flex justify-between items-center mr-1">
+                                    <label className="text-sm font-medium text-indigo-200">كلمة المرور</label>
+                                </div>
+                                <div className="relative group">
+                                    <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none text-indigo-400 group-focus-within:text-white transition-colors">
+                                        <Lock size={20} />
+                                    </div>
+                                    <input
+                                        type="password"
+                                        required
+                                        className="w-full bg-black/40 border border-indigo-500/30 text-white text-lg rounded-xl pr-10 pl-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all placeholder-gray-500"
+                                        placeholder="••••••••"
+                                        value={password}
+                                        onChange={(e) => setPassword(e.target.value)}
+                                        dir="ltr"
+                                    />
+                                </div>
+                            </div>
+                        </>
                     ) : (
                         <div className="relative group">
                             <input
