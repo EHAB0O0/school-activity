@@ -4,14 +4,16 @@ import { collection, query, orderBy, getDocs, doc, getDoc, updateDoc, deleteDoc,
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import html2canvas from 'html2canvas';
-import { FileText, Download, Calendar, Users, Box, Filter, Printer, Search, X, Eye, Trash2, RefreshCw, Pen, Hash } from 'lucide-react';
+import * as XLSX from 'xlsx';
+import { FileText, Download, Calendar, Users, Box, Filter, Printer, Search, X, Eye, Trash2, RefreshCw, Pen, Hash, Table } from 'lucide-react';
+import { Menu, Transition } from '@headlessui/react';
+import { Fragment } from 'react';
 import EventModal from '../components/EventModal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import { updateEventWithSmartSync } from '../utils/EventLogic';
 import toast from 'react-hot-toast';
 import { format } from 'date-fns';
 import { ar } from 'date-fns/locale';
-import MultiSelect from '../components/ui/MultiSelect'; // Imported MultiSelect
 import { Tag, CheckSquare, Square } from 'lucide-react';
 
 // --- Helper: Arabic Status ---
@@ -1194,10 +1196,50 @@ export default function ReportsPage() {
                             </button>
                         )}
 
-                        <button onClick={generateBulkPDF} className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl shadow-lg transition-all flex items-center justify-center group">
-                            <Download size={18} className="ml-2 group-hover:scale-110 transition-transform" />
-                            تحميل التقرير المعروض (PDF)
-                        </button>
+                        <div className="relative group w-full">
+                            <Menu as="div" className="relative w-full">
+                                <Menu.Button className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl shadow-lg transition-all flex items-center justify-center gap-2">
+                                    <Download size={18} />
+                                    <span>تصدير البيانات</span>
+                                </Menu.Button>
+                                <Transition
+                                    as={Fragment}
+                                    enter="transition ease-out duration-100"
+                                    enterFrom="transform opacity-0 scale-95"
+                                    enterTo="transform opacity-100 scale-100"
+                                    leave="transition ease-in duration-75"
+                                    leaveFrom="transform opacity-100 scale-100"
+                                    leaveTo="transform opacity-0 scale-95"
+                                >
+                                    <Menu.Items className="absolute left-0 right-0 bottom-full mb-2 bg-[#2a2a35] border border-white/10 rounded-xl shadow-2xl overflow-hidden z-50 focus:outline-none">
+                                        <Menu.Item>
+                                            {({ active }) => (
+                                                <button
+                                                    onClick={generateBulkPDF}
+                                                    className={`${active ? 'bg-indigo-600 text-white' : 'text-gray-300'
+                                                        } group flex w-full items-center px-4 py-3 text-sm gap-3 transition-colors`}
+                                                >
+                                                    <FileText size={16} className="text-red-400" />
+                                                    ملف PDF (للطباعة)
+                                                </button>
+                                            )}
+                                        </Menu.Item>
+                                        <Menu.Item>
+                                            {({ active }) => (
+                                                <button
+                                                    onClick={handleExportExcel}
+                                                    className={`${active ? 'bg-indigo-600 text-white' : 'text-gray-300'
+                                                        } group flex w-full items-center px-4 py-3 text-sm gap-3 transition-colors border-t border-white/5`}
+                                                >
+                                                    <Table size={16} className="text-green-400" />
+                                                    ملف Excel (للبيانات)
+                                                </button>
+                                            )}
+                                        </Menu.Item>
+                                    </Menu.Items>
+                                </Transition>
+                            </Menu>
+                        </div>
 
                         <div className="bg-white/5 p-3 rounded-xl text-xs text-gray-400 leading-relaxed mt-4">
                             <span className="text-indigo-400 font-bold block mb-1">تلميح:</span>

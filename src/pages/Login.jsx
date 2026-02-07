@@ -6,6 +6,7 @@ import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import { ShieldAlert, Key, HelpCircle, Lock, ArrowLeft, Activity, Loader2 } from 'lucide-react';
+import AppLogo from '../components/ui/AppLogo';
 
 export default function Login() {
     const [password, setPassword] = useState('');
@@ -86,9 +87,15 @@ export default function Login() {
             <div className="w-full max-w-md p-8 bg-white/10 backdrop-blur-xl border border-white/20 rounded-2xl shadow-2xl relative z-10 transform transition-all hover:scale-[1.01]">
 
                 <div className="flex flex-col items-center mb-8">
-                    <div className={`p-4 rounded-full mb-4 shadow-lg ${mode === 'login' ? 'bg-gradient-to-br from-indigo-500 to-purple-600' : 'bg-red-600'}`}>
-                        {mode === 'login' ? <Activity className="text-white w-8 h-8" /> : <ShieldAlert className="text-white w-8 h-8" />}
-                    </div>
+                    {mode === 'login' ? (
+                        <div className="mb-6 transform hover:scale-105 transition-transform">
+                            <AppLogo size="normal" />
+                        </div>
+                    ) : (
+                        <div className={`p-4 rounded-full mb-4 shadow-lg bg-red-600`}>
+                            <ShieldAlert className="text-white w-8 h-8" />
+                        </div>
+                    )}
                     <h2 className="text-3xl font-bold text-white tracking-tight">
                         {mode === 'login' ? 'أهلاً بك مجدداً' : 'دخول الطوارئ'}
                     </h2>

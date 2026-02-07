@@ -54,11 +54,20 @@ export default function Dashboard() {
                 .sort((a, b) => (b.totalPoints || 0) - (a.totalPoints || 0))
                 .slice(0, 5);
 
+
+            const typeDist = {};
+            allEvents.forEach(e => {
+                const t = e.typeName || 'غير محدد';
+                typeDist[t] = (typeDist[t] || 0) + 1;
+            });
+
             setStats({
                 todayEvents: todayEventsList.length,
+                totalEvents: allEvents.length,
                 activeStudents: allStudents.length,
                 maintenanceAssets: maintenanceCount,
-                totalPoints
+                totalPoints,
+                typeDist
             });
             setAgenda(todayEventsList);
             setTopStudents(sortedStudents);
@@ -119,6 +128,60 @@ export default function Dashboard() {
 
             {/* Main Content Grid */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+
+                {/* Charts Section */}
+                <div className="lg:col-span-3 grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {/* Activity Type Distribution */}
+                    <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
+                        <h3 className="text-white font-bold mb-4 flex items-center">
+                            <TrendingUp className="ml-2 text-emerald-400" /> توزيع الأنشطة
+                        </h3>
+                        <div className="h-40 flex items-end justify-around gap-2 pt-4">
+                            {/* Simple CSS Bar Chart */}
+                            {Object.entries(stats.typeDist || {}).map(([type, count]) => {
+                                const height = Math.max(10, Math.min(100, (count / (stats.totalEvents || 1)) * 100));
+                                return (
+                                    <div key={type} className="flex flex-col items-center gap-2 group w-full">
+                                        <div className="w-full max-w-[40px] bg-gradient-to-t from-indigo-600 to-purple-500 rounded-t-lg transition-all group-hover:from-indigo-500 group-hover:to-purple-400 relative" style={{ height: `${height}%` }}>
+                                            <div className="absolute -top-6 left-1/2 -translate-x-1/2 text-xs text-white opacity-0 group-hover:opacity-100 transition-opacity bg-black/80 px-2 py-1 rounded">
+                                                {count}
+                                            </div>
+                                        </div>
+                                        <span className="text-[10px] text-gray-400 text-center truncate w-16">{type}</span>
+                                    </div>
+                                )
+                            })}
+                            {(!stats.typeDist || Object.keys(stats.typeDist).length === 0) && (
+                                <p className="text-gray-500 text-sm w-full text-center self-center">لا توجد بيانات كافية</p>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* Quick Stats / Mini Leaderboard */}
+                    <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
+                        <h3 className="text-white font-bold mb-4 flex items-center">
+                            <Award className="ml-2 text-amber-400" /> الطلاب المميزين
+                        </h3>
+                        <div className="space-y-3">
+                            {topStudents.map((student, idx) => (
+                                <div key={student.id} className="flex items-center justify-between p-2 rounded-lg hover:bg-white/5 transition-colors">
+                                    <div className="flex items-center">
+                                        <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ml-3 ${idx === 0 ? 'bg-amber-500 text-black' : 'bg-gray-700 text-gray-300'}`}>
+                                            {idx + 1}
+                                        </div>
+                                        <div>
+                                            <div className="text-sm font-bold text-gray-200">{student.name}</div>
+                                            <div className="text-[10px] text-gray-500">{student.class}</div>
+                                        </div>
+                                    </div>
+                                    <div className="text-amber-400 font-mono font-bold text-sm">{student.totalPoints}</div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+
+                {/* Left Column: Agenda (2/3 width) */}
 
                 {/* Left Column: Agenda (2/3 width) */}
                 <div className="lg:col-span-2 space-y-6">
@@ -183,30 +246,7 @@ export default function Dashboard() {
                         </div>
                     </div>
 
-                    {/* Leaderboard */}
-                    <div className="bg-gradient-to-b from-white/10 to-white/5 border border-white/10 rounded-2xl p-6 relative overflow-hidden">
-                        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-amber-500 via-orange-500 to-yellow-500"></div>
-                        <h3 className="font-bold text-white mb-4 flex items-center">
-                            <Award className="ml-2 text-amber-400" /> المتصدرين
-                        </h3>
-                        <div className="space-y-3">
-                            {topStudents.map((student, idx) => (
-                                <div key={student.id} className="flex items-center justify-between p-2 rounded-lg hover:bg-white/5 transition-colors">
-                                    <div className="flex items-center">
-                                        <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ml-3 ${idx === 0 ? 'bg-amber-500 text-black' : 'bg-gray-700 text-gray-300'}`}>
-                                            {idx + 1}
-                                        </div>
-                                        <div>
-                                            <div className="text-sm font-bold text-gray-200">{student.name}</div>
-                                            <div className="text-[10px] text-gray-500">{student.class}</div>
-                                        </div>
-                                    </div>
-                                    <div className="text-amber-400 font-mono font-bold text-sm">{student.totalPoints}</div>
-                                </div>
-                            ))}
-                            {topStudents.length === 0 && <p className="text-center text-gray-500 text-xs">لا يوجد بيانات</p>}
-                        </div>
-                    </div>
+                    {/* Leaderboard Removed (Moved to top chart section) */}
 
                 </div>
             </div>

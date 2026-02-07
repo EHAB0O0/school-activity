@@ -6,6 +6,8 @@ import { sendPasswordResetEmail } from 'firebase/auth';
 import { auth } from '../firebase';
 import toast from 'react-hot-toast';
 
+import AppLogo from './ui/AppLogo';
+
 export default function Layout() {
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const { logout, currentUser, isEmergency } = useAuth();
@@ -100,17 +102,8 @@ export default function Layout() {
                 fixed md:static inset-y-0 right-0 z-50 w-64 bg-slate-800 border-l border-slate-700 flex flex-col transition-transform duration-300 ease-in-out
                 ${isSidebarOpen ? 'translate-x-0' : 'translate-x-full md:translate-x-0'}
             `}>
-                <div className="h-16 flex items-center justify-between px-6 border-b border-slate-700">
-                    <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center">
-                            <Shield className="text-white" size={20} />
-                        </div>
-                        <h1 className="text-lg font-bold tracking-tight">Activity Master</h1>
-                    </div>
-                    {/* Mobile Close Button */}
-                    <button onClick={() => setIsSidebarOpen(false)} className="md:hidden text-slate-400 hover:text-white">
-                        <X size={24} />
-                    </button>
+                <div className="h-16 flex items-center justify-center border-b border-slate-700">
+                    <AppLogo size="small" />
                 </div>
 
                 <nav className="flex-1 overflow-y-auto py-6 px-4 space-y-2">

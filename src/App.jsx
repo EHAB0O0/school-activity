@@ -9,10 +9,13 @@ import AssetsPage from './pages/AssetsPage';
 import SettingsPage from './pages/SettingsPage';
 import ReportsPage from './pages/ReportsPage';
 import PublicView from './pages/PublicView'; // NEW
+import PublicView from './pages/PublicView';
 import NotificationManager from './components/NotificationManager';
+import LoadingScreen from './components/ui/LoadingScreen';
 
 function PrivateRoute({ children }) {
-  const { currentUser } = useAuth();
+  const { currentUser, loading } = useAuth();
+  if (loading) return <LoadingScreen />;
   return currentUser ? children : <Navigate to="/login" />;
 }
 
