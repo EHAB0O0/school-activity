@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Outlet, useLocation, Link, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Users, Calendar, Settings, LogOut, Menu, X, Box, FileText, Shield, Lock, Mail, AlertTriangle } from 'lucide-react';
+import { LayoutDashboard, Users, Calendar, LogOut, Menu, Box, FileText, Lock, Mail, Settings } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { sendPasswordResetEmail } from 'firebase/auth';
 import { auth } from '../firebase';
@@ -15,9 +15,11 @@ export default function Layout() {
     const navigate = useNavigate();
 
     // Close sidebar on route change (Mobile UX)
-    useEffect(() => {
+    const [prevPath, setPrevPath] = useState(location.pathname);
+    if (prevPath !== location.pathname) {
+        setPrevPath(location.pathname);
         setIsSidebarOpen(false);
-    }, [location.pathname]);
+    }
 
     const handleLogout = async () => {
         try {
@@ -67,19 +69,26 @@ export default function Layout() {
                             لدواعي الأمان، تم قفل النظام حتى تقوم بإعادة تعيين كلمة المرور.
                         </p>
 
-                        <div className="space-y-4">
+                        <div className="space-y-3">
+                            <button
+                                onClick={handleLogout}
+                                className="w-full py-3.5 bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 font-bold rounded-xl shadow-lg transition-transform transform hover:scale-105 flex items-center justify-center gap-2"
+                            >
+                                <Lock size={18} /> تغيير كلمة المرور وتوليد مفتاح جديد
+                            </button>
+
                             <button
                                 onClick={handleSendReset}
-                                className="w-full py-4 bg-white text-red-900 font-bold rounded-xl hover:bg-gray-100 transition-transform transform hover:scale-105 flex items-center justify-center gap-2"
+                                className="w-full py-3 bg-white/10 hover:bg-white/20 text-white font-semibold rounded-xl border border-white/20 transition-colors flex items-center justify-center gap-2"
                             >
-                                <Mail size={20} /> إرسال رابط تغيير كلمة المرور
+                                <Mail size={18} /> إرسال رابط الاستعادة للبريد
                             </button>
 
                             <button
                                 onClick={handleLogout}
-                                className="w-full py-4 bg-red-800/50 hover:bg-red-800 text-white font-bold rounded-xl border border-red-500/30 transition-colors flex items-center justify-center gap-2"
+                                className="w-full py-3 bg-red-950/60 hover:bg-red-900/60 text-red-200 rounded-xl border border-red-500/30 transition-colors flex items-center justify-center gap-2"
                             >
-                                <LogOut size={20} /> تسجيل الخروج والعودة
+                                <LogOut size={18} /> تسجيل الخروج
                             </button>
                         </div>
 
@@ -148,6 +157,7 @@ export default function Layout() {
                 <header className="h-16 flex items-center px-4 border-b border-slate-700 md:hidden bg-slate-800/80 backdrop-blur-md sticky top-0 z-30">
                     <button
                         onClick={() => setIsSidebarOpen(true)}
+                        aria-label="فتح القائمة الجانبية"
                         className="p-2 -mr-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700/50"
                     >
                         <Menu size={24} />

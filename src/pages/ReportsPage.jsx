@@ -1,8 +1,8 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { db } from '../firebase';
 import { collection, query, orderBy, getDocs, doc, getDoc, updateDoc, deleteDoc, runTransaction, increment } from 'firebase/firestore';
 import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
+import 'jspdf-autotable';
 import html2canvas from 'html2canvas';
 import * as XLSX from 'xlsx';
 import { FileText, Download, Calendar, Users, Box, Filter, Printer, Search, X, Eye, Trash2, RefreshCw, Pen, Hash, Table } from 'lucide-react';
@@ -95,10 +95,6 @@ export default function ReportsPage() {
     const [sectionFilter, setSectionFilter] = useState('');
     const [specFilter, setSpecFilter] = useState('All');
     const [pointsRange, setPointsRange] = useState({ min: 0, max: 2000 });
-    // Legacy support to prevent crash if referenced
-    const [minPoints, setMinPoints] = useState(0);
-    const [maxPoints, setMaxPoints] = useState(2000);
-
     // Asset Filters
     const [assetStatusFilter, setAssetStatusFilter] = useState('All');
 
@@ -109,7 +105,9 @@ export default function ReportsPage() {
     const [reportOptions, setReportOptions] = useState({
         showStudents: false,
         showAssets: false,
-        showCustomFields: false
+        showCustomFields: false,
+        showStudentHistory: false,
+        showAssetHistory: false
     });
 
     // Detail Modal State
@@ -119,49 +117,115 @@ export default function ReportsPage() {
     const [editEventData, setEditEventData] = useState(null);
     const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: '', message: '', onConfirm: null, isDestructive: false });
 
-    // Filter Options (computed from Settings)
-    const gradeOptions = grades?.map(g => g.name) || [];
-    const sectionOptions = grades?.find(g => g.name === gradeFilter)?.sections?.map(s => s.name) || [];
-
     const [assetMap, setAssetMap] = useState({});
+    const [studentParticipationMap, setStudentParticipationMap] = useState({});
+    const [assetUsageMap, setAssetUsageMap] = useState({});
+
+    // Helper to build participation and asset usage histories
+    const buildHistoryMaps = (eventDocs, sMap = studentMap, aMap = assetMap) => {
+        const pMap = {};
+        const uMap = {};
+
+        eventDocs.forEach(d => {
+            const pd = d.data();
+            const ev = {
+                id: d.id,
+                title: pd.title || 'بدون عنوان',
+                date: pd.startTime?.toDate ? format(pd.startTime.toDate(), 'yyyy-MM-dd') : (pd.date || ''),
+                formattedDate: pd.startTime?.toDate ? format(pd.startTime.toDate(), 'd MMMM yyyy', { locale: ar }) : (pd.date || ''),
+                time: pd.startTime?.toDate ? format(pd.startTime.toDate(), 'hh:mm a') : (pd.startTime || ''),
+                venue: getVenueLabel(pd.venueId),
+                status: getStatusLabel(pd.status || 'Draft'),
+                rawStatus: pd.status || 'Draft',
+                points: pd.points || 10
+            };
+
+            if (Array.isArray(pd.participatingStudents)) {
+                pd.participatingStudents.forEach(stId => {
+                    if (!pMap[stId]) pMap[stId] = [];
+                    pMap[stId].push(ev);
+
+                    const sName = sMap[stId]?.name;
+                    if (sName) {
+                        if (!pMap[sName]) pMap[sName] = [];
+                        pMap[sName].push(ev);
+                    }
+                });
+            }
+
+            if (Array.isArray(pd.assets)) {
+                pd.assets.forEach(assId => {
+                    if (!uMap[assId]) uMap[assId] = [];
+                    uMap[assId].push(ev);
+
+                    const aName = aMap[assId];
+                    if (aName) {
+                        if (!uMap[aName]) uMap[aName] = [];
+                        uMap[aName].push(ev);
+                    }
+                });
+            }
+        });
+
+        setStudentParticipationMap(pMap);
+        setAssetUsageMap(uMap);
+    };
 
     // --- 1. Fetch Data Logic ---
     useEffect(() => {
         const loadInitialData = async () => {
-            // Load Students & Assets Maps for lookups
-            const [sSnap, aSnap] = await Promise.all([
-                getDocs(collection(db, 'students')),
-                getDocs(collection(db, 'assets'))
-            ]);
+            try {
+                // Load Students, Assets & Events Maps for lookups and histories
+                let eDocs = [];
+                try {
+                    const eSnap = await getDocs(query(collection(db, 'events'), orderBy('startTime', 'desc')));
+                    eDocs = eSnap.docs;
+                } catch {
+                    const fallbackSnap = await getDocs(collection(db, 'events'));
+                    eDocs = fallbackSnap.docs;
+                }
 
-            const sMap = {};
-            sSnap.docs.forEach(d => {
-                const sData = d.data();
-                sMap[d.id] = {
-                    name: sData.name,
-                    grade: sData.grade || '',
-                    section: sData.section || ''
-                };
-            });
-            setStudentMap(sMap);
+                const [sSnap, aSnap] = await Promise.all([
+                    getDocs(collection(db, 'students')),
+                    getDocs(collection(db, 'assets'))
+                ]);
 
-            const aMap = {};
-            aSnap.docs.forEach(d => { aMap[d.id] = d.data().name; });
-            setAssetMap(aMap);
+                const sMap = {};
+                sSnap.docs.forEach(d => {
+                    const sData = d.data();
+                    sMap[d.id] = {
+                        name: sData.name,
+                        grade: sData.grade || '',
+                        section: sData.section || ''
+                    };
+                });
+                setStudentMap(sMap);
+
+                const aMap = {};
+                aSnap.docs.forEach(d => { aMap[d.id] = d.data().name; });
+                setAssetMap(aMap);
+
+                buildHistoryMaps(eDocs, sMap, aMap);
+            } catch (error) {
+                console.error("Failed to load initial data:", error);
+            }
         };
         loadInitialData();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     useEffect(() => {
         if (Object.keys(studentMap).length > 0 || activeTab !== 'activities') {
             fetchData();
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [activeTab, studentMap, assetMap]); // Refetch when tab changes or map is ready
 
     // --- 2. Filter Logic ---
     useEffect(() => {
         applyFilters();
-    }, [rawData, dateRange, minPoints, maxPoints, assetStatusFilter, gradeFilter, sectionFilter, venueFilter, activeTab]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [rawData, dateRange, pointsRange, assetStatusFilter, gradeFilter, sectionFilter, venueFilter, activeTab]);
 
     // --- 3. Handlers ---
     const handleEditClick = async (event) => {
@@ -222,6 +286,7 @@ export default function ReportsPage() {
             let data = [];
             if (activeTab === 'activities') {
                 const snap = await getDocs(query(collection(db, 'events'), orderBy('startTime', 'desc')));
+                buildHistoryMaps(snap.docs);
                 data = snap.docs.map(d => {
                     const pd = d.data();
                     const participatingStudents = pd.participatingStudents?.map(id => {
@@ -302,9 +367,7 @@ export default function ReportsPage() {
 
         } else if (activeTab === 'assets') {
             if (assetStatusFilter !== 'All') {
-                const statuses = Array.isArray(assetStatusFilter) ? assetStatusFilter : [assetStatusFilter];
-                // If it's single select acting as multi, simpler check:
-                if (assetStatusFilter !== 'All') filtered = filtered.filter(item => item.status === assetStatusFilter);
+                filtered = filtered.filter(item => item.status === assetStatusFilter);
             }
         }
 
@@ -325,22 +388,41 @@ export default function ReportsPage() {
                 "الوقت": e.time,
                 "المكان": e.venue,
                 "الحالة": e.status,
-                "عدد الطلاب": e.studentsCount
+                "عدد الطلاب": e.studentsCount,
+                "الموارد المستخدمة": (e.assets || []).map(a => assetMap[a] || a).join(', ') || '-'
             }));
         } else if (activeTab === 'students') {
-            exportData = previewData.map((s, i) => ({
-                "م": i + 1,
-                "الاسم": s.name,
-                "الفصل": s.class,
-                "إجمالي النقاط": s.points,
-                "التخصصات": s.specializations?.join(', ') || '-'
-            }));
+            exportData = previewData.map((s, i) => {
+                const history = studentParticipationMap[s.id] || studentParticipationMap[s.name] || [];
+                const row = {
+                    "م": i + 1,
+                    "الاسم": s.name,
+                    "الصف": s.grade || '',
+                    "الشعبة": s.section || '',
+                    "الفصل": (s.grade && s.section) ? `${s.grade} - ${s.section}` : (s.class || ''),
+                    "إجمالي النقاط": s.points,
+                    "التخصصات": s.specializations?.join(', ') || '-'
+                };
+                if (reportOptions.showStudentHistory) {
+                    row["عدد المشاركات"] = history.length;
+                    row["سجل الأنشطة"] = history.map(h => `${h.title} (${h.formattedDate})`).join(' | ') || '-';
+                }
+                return row;
+            });
         } else if (activeTab === 'assets') {
-            exportData = previewData.map(a => ({
-                "المورد": a.name,
-                "النوع": a.type,
-                "الحالة": a.status
-            }));
+            exportData = previewData.map(a => {
+                const history = assetUsageMap[a.id] || assetUsageMap[a.name] || [];
+                const row = {
+                    "المورد": a.name,
+                    "النوع": a.type,
+                    "الحالة": a.status
+                };
+                if (reportOptions.showAssetHistory) {
+                    row["عدد مرات الاستخدام"] = history.length;
+                    row["سجل الاستخدام في الأنشطة"] = history.map(h => `${h.title} (${h.formattedDate})`).join(' | ') || '-';
+                }
+                return row;
+            });
         }
 
         // 2. Create Workbook
@@ -348,7 +430,7 @@ export default function ReportsPage() {
         const ws = XLSX.utils.json_to_sheet(exportData, { rtl: true });
 
         // Auto-width columns
-        const wscols = Object.keys(exportData[0] || {}).map(k => ({ wch: 20 }));
+        const wscols = Object.keys(exportData[0] || {}).map(() => ({ wch: 20 }));
         ws['!cols'] = wscols;
 
         XLSX.utils.book_append_sheet(wb, ws, "تقرير");
@@ -456,13 +538,12 @@ export default function ReportsPage() {
                         `;
                     }
 
-                    // 2. Assets (using item.assets - these are IDs, we might want names if available, but for now IDs or mapped names if map exists)
-                    // Note: fetch didn't map asset names, let's just display ID or fix fetch. (For now assuming IDs are okay or map unavailable locally in this scope easily)
-                    // Actually, let's check if we can show count or just list.
+                    // 2. Assets (mapped to human-readable names)
                     if (reportOptions.showAssets && item.assets && item.assets.length > 0) {
-                        // We don't have asset map easily here, let's just join them.
-                        // But wait, user wants "Used Assets". simpler to just list them.
-                        const assetTags = item.assets.map(a => `<span class="asset-tag">${a}</span>`).join('');
+                        const assetTags = item.assets.map(a => {
+                            const name = assetMap[a] || a;
+                            return `<span class="asset-tag">${name}</span>`;
+                        }).join('');
                         detailsContent += `
                             <div class="details-section">
                                 <div class="details-title">الموارد المستخدمة (${item.assets.length}):</div>
@@ -505,8 +586,8 @@ export default function ReportsPage() {
                     <tr>
                         <th style="width: 5%">#</th>
                         <th style="width: 35%">اسم الطالب</th>
-                        <th style="width: 30%">التخصصات</th>
-                        <th style="width: 15%">الفصل</th>
+                        <th style="width: 25%">التخصصات</th>
+                        <th style="width: 20%">الصف والشعبة</th>
                         <th style="width: 15%">النقاط</th>
                     </tr>
                 `;
@@ -514,15 +595,56 @@ export default function ReportsPage() {
                     const specs = item.specializations && item.specializations.length > 0
                         ? item.specializations.map(s => s === 'General' ? 'عام' : s).join(', ')
                         : '-';
-                    return `
+                    const className = (item.grade && item.section) ? `${item.grade} - ${item.section}` : (item.class || item.grade || '-');
+                    const mainRow = `
                     <tr>
                          <td class="center dim">${i + 1}</td>
                         <td class="bold">${item.name}</td>
                         <td>${specs}</td>
-                        <td class="center">${item.class}</td>
+                        <td class="center">${className}</td>
                         <td class="center bold success-text">${item.points}</td>
                     </tr>
-                `}).join('');
+                    `;
+
+                    let detailsRow = '';
+                    if (reportOptions.showStudentHistory) {
+                        const history = studentParticipationMap[item.id] || studentParticipationMap[item.name] || [];
+                        let historyContent = '';
+                        if (history.length > 0) {
+                            const tags = history.map(act => `
+                                <div class="history-tag">
+                                    <span class="history-title">${act.title}</span>
+                                    <span class="history-meta">${act.formattedDate} • ${act.venue}</span>
+                                    <span class="history-points">+${act.points} ن</span>
+                                </div>
+                            `).join('');
+                            historyContent = `
+                                <div class="history-container">
+                                    <div class="history-header">سجل الأنشطة المشارك فيها (${history.length}):</div>
+                                    <div class="history-items">${tags}</div>
+                                </div>
+                            `;
+                        } else {
+                            historyContent = `
+                                <div class="history-container">
+                                    <span class="dim" style="font-size: 11px;">لا توجد مشاركات سابقة مسجلة</span>
+                                </div>
+                            `;
+                        }
+
+                        detailsRow = `
+                            <tr class="details-row">
+                                <td colspan="5">
+                                    <div class="details-box">
+                                        ${historyContent}
+                                    </div>
+                                </td>
+                            </tr>
+                        `;
+                    }
+
+                    return mainRow + detailsRow;
+                }).join('');
             } else if (activeTab === 'assets') {
                 tableHeader = `
                     <tr>
@@ -531,7 +653,8 @@ export default function ReportsPage() {
                         <th style="width: 30%">الحالة</th>
                     </tr>
                 `;
-                tableRowsHtml = previewData.map(item => `
+                tableRowsHtml = previewData.map(item => {
+                    const mainRow = `
                     <tr>
                         <td class="bold">${item.name}</td>
                         <td>${item.type}</td>
@@ -541,7 +664,47 @@ export default function ReportsPage() {
                             </span>
                         </td>
                     </tr>
-                `).join('');
+                    `;
+
+                    let detailsRow = '';
+                    if (reportOptions.showAssetHistory) {
+                        const history = assetUsageMap[item.id] || assetUsageMap[item.name] || [];
+                        let historyContent = '';
+                        if (history.length > 0) {
+                            const tags = history.map(act => `
+                                <div class="history-tag">
+                                    <span class="history-title">${act.title}</span>
+                                    <span class="history-meta">${act.formattedDate} • ${act.venue}</span>
+                                    <span class="badge ${act.rawStatus === 'Done' ? 'success' : 'neutral'}">${act.status}</span>
+                                </div>
+                            `).join('');
+                            historyContent = `
+                                <div class="history-container">
+                                    <div class="history-header">سجل استخدام المورد في الأنشطة (${history.length}):</div>
+                                    <div class="history-items">${tags}</div>
+                                </div>
+                            `;
+                        } else {
+                            historyContent = `
+                                <div class="history-container">
+                                    <span class="dim" style="font-size: 11px;">لم يُستخدم هذا المورد في أي نشاط سابق</span>
+                                </div>
+                            `;
+                        }
+
+                        detailsRow = `
+                            <tr class="details-row">
+                                <td colspan="3">
+                                    <div class="details-box">
+                                        ${historyContent}
+                                    </div>
+                                </td>
+                            </tr>
+                        `;
+                    }
+
+                    return mainRow + detailsRow;
+                }).join('');
             }
 
             // 3. Write Full HTML Document
@@ -646,6 +809,32 @@ export default function ReportsPage() {
                         .asset-tag { display: inline-block; background: #fffbeb; color: #92400e; padding: 2px 6px; border-radius: 4px; border: 1px solid #fcd34d; font-size: 10px; margin-left: 4px; }
                         .fields-container { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; }
                         .field-item { font-size: 11px; background: #f8fafc; padding: 4px; border-radius: 4px; border: 1px solid #e2e8f0; }
+
+                        /* HISTORY STYLES */
+                        .history-container { margin: 2px 0; }
+                        .history-header { font-size: 11px; font-weight: bold; color: #475569; margin-bottom: 6px; }
+                        .history-items { display: flex; flex-wrap: wrap; gap: 6px; }
+                        .history-tag {
+                            display: inline-flex;
+                            align-items: center;
+                            gap: 6px;
+                            background-color: #ffffff;
+                            border: 1px solid #cbd5e1;
+                            padding: 3px 8px;
+                            border-radius: 4px;
+                            font-size: 11px;
+                            color: #334155;
+                        }
+                        .history-title { font-weight: bold; color: #1e293b; }
+                        .history-meta { font-size: 10px; color: #64748b; }
+                        .history-points {
+                            background-color: #ecfdf5;
+                            color: #059669;
+                            font-weight: bold;
+                            font-size: 10px;
+                            padding: 1px 4px;
+                            border-radius: 3px;
+                        }
 
                         .footer {
                             margin-top: 40px;
@@ -816,7 +1005,13 @@ export default function ReportsPage() {
                      </div>`).join('')
                 : '<div class="empty">لا يوجد طلاب</div>';
 
-            const statusColor = event.status === 'مكتمل' ? '#34d399' : '#9ca3af';
+            const assetsListHtml = (event.assets && event.assets.length > 0)
+                ? event.assets.map(a => {
+                    const name = assetMap[a] || a;
+                    return `<span class="asset-pill">${name}</span>`;
+                }).join('')
+                : `<div class="empty" style="color: ${t.textSec}; font-size: 12px;">لا توجد موارد أو أدوات مسجلة لهذا النشاط</div>`;
+
             const statusBg = event.status === 'مكتمل'
                 ? (theme === 'dark' ? 'rgba(16, 185, 129, 0.2)' : '#ecfdf5') // green-900/20 vs green-50
                 : (theme === 'dark' ? 'rgba(107, 114, 128, 0.2)' : '#f3f4f6'); // gray-800/20 vs gray-100
@@ -884,6 +1079,16 @@ export default function ReportsPage() {
                             color: ${t.textSec}; 
                             text-align: center;
                         }
+                        .asset-pill {
+                            display: inline-block;
+                            background: ${theme === 'light' ? '#fef3c7' : 'rgba(245, 158, 11, 0.15)'};
+                            color: ${theme === 'light' ? '#92400e' : '#fbbf24'};
+                            border: 1px solid ${theme === 'light' ? '#fde68a' : 'rgba(245, 158, 11, 0.3)'};
+                            padding: 5px 12px;
+                            border-radius: 6px;
+                            font-size: 12px;
+                            font-weight: 500;
+                        }
                         .footer { 
                             margin-top: 40px; 
                             border-top: 1px solid ${t.footerBorder}; 
@@ -924,6 +1129,11 @@ export default function ReportsPage() {
                         <h3>الطلاب المشاركون (${event.studentsCount})</h3>
                         <div class="list">
                             ${studentsListHtml}
+                        </div>
+
+                        <h3 style="margin-top: 25px;">الموارد والأدوات المستخدمة (${event.assets?.length || 0})</h3>
+                        <div style="background: ${t.listBg}; border: 1px solid ${t.listBorder}; border-radius: 12px; padding: 14px; display: flex; flex-wrap: wrap; gap: 8px;">
+                            ${assetsListHtml}
                         </div>
 
                         <div class="footer">
@@ -1194,9 +1404,27 @@ export default function ReportsPage() {
                                 <div className="flex items-center gap-2">
                                     <input type="number" placeholder="min" className="w-full bg-black/40 border border-white/10 rounded-xl p-2 text-white text-xs"
                                         value={pointsRange.min} onChange={e => setPointsRange({ ...pointsRange, min: Number(e.target.value) })} />
-                                    <span className="text-gray-500">-</span>
+                                    <span className="text-gray-400">-</span>
                                     <input type="number" placeholder="max" className="w-full bg-black/40 border border-white/10 rounded-xl p-2 text-white text-xs"
                                         value={pointsRange.max} onChange={e => setPointsRange({ ...pointsRange, max: Number(e.target.value) })} />
+                                </div>
+                            </div>
+
+                            <div className="pt-4 border-t border-white/10">
+                                <label className="block text-emerald-300 text-sm font-bold mb-2">خيارات التقرير</label>
+                                <div className="space-y-2">
+                                    <label className="flex items-center gap-2 cursor-pointer group">
+                                        <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${reportOptions.showStudentHistory ? 'bg-emerald-600 border-emerald-600' : 'border-gray-500 bg-white/5'}`}>
+                                            {reportOptions.showStudentHistory && <CheckSquare size={14} className="text-white" />}
+                                        </div>
+                                        <input
+                                            type="checkbox"
+                                            className="hidden"
+                                            checked={reportOptions.showStudentHistory}
+                                            onChange={e => setReportOptions(prev => ({ ...prev, showStudentHistory: e.target.checked }))}
+                                        />
+                                        <span className="text-gray-300 text-sm group-hover:text-white">عرض سجل ومشاركات الطالب في الأنشطة</span>
+                                    </label>
                                 </div>
                             </div>
                         </div>
@@ -1215,6 +1443,24 @@ export default function ReportsPage() {
                                     <option value="In Use">قيد الاستخدام (In Use)</option>
                                 </select>
                             </div>
+
+                            <div className="pt-4 border-t border-white/10">
+                                <label className="block text-amber-300 text-sm font-bold mb-2">خيارات التقرير</label>
+                                <div className="space-y-2">
+                                    <label className="flex items-center gap-2 cursor-pointer group">
+                                        <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${reportOptions.showAssetHistory ? 'bg-amber-600 border-amber-600' : 'border-gray-500 bg-white/5'}`}>
+                                            {reportOptions.showAssetHistory && <CheckSquare size={14} className="text-white" />}
+                                        </div>
+                                        <input
+                                            type="checkbox"
+                                            className="hidden"
+                                            checked={reportOptions.showAssetHistory}
+                                            onChange={e => setReportOptions(prev => ({ ...prev, showAssetHistory: e.target.checked }))}
+                                        />
+                                        <span className="text-gray-300 text-sm group-hover:text-white">عرض سجل استخدام المورد في الأنشطة</span>
+                                    </label>
+                                </div>
+                            </div>
                         </div>
                     )}
 
@@ -1229,7 +1475,6 @@ export default function ReportsPage() {
                                         toast.error("الرجاء اختيار الصف والشعبة أولاً من شريط التصفية بالأعلى");
                                         return;
                                     }
-                                    const titleStr = `تقرير فصل ${gradeFilter} - ${sectionFilter}`;
                                     // Generate PDF for just these students
                                     // We can reuse generateBulkPDF but we need to ensure it uses the filtered data
                                     if (previewData.length === 0) {
@@ -1339,10 +1584,11 @@ export default function ReportsPage() {
                             </thead>
                             <tbody className="text-gray-300 divide-y divide-white/5">
                                 {previewData.length === 0 ? (
-                                    <tr><td colSpan="6" className="p-12 text-center text-gray-500">لا توجد بيانات للعرض حالياً</td></tr>
+                                    <tr><td colSpan="6" className="p-12 text-center text-gray-400">لا توجد بيانات للعرض حالياً</td></tr>
                                 ) : (
                                     previewData.map((row, idx) => (
-                                        <tr key={row.id || idx}
+                                    <Fragment key={row.id || idx}>
+                                        <tr
                                             onClick={() => activeTab === 'activities' && setSelectedEvent(row)}
                                             className={`hover:bg-white/5 transition-colors ${activeTab === 'activities' ? 'cursor-pointer' : ''}`}
                                         >
@@ -1368,6 +1614,7 @@ export default function ReportsPage() {
                                                     <td className="p-4 flex items-center justify-center gap-2">
                                                         <button
                                                             onClick={(e) => { e.stopPropagation(); handleEditClick(row); }}
+                                                            aria-label="تعديل النشاط"
                                                             className="p-2 bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600 hover:text-white rounded-lg transition-all"
                                                             title="تعديل النشاط"
                                                         >
@@ -1376,13 +1623,13 @@ export default function ReportsPage() {
                                                     </td>
 
                                                     <td className="p-4 text-center">
-                                                        <button className="text-indigo-400 hover:text-white p-1"><Eye size={16} /></button>
+                                                        <button aria-label="عرض التفاصيل" className="text-indigo-400 hover:text-white p-1"><Eye size={16} /></button>
                                                     </td>
                                                 </>
                                             )}
                                             {activeTab === 'students' && (
                                                 <>
-                                                    <td className="p-4 text-gray-500">{idx + 1}</td>
+                                                    <td className="p-4 text-gray-400">{idx + 1}</td>
                                                     <td className="p-4 font-bold text-white">{row.name}</td>
                                                     <td className="p-4">
                                                         <div className="flex flex-wrap gap-1">
@@ -1397,7 +1644,7 @@ export default function ReportsPage() {
                                                             )}
                                                         </div>
                                                     </td>
-                                                    <td className="p-4">{row.class}</td>
+                                                    <td className="p-4">{(row.grade && row.section) ? `${row.grade} - ${row.section}` : (row.class || row.grade || '-')}</td>
                                                     <td className="p-4 font-bold text-emerald-400">{row.points}</td>
                                                 </>
                                             )}
@@ -1413,7 +1660,76 @@ export default function ReportsPage() {
                                                 </>
                                             )}
                                         </tr>
-                                    ))
+
+                                        {/* STUDENT PARTICIPATION HISTORY ROW */}
+                                        {activeTab === 'students' && reportOptions.showStudentHistory && (() => {
+                                            const studentHistory = studentParticipationMap[row.id] || studentParticipationMap[row.name] || [];
+                                            return (
+                                                <tr className="bg-black/30 border-b border-white/5">
+                                                    <td colSpan={5} className="p-4 pt-1 pr-10">
+                                                        <div className="bg-white/5 rounded-xl p-3 border border-white/10 space-y-2">
+                                                            <div className="text-xs font-bold text-emerald-400 flex items-center gap-2">
+                                                                <Calendar size={14} />
+                                                                <span>الأنشطة التي شارك فيها ({studentHistory.length}):</span>
+                                                            </div>
+                                                            {studentHistory.length > 0 ? (
+                                                                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                                                                    {studentHistory.map(act => (
+                                                                        <div key={act.id} className="bg-black/40 p-2.5 rounded-lg border border-white/5 text-xs flex justify-between items-center">
+                                                                            <div>
+                                                                                <div className="text-white font-medium">{act.title}</div>
+                                                                                <div className="text-gray-400 text-[10px] mt-0.5">{act.formattedDate} • {act.venue}</div>
+                                                                            </div>
+                                                                            <span className="bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded text-[10px] font-bold whitespace-nowrap">
+                                                                                +{act.points} ن
+                                                                            </span>
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
+                                                            ) : (
+                                                                <p className="text-gray-400 text-xs italic">لا توجد مشاركات مسجلة لهذا الطالب حتى الآن</p>
+                                                            )}
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })()}
+
+                                        {/* ASSET USAGE HISTORY ROW */}
+                                        {activeTab === 'assets' && reportOptions.showAssetHistory && (() => {
+                                            const assetHistory = assetUsageMap[row.id] || assetUsageMap[row.name] || [];
+                                            return (
+                                                <tr className="bg-black/30 border-b border-white/5">
+                                                    <td colSpan={3} className="p-4 pt-1 pr-10">
+                                                        <div className="bg-white/5 rounded-xl p-3 border border-white/10 space-y-2">
+                                                            <div className="text-xs font-bold text-amber-400 flex items-center gap-2">
+                                                                <Box size={14} />
+                                                                <span>الأنشطة التي استُخدم فيها هذا المورد ({assetHistory.length}):</span>
+                                                            </div>
+                                                            {assetHistory.length > 0 ? (
+                                                                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                                                                    {assetHistory.map(act => (
+                                                                        <div key={act.id} className="bg-black/40 p-2.5 rounded-lg border border-white/5 text-xs flex justify-between items-center">
+                                                                            <div>
+                                                                                <div className="text-white font-medium">{act.title}</div>
+                                                                                <div className="text-gray-400 text-[10px] mt-0.5">{act.formattedDate} • {act.venue}</div>
+                                                                            </div>
+                                                                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold whitespace-nowrap ${act.rawStatus === 'Done' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-gray-500/20 text-gray-300'}`}>
+                                                                                {act.status}
+                                                                            </span>
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
+                                                            ) : (
+                                                                <p className="text-gray-400 text-xs italic">لم يتم استخدام هذا المورد في أي نشاط مسجل حتى الآن</p>
+                                                            )}
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })()}
+                                    </Fragment>
+                                ))
                                 )}
                             </tbody>
                         </table>
@@ -1432,7 +1748,7 @@ export default function ReportsPage() {
                                     <h2 className="text-2xl font-bold text-white">{selectedEvent.title}</h2>
                                     <p className="text-indigo-300 text-xs mt-1">{selectedEvent.type}</p>
                                 </div>
-                                <button onClick={() => setSelectedEvent(null)} className="text-gray-400 hover:text-white bg-white/5 p-2 rounded-full hover:bg-white/10 transition-all"><X size={20} /></button>
+                                <button onClick={() => setSelectedEvent(null)} aria-label="إغلاق التفاصيل" className="text-gray-400 hover:text-white bg-white/5 p-2 rounded-full hover:bg-white/10 transition-all"><X size={20} /></button>
                             </div>
 
                             {/* VISIBLE MODAL CONTENT */}
@@ -1469,7 +1785,7 @@ export default function ReportsPage() {
                                                 {selectedEvent.studentNames.map((s, idx) => (
                                                     <div key={idx} className="p-3 text-sm text-gray-300 flex items-center justify-between hover:bg-white/5">
                                                         <div className="flex items-center gap-3">
-                                                            <span className="w-6 text-center text-gray-500 text-xs">{idx + 1}</span>
+                                                            <span className="w-6 text-center text-gray-400 text-xs">{idx + 1}</span>
                                                             <span className="text-white">{s.name}</span>
                                                         </div>
                                                         {(s.grade || s.section) && (
@@ -1481,7 +1797,31 @@ export default function ReportsPage() {
                                                 ))}
                                             </div>
                                         ) : (
-                                            <div className="p-8 text-center text-gray-500 text-sm">لم يتم تسجيل أي طلاب في هذا النشاط</div>
+                                            <div className="p-8 text-center text-gray-400 text-sm">لم يتم تسجيل أي طلاب في هذا النشاط</div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* Assets Used */}
+                                <div>
+                                    <h3 className="text-white font-bold mb-3 flex items-center justify-between">
+                                        <span className="flex items-center"><Box size={16} className="ml-2 text-amber-400" /> الموارد والأدوات المستخدمة ({selectedEvent.assets?.length || 0})</span>
+                                    </h3>
+                                    <div className="bg-black/20 rounded-xl border border-white/5 p-4">
+                                        {selectedEvent.assets && selectedEvent.assets.length > 0 ? (
+                                            <div className="flex flex-wrap gap-2">
+                                                {selectedEvent.assets.map((assetIdOrName, idx) => {
+                                                    const name = assetMap[assetIdOrName] || assetIdOrName;
+                                                    return (
+                                                        <span key={idx} className="bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs px-3 py-1.5 rounded-lg flex items-center gap-1.5 font-medium">
+                                                            <Box size={13} className="text-amber-400" />
+                                                            {name}
+                                                        </span>
+                                                    );
+                                                })}
+                                            </div>
+                                        ) : (
+                                            <div className="p-4 text-center text-gray-400 text-sm">لا توجد موارد أو أدوات مسجلة لهذا النشاط</div>
                                         )}
                                     </div>
                                 </div>
@@ -1489,7 +1829,7 @@ export default function ReportsPage() {
 
                             {/* Modal Footer */}
                             <div className="p-6 border-t border-white/10 bg-black/20 flex flex-col md:flex-row justify-between items-center gap-4">
-                                <span className="text-gray-500 text-xs hidden md:block">رقم المعرف: <span className="font-mono select-all">{selectedEvent.id}</span></span>
+                                <span className="text-gray-400 text-xs hidden md:block">رقم المعرف: <span className="font-mono select-all">{selectedEvent.id}</span></span>
 
                                 <div className="flex flex-wrap justify-end gap-3 w-full md:w-auto">
 

@@ -35,7 +35,6 @@ export default function PublicView() {
 
     // --- Real-time Fetch ---
     useEffect(() => {
-        setLoading(true);
         let start, end;
         if (view === 'week') {
             start = startOfWeek(currentDate, { weekStartsOn: 0 });
@@ -127,23 +126,23 @@ export default function PublicView() {
                 </div>
 
                 <div className="flex items-center gap-4 bg-black/20 p-1.5 rounded-xl border border-white/5">
-                    <button onClick={prev} className="p-2 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-colors"><ChevronRight size={20} /></button>
+                    <button onClick={prev} aria-label="الفترة السابقة" className="p-2 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-colors"><ChevronRight size={20} /></button>
                     <div className="text-center min-w-[140px] font-bold">
                         {getMonthTitle(currentDate)}
                     </div>
-                    <button onClick={next} className="p-2 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-colors"><ChevronLeft size={20} /></button>
+                    <button onClick={next} aria-label="الفترة التالية" className="p-2 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-colors"><ChevronLeft size={20} /></button>
                 </div>
 
                 <div className="flex items-center gap-2">
                     {/* Calendar Toggle */}
                     <div className="flex bg-black/30 p-1 rounded-xl border border-white/5 ml-2">
-                        <button onClick={() => setCalendarSystem('gregory')} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${calendarSystem === 'gregory' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white'}`}>ميلادي</button>
-                        <button onClick={() => setCalendarSystem('hijri')} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${calendarSystem === 'hijri' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white'}`}>هجري</button>
+                        <button onClick={() => setCalendarSystem('gregory')} aria-label="التقويم الميلادي" className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${calendarSystem === 'gregory' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white'}`}>ميلادي</button>
+                        <button onClick={() => setCalendarSystem('hijri')} aria-label="التقويم الهجري" className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${calendarSystem === 'hijri' ? 'bg-emerald-600 text-white' : 'text-gray-400 hover:text-white'}`}>هجري</button>
                     </div>
 
                     <div className="flex bg-black/30 p-1 rounded-xl border border-white/5">
-                        <button onClick={() => setView('week')} className={`px-4 py-1.5 rounded-lg text-sm font-bold transition-all ${view === 'week' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}>أسبوعي</button>
-                        <button onClick={() => setView('month')} className={`px-4 py-1.5 rounded-lg text-sm font-bold transition-all ${view === 'month' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}>شهري</button>
+                        <button onClick={() => setView('week')} aria-label="عرض أسبوعي" className={`px-4 py-1.5 rounded-lg text-sm font-bold transition-all ${view === 'week' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}>أسبوعي</button>
+                        <button onClick={() => setView('month')} aria-label="عرض شهري" className={`px-4 py-1.5 rounded-lg text-sm font-bold transition-all ${view === 'month' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}>شهري</button>
                     </div>
                 </div>
             </div>
@@ -184,78 +183,112 @@ export default function PublicView() {
                         <div className="flex-1 overflow-y-auto custom-scrollbar">
                             {[0, 1, 2, 3, 4, 5, 6].map((dayOffset) => {
                                 const dayDate = addDays(startOfWeek(currentDate, { weekStartsOn: 0 }), dayOffset);
+                                return { dayDate, dayOffset };
+                            }).filter(({ dayDate }) => {
+                                const dayOfWeek = dayDate.getDay();
+                                const isWeekendDay = (weekends && weekends.length > 0) 
+                                    ? weekends.includes(dayOfWeek) 
+                                    : (dayOfWeek === 5 || dayOfWeek === 6);
+                                return !isWeekendDay; // Exclude weekends: show only actual school week (Sunday-Thursday)
+                            }).map(({ dayDate }) => {
                                 const isToday = isSameDay(dayDate, new Date());
                                 const dayName = format(dayDate, 'EEEE', { locale: ar });
                                 const dayStr = format(dayDate, 'yyyy-MM-dd');
 
-                                // Blocked?
-                                const isWeekend = weekends?.includes(dayDate.getDay());
-                                const holiday = holidays?.find(h => h.date >= dayStr && h.date <= dayStr); // Assuming range or specific date needs check
-                                const isBlocked = isWeekend || !!holiday;
-                                const blockReason = holiday ? holiday.reason : (isWeekend ? 'عطلة نهاية الأسبوع' : '');
+                                // Check for Official Holiday
+                                const holiday = holidays?.find(h => {
+                                    if (h.date === dayStr) return true;
+                                    if (h.start && h.end && dayStr >= h.start && dayStr <= h.end) return true;
+                                    return false;
+                                });
 
                                 const dayEvents = events.filter(e => {
-                                    // Handle both Firestore timestamp and string dates
                                     const eDate = e.startTime?.toDate ? format(e.startTime.toDate(), 'yyyy-MM-dd') : e.date;
                                     return eDate === dayStr;
                                 });
 
                                 return (
-                                    <div key={dayStr} className={`min-h-[100px] border-b border-white/5 flex group ${isToday ? 'bg-indigo-900/10' : ''}`}>
-                                        {/* Date Label */}
-                                        <div className={`w-32 shrink-0 border-l border-white/10 flex flex-col items-center justify-center p-2 ${isBlocked ? 'bg-[rgba(136,19,55,0.1)] text-rose-300' : 'text-gray-300'}`}>
+                                    <div key={dayStr} className={`min-h-[115px] border-b border-white/5 flex group ${isToday ? 'bg-indigo-950/20' : ''}`}>
+                                        {/* Date Label Column */}
+                                        <div className={`w-36 shrink-0 border-l border-white/10 flex flex-col items-center justify-center p-3 ${holiday ? 'bg-amber-950/20 text-amber-200' : 'text-gray-300'}`}>
                                             <span className="font-bold text-lg">{dayName}</span>
-                                            <span className="text-xs opacity-60 font-mono">
+                                            <span className="text-xs opacity-70 font-mono mt-0.5">
                                                 {calendarSystem === 'hijri' ? getHijriDate(dayDate) : dayStr}
                                             </span>
-                                            {isBlocked && (
-                                                <span className="text-[10px] bg-[rgba(136,19,55,0.2)] border border-[rgba(244,63,94,0.2)] px-2 rounded mt-1 text-rose-300 text-center">
-                                                    {blockReason}
+                                            {holiday && (
+                                                <span className="text-xs font-bold bg-amber-500/20 border border-amber-500/40 px-2 py-1 rounded-lg mt-2 text-amber-300 text-center shadow-sm">
+                                                    🌴 {holiday.reason}
                                                 </span>
                                             )}
                                         </div>
 
-                                        {/* Timeline */}
+                                        {/* Timeline / Events Column */}
                                         <div className="flex-1 relative bg-black/20">
-                                            {/* Blocked Overlay */}
-                                            {isBlocked && (
-                                                <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none" style={{ background: 'repeating-linear-gradient(45deg, rgba(244, 63, 94, 0.05), rgba(244, 63, 94, 0.05) 10px, rgba(244, 63, 94, 0.1) 10px, rgba(244, 63, 94, 0.1) 20px)' }}>
-                                                </div>
-                                            )}
-
-                                            {/* Grid Lines */}
-                                            {activeProfile?.slots?.map((slot, idx) => {
-                                                const allSlots = activeProfile.slots;
-                                                const first = allSlots[0].start;
-                                                const last = allSlots[allSlots.length - 1].end;
-                                                const getMin = t => t.split(':').map(Number).reduce((a, b) => a * 60 + b, 0);
-                                                const total = getMin(last) - getMin(first);
-                                                const startP = ((getMin(slot.start) - getMin(first)) / total) * 100;
-                                                const widthP = ((getMin(slot.end) - getMin(slot.start)) / total) * 100;
-                                                return (
-                                                    <div key={idx} className="absolute inset-y-0 border-l border-white/5" style={{ right: `${startP}%`, width: `${widthP}%` }}></div>
-                                                )
-                                            })}
-
-                                            {/* Events */}
-                                            {!isBlocked && dayEvents.map(ev => {
-                                                const style = getEventStyle(ev);
-                                                return (
-                                                    <div key={ev.id}
-                                                        className={`absolute top-2 bottom-2 rounded-xl p-2 md:px-3 text-xs flex flex-col justify-center overflow-hidden shadow-lg border text-white
-                                                            ${ev.status === 'Done'
-                                                                ? 'bg-emerald-900/80 border-emerald-500/30'
-                                                                : 'bg-indigo-900/80 border-indigo-500/30'}
-                                                        `}
-                                                        style={style}
-                                                    >
-                                                        <div className="font-bold truncate">{ev.title}</div>
-                                                        <div className="flex items-center gap-1 opacity-70 truncate text-[10px] mt-1">
-                                                            <MapPin size={10} /> {ev.venueId}
+                                            {holiday ? (
+                                                /* Prominent Official Holiday Showcase */
+                                                <div className="absolute inset-0 flex items-center justify-center p-4 bg-gradient-to-r from-amber-500/10 via-amber-600/5 to-amber-500/10">
+                                                    <div className="flex items-center gap-4 bg-black/50 px-6 py-3 rounded-2xl border border-amber-500/30 shadow-xl backdrop-blur-sm">
+                                                        <div className="p-2.5 bg-gradient-to-br from-amber-500 to-yellow-600 rounded-xl text-black font-bold shadow-md">
+                                                            <Calendar size={22} />
+                                                        </div>
+                                                        <div className="text-right">
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="text-xs font-bold text-amber-400 bg-amber-500/20 px-2 py-0.5 rounded-md border border-amber-500/30">
+                                                                    إجازة رسمية معتمدة
+                                                                </span>
+                                                                <h3 className="text-base font-bold text-white">
+                                                                    {holiday.reason}
+                                                                </h3>
+                                                            </div>
+                                                            <p className="text-xs text-gray-400 mt-1">
+                                                                عطلة مدرسية رسمية &bull; لا توجد فعاليات مجدولة في هذا اليوم
+                                                            </p>
                                                         </div>
                                                     </div>
-                                                )
-                                            })}
+                                                </div>
+                                            ) : (
+                                                <>
+                                                    {/* Grid Lines */}
+                                                    {activeProfile?.slots?.map((slot, idx) => {
+                                                        const allSlots = activeProfile.slots;
+                                                        const first = allSlots[0].start;
+                                                        const last = allSlots[allSlots.length - 1].end;
+                                                        const getMin = t => t.split(':').map(Number).reduce((a, b) => a * 60 + b, 0);
+                                                        const total = getMin(last) - getMin(first);
+                                                        const startP = ((getMin(slot.start) - getMin(first)) / total) * 100;
+                                                        const widthP = ((getMin(slot.end) - getMin(slot.start)) / total) * 100;
+                                                        return (
+                                                            <div key={idx} className="absolute inset-y-0 border-l border-white/5" style={{ right: `${startP}%`, width: `${widthP}%` }}></div>
+                                                        );
+                                                    })}
+
+                                                    {/* Events */}
+                                                    {dayEvents.map(ev => {
+                                                        const style = getEventStyle(ev);
+                                                        return (
+                                                            <div key={ev.id}
+                                                                className={`absolute top-2 bottom-2 rounded-xl p-2 md:px-3 text-xs flex flex-col justify-center overflow-hidden shadow-lg border text-white
+                                                                    ${ev.status === 'Done'
+                                                                        ? 'bg-emerald-900/80 border-emerald-500/30'
+                                                                        : 'bg-indigo-900/80 border-indigo-500/30'}
+                                                                `}
+                                                                style={style}
+                                                            >
+                                                                <div className="font-bold truncate">{ev.title}</div>
+                                                                <div className="flex items-center gap-1 opacity-70 truncate text-[10px] mt-1">
+                                                                    <MapPin size={10} /> {ev.venueId}
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
+
+                                                    {dayEvents.length === 0 && (
+                                                        <div className="absolute inset-0 flex items-center justify-center text-xs text-gray-600 pointer-events-none">
+                                                            لا توجد أنشطة مجدولة
+                                                        </div>
+                                                    )}
+                                                </>
+                                            )}
                                         </div>
                                     </div>
                                 );
@@ -289,10 +322,16 @@ export default function PublicView() {
                                     const isToday = isSameDay(day, new Date());
 
                                     // Blocking Logic
-                                    const isWeekend = weekends?.includes(day.getDay());
-                                    const holiday = holidays?.find(h => h.date === dStr);
+                                    const isWeekend = (weekends && weekends.length > 0)
+                                        ? weekends.includes(day.getDay())
+                                        : (day.getDay() === 5 || day.getDay() === 6);
+                                    const holiday = holidays?.find(h => {
+                                        if (h.date === dStr) return true;
+                                        if (h.start && h.end && dStr >= h.start && dStr <= h.end) return true;
+                                        return false;
+                                    });
                                     const isBlocked = isWeekend || !!holiday;
-                                    const blockReason = holiday ? holiday.reason : (isWeekend ? 'عطلة' : '');
+                                    const blockReason = holiday ? `🌴 ${holiday.reason}` : (isWeekend ? 'عطلة نهاية الأسبوع' : '');
 
                                     const evs = events.filter(e => {
                                         const eDate = e.startTime?.toDate ? format(e.startTime.toDate(), 'yyyy-MM-dd') : e.date;
@@ -300,20 +339,20 @@ export default function PublicView() {
                                     });
 
                                     return (
-                                        <div key={idx} className={`bg-[#18181b] min-h-[120px] p-2 flex flex-col ${!isMonth ? 'opacity-30' : ''} ${isBlocked ? 'bg-[rgba(136,19,55,0.05)]' : ''}`}>
+                                        <div key={idx} className={`bg-[#18181b] min-h-[120px] p-2 flex flex-col ${!isMonth ? 'opacity-30' : ''} ${holiday ? 'bg-amber-950/20 border-amber-500/20' : (isWeekend ? 'bg-rose-950/10' : '')}`}>
                                             <div className="flex justify-between items-start mb-2">
-                                                <div className={`text-sm font-bold w-7 h-7 flex items-center justify-center rounded-full ${isToday ? 'bg-indigo-600 text-white' : (isBlocked ? 'text-rose-400' : 'text-gray-400')}`}>
+                                                <div className={`text-sm font-bold w-7 h-7 flex items-center justify-center rounded-full ${isToday ? 'bg-indigo-600 text-white' : (holiday ? 'bg-amber-500/30 text-amber-200' : (isBlocked ? 'text-rose-400' : 'text-gray-400'))}`}>
                                                     {format(day, 'd')}
                                                 </div>
                                                 {calendarSystem === 'hijri' && (
-                                                    <span className={`text-[10px] font-bold ${isBlocked ? 'text-rose-400' : 'text-emerald-400'}`}>
+                                                    <span className={`text-[10px] font-bold ${holiday ? 'text-amber-300' : (isBlocked ? 'text-rose-400' : 'text-emerald-400')}`}>
                                                         {getHijriDay(day)}
                                                     </span>
                                                 )}
                                             </div>
 
                                             {isBlocked && (
-                                                <div className="text-[10px] bg-[rgba(136,19,55,0.2)] border border-[rgba(244,63,94,0.2)] px-1 py-0.5 rounded text-rose-300 text-center mb-1 truncate">
+                                                <div className={`text-[10px] font-bold px-1.5 py-1 rounded text-center mb-1 truncate ${holiday ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300' : 'bg-rose-900/20 border border-rose-500/20 text-rose-300'}`}>
                                                     {blockReason}
                                                 </div>
                                             )}
@@ -324,7 +363,7 @@ export default function PublicView() {
                                                         {ev.title}
                                                     </div>
                                                 ))}
-                                                {!isBlocked && evs.length > 3 && <div className="text-[10px] text-center text-gray-500">+{evs.length - 3} المزيد</div>}
+                                                {!isBlocked && evs.length > 3 && <div className="text-[10px] text-center text-gray-400">+{evs.length - 3} المزيد</div>}
                                             </div>
                                         </div>
                                     )
@@ -334,7 +373,7 @@ export default function PublicView() {
                     </div>
                 )}
 
-                <div className="mt-4 text-center text-xs text-gray-500 font-mono">
+                <div className="mt-4 text-center text-xs text-gray-400 font-mono">
                     Public Read-Only View • School Activity Manager
                 </div>
             </div>

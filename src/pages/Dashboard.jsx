@@ -1,18 +1,22 @@
 import { useState, useEffect } from 'react';
 import { db } from '../firebase';
-import { collection, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
-import { format, isSameDay, startOfDay } from 'date-fns';
+import { collection, query, where, getDocs, orderBy, limit, getCountFromServer } from 'firebase/firestore';
+import { format } from 'date-fns';
 import { ar } from 'date-fns/locale';
-import { Calendar, Users, Box, Award, TrendingUp, Plus, FileText, Activity, Clock } from 'lucide-react';
+import { Calendar, Users, Box, Award, TrendingUp, Plus, FileText, Activity, Clock, RefreshCw } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import toast from 'react-hot-toast';
 
 export default function Dashboard() {
     const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
     const [stats, setStats] = useState({
         todayEvents: 0,
+        totalEvents: 0,
         activeStudents: 0,
         maintenanceAssets: 0,
-        totalPoints: 0
+        totalPoints: 0,
+        typeDist: {}
     });
     const [agenda, setAgenda] = useState([]);
     const [topStudents, setTopStudents] = useState([]);
@@ -21,61 +25,136 @@ export default function Dashboard() {
         fetchDashboardData();
     }, []);
 
-    const fetchDashboardData = async () => {
+    const fetchDashboardData = async (forceRefresh = false) => {
+        if (forceRefresh) setRefreshing(true);
+        else setLoading(true);
+
         try {
+            // 0. Cache Check (2-minute cache to avoid hammering Firestore on tab navigation)
+            if (!forceRefresh) {
+                const cached = sessionStorage.getItem('school_dashboard_cache');
+                if (cached) {
+                    try {
+                        const parsed = JSON.parse(cached);
+                        if (Date.now() - parsed.timestamp < 2 * 60 * 1000) {
+                            setStats(parsed.stats);
+                            setAgenda(parsed.agenda);
+                            setTopStudents(parsed.topStudents);
+                            setLoading(false);
+                            return;
+                        }
+                    } catch {
+                        sessionStorage.removeItem('school_dashboard_cache');
+                    }
+                }
+            }
+
             const today = new Date();
+            const todayStr = format(today, 'yyyy-MM-dd');
 
-            // 1. Fetch All Events (for Agenda & Stats)
-            // Ideally we'd query by date range, but for now fetch all and filter client-side for "Today" 
-            // to ensure timezone accuracy with "isSameDay" helper.
-            const eventsSnap = await getDocs(query(collection(db, 'events'), orderBy('startTime', 'asc')));
-            const allEvents = eventsSnap.docs.map(d => {
-                const data = d.data();
-                return {
-                    id: d.id,
-                    ...data,
-                    startDate: data.startTime?.toDate ? data.startTime.toDate() : new Date(data.date)
-                };
-            });
+            // 1. Fetch ONLY Today's Events (targeted date query)
+            let todayEventsList = [];
+            try {
+                const todayQuery = query(
+                    collection(db, 'events'),
+                    where('date', '==', todayStr)
+                );
+                const todaySnap = await getDocs(todayQuery);
+                todayEventsList = todaySnap.docs
+                    .map(d => ({ id: d.id, ...d.data() }))
+                    .filter(e => e.status !== 'archived');
+            } catch (err) {
+                console.warn("Date index notice, fetching recent events:", err);
+                const fallbackSnap = await getDocs(query(collection(db, 'events'), limit(25)));
+                todayEventsList = fallbackSnap.docs
+                    .map(d => ({ id: d.id, ...d.data() }))
+                    .filter(e => e.date === todayStr && e.status !== 'archived');
+            }
 
-            const todayEventsList = allEvents.filter(e => isSameDay(e.startDate, today));
+            // 2. Efficient Aggregations with getCountFromServer (1 read per count instead of thousands)
+            let totalEventsCount = 0;
+            let activeStudentsCount = 0;
+            let maintenanceCount = 0;
 
-            // 2. Fetch Active Students
-            const studentsSnap = await getDocs(query(collection(db, 'students'), where('active', '==', true)));
-            const allStudents = studentsSnap.docs.map(d => d.data());
+            try {
+                const [eventsCountSnap, studentsCountSnap, maintenanceCountSnap] = await Promise.all([
+                    getCountFromServer(collection(db, 'events')),
+                    getCountFromServer(query(collection(db, 'students'), where('active', '==', true))),
+                    getCountFromServer(query(collection(db, 'assets'), where('status', '==', 'Maintenance')))
+                ]);
 
-            // 3. Fetch Assets
-            const assetsSnap = await getDocs(collection(db, 'assets'));
-            const maintenanceCount = assetsSnap.docs.filter(d => d.data().status === 'Maintenance').length;
+                totalEventsCount = eventsCountSnap.data().count;
+                activeStudentsCount = studentsCountSnap.data().count;
+                maintenanceCount = maintenanceCountSnap.data().count;
+            } catch (countErr) {
+                console.warn("Count aggregation fallback notice:", countErr);
+            }
 
-            // 4. Calculations
-            const totalPoints = allStudents.reduce((sum, s) => sum + (Number(s.totalPoints) || 0), 0);
-            const sortedStudents = [...studentsSnap.docs.map(d => ({ id: d.id, ...d.data() }))]
-                .sort((a, b) => (b.totalPoints || 0) - (a.totalPoints || 0))
-                .slice(0, 5);
+            // 3. Fetch ONLY Top 5 Students (limit 5 instead of all school students)
+            let sortedTopStudents = [];
+            try {
+                const topStudentsQuery = query(
+                    collection(db, 'students'),
+                    where('active', '==', true),
+                    orderBy('totalPoints', 'desc'),
+                    limit(5)
+                );
+                const topSnap = await getDocs(topStudentsQuery);
+                sortedTopStudents = topSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+            } catch {
+                // If compound index for active + totalPoints is missing, fetch modest batch of 20
+                const modestSnap = await getDocs(query(collection(db, 'students'), limit(20)));
+                sortedTopStudents = modestSnap.docs
+                    .map(d => ({ id: d.id, ...d.data() }))
+                    .filter(s => s.active !== false)
+                    .sort((a, b) => (b.totalPoints || 0) - (a.totalPoints || 0))
+                    .slice(0, 5);
+                if (activeStudentsCount === 0) activeStudentsCount = sortedTopStudents.length;
+            }
 
-
+            // 4. Fetch a sample of recent events for type distribution (limit 20)
             const typeDist = {};
-            allEvents.forEach(e => {
-                const t = e.typeName || 'غير محدد';
-                typeDist[t] = (typeDist[t] || 0) + 1;
-            });
+            try {
+                const recentSnap = await getDocs(query(collection(db, 'events'), limit(20)));
+                recentSnap.docs.forEach(d => {
+                    const t = d.data().typeName || 'عام';
+                    typeDist[t] = (typeDist[t] || 0) + 1;
+                });
+                if (totalEventsCount === 0) totalEventsCount = recentSnap.docs.length;
+            } catch (e) {
+                console.warn(e);
+            }
 
-            setStats({
+            const totalPointsSample = sortedTopStudents.reduce((sum, s) => sum + (Number(s.totalPoints) || 0), 0);
+
+            const newStats = {
                 todayEvents: todayEventsList.length,
-                totalEvents: allEvents.length,
-                activeStudents: allStudents.length,
+                totalEvents: totalEventsCount,
+                activeStudents: activeStudentsCount,
                 maintenanceAssets: maintenanceCount,
-                totalPoints,
+                totalPoints: totalPointsSample,
                 typeDist
-            });
-            setAgenda(todayEventsList);
-            setTopStudents(sortedStudents);
+            };
 
+            setStats(newStats);
+            setAgenda(todayEventsList);
+            setTopStudents(sortedTopStudents);
+
+            // Save to Session Storage
+            sessionStorage.setItem('school_dashboard_cache', JSON.stringify({
+                timestamp: Date.now(),
+                stats: newStats,
+                agenda: todayEventsList,
+                topStudents: sortedTopStudents
+            }));
+
+            if (forceRefresh) toast.success("تم تحديث بيانات لوحة التحكم بنجاح");
         } catch (error) {
             console.error("Dashboard Fetch Error:", error);
+            toast.error("حدث خطأ أثناء تحميل بعض البيانات");
         } finally {
             setLoading(false);
+            setRefreshing(false);
         }
     };
 
@@ -86,12 +165,21 @@ export default function Dashboard() {
     return (
         <div className="space-y-8 font-cairo pb-20">
             {/* Header */}
-            <div className="flex flex-col md:flex-row justify-between items-end md:items-center bg-white/10 backdrop-blur-xl border border-white/10 p-6 rounded-2xl shadow-xl">
+            <div className="flex flex-col md:flex-row justify-between items-end md:items-center bg-white/10 backdrop-blur-xl border border-white/10 p-6 rounded-2xl shadow-xl gap-4">
                 <div>
                     <h1 className="text-3xl font-bold text-white mb-2">مرحباً بك في مركز التحكم 👋</h1>
                     <p className="text-indigo-200 opacity-80">{currentDateAr}</p>
                 </div>
-                {/* Optional: Add a subtle weather or time widget here later */}
+
+                {/* Quick Refresh Button */}
+                <button
+                    onClick={() => fetchDashboardData(true)}
+                    disabled={refreshing}
+                    className="px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 text-indigo-200 hover:text-white rounded-xl text-xs font-bold transition-all flex items-center gap-2 disabled:opacity-50"
+                >
+                    <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
+                    <span>{refreshing ? 'جاري التحديث...' : 'تحديث البيانات'}</span>
+                </button>
             </div>
 
             {/* Stats Grid */}
@@ -169,57 +257,63 @@ export default function Dashboard() {
                                         <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ml-3 ${idx === 0 ? 'bg-amber-500 text-black' : 'bg-gray-700 text-gray-300'}`}>
                                             {idx + 1}
                                         </div>
-                                        <div>
-                                            <div className="text-sm font-bold text-gray-200">{student.name}</div>
-                                            <div className="text-[10px] text-gray-500">{student.class}</div>
-                                        </div>
-                                    </div>
-                                    <div className="text-amber-400 font-mono font-bold text-sm">{student.totalPoints}</div>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                </div>
+                                         <div>
+                                             <div className="text-sm font-bold text-gray-200">{student.name}</div>
+                                             <div className="text-[10px] text-gray-500">
+                                                 {(student.grade && student.section) ? `${student.grade} - ${student.section}` : (student.grade || student.class || '-')}
+                                             </div>
+                                         </div>
+                                     </div>
+                                     <div className="text-amber-400 font-mono font-bold text-sm">{student.totalPoints || 0}</div>
+                                 </div>
+                             ))}
+                         </div>
+                     </div>
+                 </div>
 
-                {/* Left Column: Agenda (2/3 width) */}
+                 {/* Left Column: Agenda (2/3 width) */}
+                 <div className="lg:col-span-2 space-y-6">
+                     <div className="bg-white/5 border border-white/10 rounded-2xl p-6 min-h-[400px]">
+                         <h2 className="text-xl font-bold text-white mb-6 flex items-center">
+                             <Activity className="ml-2 text-indigo-400" /> جدول أعمال اليوم
+                         </h2>
 
-                {/* Left Column: Agenda (2/3 width) */}
-                <div className="lg:col-span-2 space-y-6">
-                    <div className="bg-white/5 border border-white/10 rounded-2xl p-6 min-h-[400px]">
-                        <h2 className="text-xl font-bold text-white mb-6 flex items-center">
-                            <Activity className="ml-2 text-indigo-400" /> جدول أعمال اليوم
-                        </h2>
+                         <div className="space-y-4">
+                             {agenda.length === 0 ? (
+                                 <div className="text-center py-12 flex flex-col items-center">
+                                     <div className="w-16 h-16 bg-white/5 rounded-full flex items-center justify-center mb-4 text-3xl">☕</div>
+                                     <p className="text-gray-400 text-lg">لا يوجد فعاليات اليوم، استمتع بوقتك!</p>
+                                 </div>
+                             ) : (
+                                 agenda.map((evt) => {
+                                     const eventTimeStr = evt.startTime?.toDate
+                                         ? format(evt.startTime.toDate(), 'hh:mm a', { locale: ar })
+                                         : (evt.startTime ? `الساعة ${evt.startTime}` : 'طوال اليوم');
 
-                        <div className="space-y-4">
-                            {agenda.length === 0 ? (
-                                <div className="text-center py-12 flex flex-col items-center">
-                                    <div className="w-16 h-16 bg-white/5 rounded-full flex items-center justify-center mb-4 text-3xl">☕</div>
-                                    <p className="text-gray-400 text-lg">لا يوجد فعاليات اليوم، استمتع بوقتك!</p>
-                                </div>
-                            ) : (
-                                agenda.map((evt, idx) => (
-                                    <div key={evt.id} className="relative pl-6 border-r-2 border-white/10 mr-2 pr-6 py-2">
-                                        {/* Timeline Dot */}
-                                        <div className={`absolute -right-[9px] top-6 w-4 h-4 rounded-full border-2 border-gray-900 ${evt.status === 'Done' ? 'bg-emerald-500' : 'bg-indigo-500'}`}></div>
+                                     return (
+                                         <div key={evt.id} className="relative pl-6 border-r-2 border-white/10 mr-2 pr-6 py-2">
+                                             {/* Timeline Dot */}
+                                             <div className={`absolute -right-[9px] top-6 w-4 h-4 rounded-full border-2 border-gray-900 ${evt.status === 'Done' ? 'bg-emerald-500' : 'bg-indigo-500'}`}></div>
 
-                                        <div className="bg-white/5 hover:bg-white/10 transition-colors p-4 rounded-xl border border-white/5 flex justify-between items-center group">
-                                            <div>
-                                                <div className="text-sm text-indigo-300 font-mono mb-1 flex items-center">
-                                                    <Clock size={12} className="ml-1" />
-                                                    {format(evt.startDate, 'hh:mm a')}
-                                                </div>
-                                                <h3 className="font-bold text-white text-lg">{evt.title}</h3>
-                                                <p className="text-gray-400 text-xs mt-1">{evt.typeName} • {evt.venueId}</p>
-                                            </div>
-                                            <div className="text-left">
-                                                <span className={`px-2 py-1 rounded text-xs font-bold ${evt.status === 'Done' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-white/10 text-gray-400'}`}>
-                                                    {evt.status === 'Done' ? 'مكتمل' : 'مجدول'}
-                                                </span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                ))
-                            )}
+                                             <div className="bg-white/5 hover:bg-white/10 transition-colors p-4 rounded-xl border border-white/5 flex justify-between items-center group">
+                                                 <div>
+                                                     <div className="text-sm text-indigo-300 font-mono mb-1 flex items-center">
+                                                         <Clock size={12} className="ml-1" />
+                                                         {eventTimeStr}
+                                                     </div>
+                                                     <h3 className="font-bold text-white text-lg">{evt.title}</h3>
+                                                     <p className="text-gray-400 text-xs mt-1">{evt.typeName || 'نشاط عام'} • {evt.venueId || 'المدرسة'}</p>
+                                                 </div>
+                                                 <div className="text-left">
+                                                     <span className={`px-2 py-1 rounded text-xs font-bold ${evt.status === 'Done' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-white/10 text-gray-400'}`}>
+                                                         {evt.status === 'Done' ? 'مكتمل' : 'مجدول'}
+                                                     </span>
+                                                 </div>
+                                             </div>
+                                         </div>
+                                     );
+                                 })
+                             )}
                         </div>
                     </div>
                 </div>
@@ -254,7 +348,8 @@ export default function Dashboard() {
     );
 }
 
-function StatCard({ label, value, icon: Icon, color, textColor }) {
+function StatCard({ label, value, color, textColor, ...props }) {
+    const CardIcon = props.icon;
     return (
         <div className="bg-white/5 hover:bg-white/10 transition-all border border-white/10 p-5 rounded-2xl relative overflow-hidden group">
             <div className={`absolute -right-4 -top-4 w-24 h-24 bg-gradient-to-br ${color} opacity-10 rounded-full blur-2xl group-hover:opacity-20 transition-opacity`}></div>
@@ -264,7 +359,7 @@ function StatCard({ label, value, icon: Icon, color, textColor }) {
                     <h3 className={`text-3xl font-bold ${textColor}`}>{value}</h3>
                 </div>
                 <div className={`p-3 rounded-xl bg-gradient-to-br ${color} shadow-lg`}>
-                    <Icon size={24} className="text-white" />
+                    {CardIcon && <CardIcon size={24} className="text-white" />}
                 </div>
             </div>
         </div>

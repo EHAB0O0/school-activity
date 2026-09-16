@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { db } from '../firebase';
-import { collection, addDoc, query, where, getDocs, doc, updateDoc, orderBy, onSnapshot } from 'firebase/firestore';
+import { collection, addDoc, query, where, doc, updateDoc, orderBy, onSnapshot } from 'firebase/firestore';
 import { Search, Plus, Trash2, Award, User, FileText, Clock, Edit3, X, Save, ArrowUpDown, Tag, Filter, Printer } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useSettings } from '../contexts/SettingsContext';
@@ -34,16 +34,16 @@ export default function StudentsPage() {
     const [studentHistory, setStudentHistory] = useState([]);
     const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: '', message: '', onConfirm: null, isDestructive: false });
 
+    // --- Real-time Students Listener ---
     useEffect(() => {
-        fetchStudents();
-    }, []);
-
-    // --- Fetch Logic ---
-    async function fetchStudents() {
         const q = query(collection(db, 'students'), where('active', '==', true));
-        const snap = await getDocs(q);
-        setStudents(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    }
+        const unsubscribe = onSnapshot(q, (snap) => {
+            setStudents(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        }, (err) => {
+            console.warn("Students sync error:", err.message);
+        });
+        return () => unsubscribe();
+    }, []);
 
     // --- Add Student ---
     async function handleAdd(e) {
@@ -57,9 +57,8 @@ export default function StudentsPage() {
             });
             setNewStudent({ name: '', class: '', grade: '', section: '', specializations: [] });
             setIsAddModalOpen(false);
-            fetchStudents();
             toast.success('تمت إضافة الطالب');
-        } catch (error) { toast.error('حدث خطأ'); }
+        } catch { toast.error('حدث خطأ'); }
     }
 
     // --- Delete Student ---
@@ -75,23 +74,21 @@ export default function StudentsPage() {
                     setStudents(students.filter(s => s.id !== id));
                     toast.success('تم الأرشفة');
                     setConfirmModal(prev => ({ ...prev, isOpen: false }));
-                } catch (error) { toast.error('فشل'); }
+                } catch { toast.error('فشل'); }
             }
         });
     }
 
     // --- Profile Logic ---
     const openProfile = (student) => {
+        setStudentHistory([]);
         setSelectedStudent(student);
         setProfileTab('info');
     };
 
     // Live History Listener
     useEffect(() => {
-        if (!selectedStudent) {
-            setStudentHistory([]);
-            return;
-        }
+        if (!selectedStudent) return;
 
         const q = query(
             collection(db, 'events'),
@@ -103,7 +100,6 @@ export default function StudentsPage() {
             setStudentHistory(snap.docs.map(d => ({ id: d.id, ...d.data() })));
         }, (error) => {
             console.error("History sync error:", error);
-            // Fallback or toast?
         });
 
         return () => unsubscribe();
@@ -122,8 +118,7 @@ export default function StudentsPage() {
                 specializations: selectedStudent.specializations || []
             });
             toast.success("تم تحديث الملف الشخصي");
-            fetchStudents(); // Refresh main list
-        } catch (e) {
+        } catch {
             toast.error("فشل التحديث");
         }
     };
@@ -419,7 +414,7 @@ export default function StudentsPage() {
                                     </div>
                                     <div>
                                         <div>{student.name}</div>
-                                        <div className="md:hidden text-xs text-gray-500 mt-1">{student.class}</div>
+                                        <div className="md:hidden text-xs text-gray-400 mt-1">{student.class}</div>
                                     </div>
                                 </td>
                                 <td className="p-4 hidden md:table-cell">
@@ -431,7 +426,7 @@ export default function StudentsPage() {
                                                 </span>
                                             ))
                                         ) : (
-                                            <span className="text-gray-600 text-xs">-</span>
+                                            <span className="text-gray-400 text-xs">-</span>
                                         )}
                                     </div>
                                 </td>
@@ -442,12 +437,13 @@ export default function StudentsPage() {
                                         {student.totalPoints}
                                     </span>
                                 </td>
-                                <td className="p-4 text-gray-500 text-sm hidden md:table-cell">
+                                <td className="p-4 text-gray-400 text-sm hidden md:table-cell">
                                     {student.joinedAt?.toDate ? student.joinedAt.toDate().toLocaleDateString('ar-SA') : '-'}
                                 </td>
                                 <td className="p-4 text-left">
                                     <button
                                         onClick={(e) => { e.stopPropagation(); handleDelete(student.id); }}
+                                        aria-label="أرشفة الطالب"
                                         className="text-red-400 hover:text-white hover:bg-red-500 p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
                                     >
                                         <Trash2 size={18} />
@@ -478,7 +474,6 @@ export default function StudentsPage() {
                                         className="w-full bg-black/30 border border-gray-700 rounded-xl px-4 py-3 text-white focus:border-indigo-500 outline-none"
                                         value={newStudent.grade || ''}
                                         onChange={e => {
-                                            const g = grades?.find(c => c.name === e.target.value);
                                             setNewStudent({ ...newStudent, grade: e.target.value, section: '', class: `${e.target.value} - ` });
                                         }}
                                     >
@@ -559,12 +554,13 @@ export default function StudentsPage() {
                                 <div className="flex items-center gap-2">
                                     <button
                                         onClick={() => generateStudentProfilePDF(selectedStudent, studentHistory)}
+                                        aria-label="طباعة الملف"
                                         className="bg-white/10 hover:bg-white/20 text-white p-2 rounded-lg flex items-center transition-all border border-white/5 shadow-sm"
                                         title="طباعة الملف"
                                     >
                                         <Printer size={20} />
                                     </button>
-                                    <button onClick={() => setSelectedStudent(null)} className="text-gray-400 hover:text-white bg-white/5 p-2 rounded-full hover:bg-white/10"><X size={24} /></button>
+                                    <button onClick={() => setSelectedStudent(null)} aria-label="إغلاق الملف الشخصي" className="text-gray-400 hover:text-white bg-white/5 p-2 rounded-full hover:bg-white/10"><X size={24} /></button>
                                 </div>
                             </div>
 
@@ -590,18 +586,17 @@ export default function StudentsPage() {
                                 {profileTab === 'info' && (
                                     <div className="space-y-6 max-w-lg mx-auto pt-4">
                                         <div>
-                                            <label className="block text-gray-500 text-sm mb-1">الاسم الكامل</label>
+                                            <label className="block text-gray-400 text-sm mb-1">الاسم الكامل</label>
                                             <input className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-white focus:border-indigo-500 outline-none"
                                                 value={selectedStudent.name} onChange={e => setSelectedStudent({ ...selectedStudent, name: e.target.value })} />
                                         </div>
                                         <div className="grid grid-cols-2 gap-4">
                                             <div>
-                                                <label className="block text-gray-500 text-sm mb-1">الصف</label>
+                                                <label className="block text-gray-400 text-sm mb-1">الصف</label>
                                                 <select
                                                     className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-white focus:border-indigo-500 outline-none"
                                                     value={selectedStudent.grade || ''}
                                                     onChange={e => {
-                                                        const g = grades?.find(c => c.name === e.target.value);
                                                         setSelectedStudent({
                                                             ...selectedStudent,
                                                             grade: e.target.value,
@@ -615,7 +610,7 @@ export default function StudentsPage() {
                                                 </select>
                                             </div>
                                             <div>
-                                                <label className="block text-gray-500 text-sm mb-1">الشعبة</label>
+                                                <label className="block text-gray-400 text-sm mb-1">الشعبة</label>
                                                 <select
                                                     className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-white focus:border-indigo-500 outline-none"
                                                     value={selectedStudent.section || ''}
@@ -634,7 +629,7 @@ export default function StudentsPage() {
                                             </div>
                                         </div>
                                         <div>
-                                            <label className="block text-gray-500 text-sm mb-1">رصيد النقاط (تعديل يدوي)</label>
+                                            <label className="block text-gray-400 text-sm mb-1">رصيد النقاط (تعديل يدوي)</label>
                                             <input type="number" className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-white focus:border-indigo-500 outline-none font-mono"
                                                 value={selectedStudent.totalPoints} onChange={e => setSelectedStudent({ ...selectedStudent, totalPoints: e.target.value })} />
                                         </div>
@@ -694,7 +689,7 @@ export default function StudentsPage() {
                                                 </div>
                                                 <div className="text-left">
                                                     <div className="text-emerald-400 font-bold font-mono">{evt.date || evt.startTime?.toDate().toLocaleDateString('en-GB')}</div>
-                                                    <div className="text-xs text-gray-500 mt-1">{evt.startTime?.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                                                    <div className="text-xs text-gray-400 mt-1">{evt.startTime?.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
                                                 </div>
                                             </div>
                                         )) : (

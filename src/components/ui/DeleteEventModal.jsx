@@ -2,10 +2,10 @@ import { useState } from 'react';
 import { AlertTriangle, Trash2, Archive, CheckCircle } from 'lucide-react';
 
 export default function DeleteEventModal({ isOpen, onClose, onConfirm, isPastEvent }) {
-    if (!isOpen) return null;
-
     const [reversePoints, setReversePoints] = useState(false);
     const [actionType, setActionType] = useState('archive'); // 'archive' | 'delete'
+
+    if (!isOpen) return null;
 
     const handleConfirm = () => {
         onConfirm({ reversePoints, actionType });

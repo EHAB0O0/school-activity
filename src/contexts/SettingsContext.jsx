@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useEffect, useState } from "react";
 import { db } from "../firebase";
 import { doc, onSnapshot, updateDoc, getDoc, collection, addDoc, setDoc } from "firebase/firestore";
@@ -26,12 +27,18 @@ export function SettingsProvider({ children }) {
                     setLoading(false);
                 }
             } else {
-                // Initialize default settings if missing? (Or handled by admin)
+                // Initialize default settings if missing
                 setSettings({});
                 setLoading(false);
             }
         }, (error) => {
-            console.error("Error fetching settings:", error);
+            console.warn("Settings fetch notice (using offline defaults):", error?.message);
+            setSettings({
+                schoolName: "ثانوية الملك عبدالله",
+                activeProfileId: "default",
+                weekends: [5, 6],
+                holidays: []
+            });
             setLoading(false);
         });
         return unsub;

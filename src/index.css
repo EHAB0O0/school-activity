@@ -33,6 +33,33 @@ body,
     background: rgba(255, 255, 255, 0.3);
 }
 
+@keyframes shimmer {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(200%); }
+}
+
+@keyframes float {
+    0%, 100% { transform: translateY(0px) scale(1); }
+    50% { transform: translateY(-6px) scale(1.02); }
+}
+
+@keyframes pulseSlow {
+    0%, 100% { opacity: 0.5; transform: scale(1); }
+    50% { opacity: 0.85; transform: scale(1.05); }
+}
+
+.animate-shimmer {
+    animation: shimmer 2.5s infinite linear;
+}
+
+.animate-float {
+    animation: float 4s ease-in-out infinite;
+}
+
+.animate-pulse-slow {
+    animation: pulseSlow 3s ease-in-out infinite;
+}
+
 @layer base {
     :root {
         /* Force Hex colors for printing compatibility */

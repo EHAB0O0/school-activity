@@ -94,7 +94,7 @@ export default function AssetsPage() {
             setEditingAssetId(null);
             setIsAddModalOpen(false);
             fetchAssets();
-        } catch (error) { toast.error('حدث خطأ'); }
+        } catch { toast.error('حدث خطأ'); }
         setIsSubmitting(false);
     }
 
@@ -114,7 +114,7 @@ export default function AssetsPage() {
             await deleteDoc(doc(db, 'assets', id));
             setAssets(assets.filter(a => a.id !== id));
             toast.success('تم الحذف');
-        } catch (error) { toast.error('فشل الحذف'); }
+        } catch { toast.error('فشل الحذف'); }
     }
 
     const toggleAssetStatus = async (asset, e) => {
@@ -127,7 +127,7 @@ export default function AssetsPage() {
         try {
             await updateDoc(doc(db, 'assets', asset.id), { status: newStatus });
             toast.success(newStatus === 'Available' ? 'تم تفعيل المورد' : 'تم وضع المورد في الصيانة');
-        } catch (err) {
+        } catch {
             toast.error("فشل تحديث الحالة");
             fetchAssets(); // Revert
         }
@@ -144,7 +144,7 @@ export default function AssetsPage() {
             );
             const snap = await getDocs(q);
             setAssetHistory(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-        } catch (e) {
+        } catch {
             setAssetHistory([]);
         }
     };
@@ -155,7 +155,7 @@ export default function AssetsPage() {
             await updateDoc(doc(db, 'assets', editingAsset.id), { notes: editingAsset.notes || '' });
             toast.success("تم حفظ الملاحظات");
             fetchAssets();
-        } catch (e) { toast.error("فشل الحفظ"); }
+        } catch { toast.error("فشل الحفظ"); }
     };
 
     // --- PDF Generation Logic ---
@@ -314,7 +314,7 @@ export default function AssetsPage() {
             setEditingVenue(null);
             setIsAddModalOpen(false);
             fetchVenues();
-        } catch (error) { toast.error('حدث خطأ'); }
+        } catch { toast.error('حدث خطأ'); }
         setIsSubmitting(false);
     }
 
@@ -346,7 +346,7 @@ export default function AssetsPage() {
             await updateDoc(doc(db, 'venues', venue.id), { status: newStatus });
             const msg = newStatus === 'Available' ? 'متاح' : (newStatus === 'Maintenance' ? 'تحت الصيانة' : 'مغلق');
             toast.success(`تم تغيير الحالة إلى: ${msg}`);
-        } catch (err) {
+        } catch {
             toast.error("فشل تحديث الحالة");
             fetchVenues();
         }
@@ -358,21 +358,12 @@ export default function AssetsPage() {
         try {
             const q = query(
                 collection(db, 'events'),
-                where('venueId', '==', venue.id), // Assuming venueId stores ID, check scheme
-                // Wait, existing system stores venue Name typically in 'venueId' field for historical reasons?
-                // Actually the planner stores 'venueId' as the VALUE from SELECT, which is name currently.
-                // Let's check Scheduler.jsx. Yes, value is name. 
-                // BUT we should support ID migration later. For now let's query by name OR ID if possible.
-                // Actually in Scheduler it sets venueId to name. So we query by 'venueId' == venue.name
                 where('venueId', '==', venue.name),
                 orderBy('startTime', 'desc')
             );
-            // Also need to check if we store ID now?
-
             const snap = await getDocs(q);
             setVenueHistory(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-        } catch (e) {
-            console.error(e);
+        } catch {
             setVenueHistory([]);
         }
     };
@@ -383,7 +374,7 @@ export default function AssetsPage() {
             await updateDoc(doc(db, 'venues', viewingVenue.id), { notes: viewingVenue.notes || '' });
             toast.success("تم حفظ الملاحظات");
             fetchVenues();
-        } catch (e) { toast.error("فشل الحفظ"); }
+        } catch { toast.error("فشل الحفظ"); }
     };
 
     const generateVenuePDF = async () => {
@@ -465,8 +456,11 @@ export default function AssetsPage() {
                 pdf.addImage(imgData, 'JPEG', 0, 0, pdf.internal.pageSize.getWidth(), pdfHeight);
                 pdf.save(`Venue_Report_${viewingVenue.name}.pdf`);
                 toast.success("تم");
-            } catch (e) { toast.error("بفشل"); }
-            finally { document.body.removeChild(iframe); }
+            } catch { toast.error("فشل توليد التقرير"); }
+            finally {
+                toast.dismiss(toastId);
+                document.body.removeChild(iframe);
+            }
         }, 1000);
     };
 
@@ -486,7 +480,7 @@ export default function AssetsPage() {
             await deleteDoc(doc(db, 'venues', id));
             setVenues(venues.filter(v => v.id !== id));
             toast.success('تم الحذف');
-        } catch (error) { toast.error('فشل الحذف'); }
+        } catch { toast.error('فشل الحذف'); }
     }
 
 

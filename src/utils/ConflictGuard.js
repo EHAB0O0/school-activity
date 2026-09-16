@@ -1,5 +1,5 @@
 import { db } from "../firebase";
-import { collection, query, where, getDocs, Timestamp } from "firebase/firestore";
+import { collection, query, where, getDocs } from "firebase/firestore";
 
 /**
  * Checks for scheduling conflicts.
@@ -19,24 +19,31 @@ export async function checkConflicts(newEvent) {
     // This is NOT a simulation; it is a scoped DB query.
     // By filtering `startTime < newEnd` AND `endTime > newStart`, we get all events that overlap.
 
-    const eventsRef = collection(db, "events");
-
-    // We'll fetch potential conflicts.
-    // Strict Mode: Scan all events in range.
-
-    // 4. Check Asset Maintenance Status (Strict Guard)
+    // 4. Check Asset Maintenance Status (Strict Guard with Chunking for >30 assets)
     if (newEvent.assets && newEvent.assets.length > 0) {
         const assetsRef = collection(db, 'assets');
-        // We can't use 'in' query for ids if array > 10, so fetch all matches or iterate.
-        // For strict safety, let's fetch the specific assets.
-        // optimization: if list is huge, this might be slow, but for strict safety it's good.
-        // Actually, we can just use the existing loop if we fetched assets, but we need to fetch 'em.
+        const chunkSize = 30;
+        const assetIds = newEvent.assets;
+        const chunks = [];
+        for (let i = 0; i < assetIds.length; i += chunkSize) {
+            chunks.push(assetIds.slice(i, i + chunkSize));
+        }
 
-        const assetsSnap = await getDocs(query(assetsRef, where('__name__', 'in', newEvent.assets)));
-        const maintenanceAssets = assetsSnap.docs.filter(doc => doc.data().status === 'Maintenance');
+        const chunkSnapshots = await Promise.all(
+            chunks.map(chunk => getDocs(query(assetsRef, where('__name__', 'in', chunk))))
+        );
 
-        if (maintenanceAssets.length > 0) {
-            const names = maintenanceAssets.map(d => d.data().name).join(', ');
+        const maintenanceNames = [];
+        for (const snap of chunkSnapshots) {
+            for (const doc of snap.docs) {
+                if (doc.data().status === 'Maintenance') {
+                    maintenanceNames.push(doc.data().name || doc.id);
+                }
+            }
+        }
+
+        if (maintenanceNames.length > 0) {
+            const names = maintenanceNames.join(', ');
             return { hasConflict: true, reason: `الموارد التالية تحت الصيانة ولا يمكن استخدامها: ${names}` };
         }
     }

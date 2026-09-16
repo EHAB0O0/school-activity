@@ -1,11 +1,11 @@
-import { runTransaction, doc, increment, getDoc } from 'firebase/firestore';
+import { runTransaction, doc, increment } from 'firebase/firestore';
 import { db } from '../firebase';
 
 /**
  * Updates an event and recalculates student points transactionally.
  * Handles cases where points changed, students changed, or status changed to/from 'Done'.
  */
-export async function updateEventWithSmartSync(eventId, newData, oldData) {
+export async function updateEventWithSmartSync(eventId, newData) {
     if (!eventId) throw new Error("Event ID is required for update.");
 
     try {

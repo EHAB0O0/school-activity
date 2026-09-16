@@ -18,7 +18,10 @@ const MultiSelect = ({ label, options, selectedValues, onChange, placeholder, ic
 
     return (
         <div className="relative">
-            <label className="block text-sm text-gray-400 mb-1">{label}</label>
+            <label className="flex items-center gap-1.5 text-sm text-gray-400 mb-1">
+                {Icon && <Icon size={15} className="text-indigo-400" />}
+                <span>{label}</span>
+            </label>
             <div
                 className="w-full bg-black/40 border border-white/10 rounded-xl p-3 text-white min-h-[46px] cursor-pointer flex flex-wrap gap-2 items-center hover:border-indigo-500/50 transition-colors"
                 onClick={() => setIsOpen(!isOpen)}

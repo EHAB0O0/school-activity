@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { db } from '../firebase';
-import { collection, query, where, getDocs, Timestamp, doc, updateDoc, limit, orderBy } from 'firebase/firestore'; // Removed transactional/batch imports as logic is mostly handled in handlers, but conflicts uses fetch
+import { collection, query, where, getDocs, Timestamp, limit } from 'firebase/firestore'; // Removed transactional/batch imports as logic is mostly handled in handlers, but conflicts uses fetch
 import { checkConflicts } from '../utils/ConflictGuard';
 import { format, addDays } from 'date-fns';
 import { Plus, CheckCircle, Calendar, Clock, MapPin, AlertTriangle, Users, Box, Trash2, X, Search, Lock, Filter } from 'lucide-react';
@@ -10,8 +10,6 @@ import { useSettings } from '../contexts/SettingsContext';
 import ConfirmModal from './ui/ConfirmModal';
 
 export default function EventModal({ isOpen, onClose, initialData, onSave, onDelete, eventTypes, activeProfile }) {
-    if (!isOpen) return null;
-
     const isPastEvent = initialData?.id && new Date(initialData.startTime?.toDate ? initialData.startTime.toDate() : `${initialData.date}T${initialData.endTime}`) < new Date();
     // Allow editing IF it's called from ReportsPage (we assume deep sync logic will handle it)
     // BUT the logic in Scheduler was "isReadOnly = isPastEvent".
@@ -60,6 +58,7 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
 
     const [conflict, setConflict] = useState(null);
     const [checking, setChecking] = useState(false);
+    const [isSubmitting, setIsSubmitting] = useState(false);
     const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: '', message: '', onConfirm: null, isDestructive: false });
 
     // Student Filters
@@ -81,15 +80,21 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
             try {
                 // Students & Assets & Venues (Same as before)
                 const studentsSnap = await getDocs(collection(db, 'students'));
-                setStudentsList(studentsSnap.docs.map(d => ({
-                    value: d.id,
-                    name: d.data().name,
-                    label: d.data().name,
-                    specializations: d.data().specializations || [],
-                    grade: d.data().grade, // Use Name
-                    section: d.data().section, // Use Name
-                    active: d.data().active !== false
-                })));
+                setStudentsList(studentsSnap.docs.map(d => {
+                    const data = d.data();
+                    return {
+                        value: d.id,
+                        name: data.name,
+                        label: data.name,
+                        specializations: data.specializations || [],
+                        grade: data.grade || '',
+                        section: data.section || '',
+                        gradeId: data.gradeId || '',
+                        sectionId: data.sectionId || '',
+                        class: data.class || '',
+                        active: data.active !== false
+                    };
+                }));
 
                 const assetsSnap = await getDocs(collection(db, 'assets'));
                 setAssetsList(assetsSnap.docs
@@ -189,22 +194,11 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
     };
 
     // --- Smart Import Logic ---
-    // --- Smart Import Logic ---
     useEffect(() => {
         if (showImport && pastEvents.length === 0) {
             // Fetch recent events for "Smart Suggestion"
             const fetchRecent = async () => {
                 try {
-                    const q = query(
-                        collection(db, 'events'),
-                        where('status', '!=', 'Draft') // prefer completed events
-                        // orderBy('date', 'desc'), // Requires index. Let's rely on default or simple query + client sort if needed, or just fetch random recent
-                        // limit(50)
-                    );
-                    // To avoid index issues, let's just fetch a reasonable batch or use what we have if possible.
-                    // Actually, simple query is safer without composite index.
-                    // Let's try fetching by date descending if possible, but might fail strict index.
-                    // SAFE APPROUCH: query limit 50. Client side Sort/Dedup.
                     const qSafe = query(collection(db, 'events'), limit(50));
 
                     const snap = await getDocs(qSafe);
@@ -227,7 +221,7 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
             };
             fetchRecent();
         }
-    }, [showImport]);
+    }, [showImport, pastEvents.length]);
 
     const handleImportSearch = async (term) => {
         setImportSearch(term);
@@ -281,6 +275,7 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
         // 3. Filter by Specialization
         if (activeType) {
             list = list.filter(s => {
+                if (formData.studentIds.includes(s.value)) return true; // Always keep selected students
                 if (s.specializations && s.specializations.includes('General')) return true;
                 if (s.specializations && s.specializations.includes(activeType.name)) return true;
                 return false;
@@ -289,21 +284,22 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
 
         // 4. Map to Options with Class Name
         return list.map(s => {
-            const grade = grades.find(g => g.id === s.gradeId);
-            const section = grade?.sections?.find(sec => sec.id === s.sectionId);
-            const classLabel = section ? `(${grade.name} - ${section.name})` : (grade ? `(${grade.name})` : '');
+            const gradeName = s.grade || grades.find(g => g.id === s.gradeId || g.name === s.grade)?.name || '';
+            const sectionName = s.section || (grades.find(g => g.id === s.gradeId || g.name === s.grade)?.sections?.find(sec => sec.id === s.sectionId || sec.name === s.section)?.name) || '';
+            const classLabel = gradeName ? (sectionName ? `(${gradeName} - ${sectionName})` : `(${gradeName})`) : (s.class ? `(${s.class})` : '');
 
             return {
                 ...s,
-                label: `${s.name} ${classLabel}`
+                label: classLabel ? `${s.name} ${classLabel}` : s.name
             };
         });
     }, [studentsList, activeType, selectedGrade, selectedSection, grades, formData.studentIds]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        if (isReadOnly) return;
+        if (isReadOnly || checking || isSubmitting) return;
 
+        setIsSubmitting(true);
         setChecking(true);
 
         // Helper to check and package one event
@@ -336,15 +332,19 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                     if (check.hasConflict) {
                         setConflict(`تعارض في يوم ${p.date}: ${check.reason}`);
                         setChecking(false);
+                        setIsSubmitting(false);
                         return;
                     }
                 }
-                onSave(payloads);
-                // setChecking(false); // Parent usually closes modal, so no need to reset if closing
+                await onSave(payloads);
             } catch (error) {
                 console.error("Batch Check Failed", error);
                 setChecking(false);
+                setIsSubmitting(false);
                 toast.error("فشل التحقق");
+            } finally {
+                setChecking(false);
+                setIsSubmitting(false);
             }
         };
 
@@ -367,6 +367,7 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                 if (payloads.length === 0) {
                     toast.error("لم يتم اختيار أي أيام للمطابقة مع التكرار");
                     setChecking(false);
+                    setIsSubmitting(false);
                     return;
                 }
 
@@ -382,6 +383,7 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                         }
                     });
                     setChecking(false);
+                    setIsSubmitting(false);
                     return;
                 }
 
@@ -394,21 +396,30 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                 if (result.hasConflict) {
                     setConflict(result.reason);
                     setChecking(false);
+                    setIsSubmitting(false);
                     return;
                 }
-                onSave(eventPayload);
+                await onSave(eventPayload);
+                setChecking(false);
+                setIsSubmitting(false);
             }
 
         } catch (error) {
             console.error("Conflict check failed:", error);
             setChecking(false);
+            setIsSubmitting(false);
             if (error?.code === 'failed-precondition') {
                 toast.error("مطلوب إعداد الفهرس (Index) في Firebase Console.");
             } else {
                 toast.error("فشل التحقق من التعارضات");
             }
+        } finally {
+            setChecking(false);
+            setIsSubmitting(false);
         }
     };
+
+    if (!isOpen) return null;
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
@@ -425,7 +436,7 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                             </button>
                         )}
                     </div>
-                    <button onClick={onClose} className="text-gray-400 hover:text-white bg-white/5 p-2 rounded-full hover:bg-white/10 transition-all"><X size={20} /></button>
+                    <button onClick={onClose} aria-label="إغلاق النافذة" className="text-gray-400 hover:text-white bg-white/5 p-2 rounded-full hover:bg-white/10 transition-all"><X size={20} /></button>
                 </div>
 
                 {/* Import Search Panel */}
@@ -640,31 +651,58 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                             </h4>
                             <div className="space-y-2 mb-3">
                                 {formData.reminders?.map((rem, idx) => (
-                                    <div key={idx} className="flex items-center gap-2 bg-black/20 p-2 rounded-lg border border-white/5 text-sm">
-                                        <span className="text-gray-400">تنبيه قبل:</span>
-                                        <input
-                                            type="number"
-                                            value={rem.value}
-                                            onChange={(e) => {
-                                                const newRems = [...formData.reminders];
-                                                newRems[idx].value = parseInt(e.target.value);
-                                                setFormData({ ...formData, reminders: newRems });
-                                            }}
-                                            className="bg-black/30 border border-white/10 rounded px-2 py-1 text-white w-16 text-center"
-                                        />
+                                    <div key={idx} className="flex flex-wrap items-center gap-2 bg-black/20 p-2.5 rounded-xl border border-white/5 text-sm">
                                         <select
                                             value={rem.type}
                                             onChange={(e) => {
                                                 const newRems = [...formData.reminders];
                                                 newRems[idx].type = e.target.value;
+                                                if (e.target.value === 'custom' && !newRems[idx].customDateTime) {
+                                                    const formattedTime = (formData.startTime || '08:00').padStart(5, '0');
+                                                    const defaultDt = formData.date ? `${formData.date}T${formattedTime}` : '';
+                                                    newRems[idx].customDateTime = defaultDt;
+                                                }
                                                 setFormData({ ...formData, reminders: newRems });
                                             }}
-                                            className="bg-black/30 border border-white/10 rounded px-2 py-1 text-white"
+                                            className="bg-black/40 border border-white/10 rounded-lg px-2.5 py-1.5 text-white text-xs"
                                         >
-                                            <option value="minutes">دقيقة</option>
-                                            <option value="hours">ساعة</option>
-                                            <option value="days">يوم</option>
+                                            <option value="minutes">دقيقة قبل النشاط</option>
+                                            <option value="hours">ساعة قبل النشاط</option>
+                                            <option value="days">يوم قبل النشاط</option>
+                                            <option value="custom">موعد مخصص (تاريخ ووقت محدد)</option>
                                         </select>
+
+                                        {rem.type === 'custom' ? (
+                                            <div className="flex items-center gap-1.5 flex-1 min-w-[200px]">
+                                                <span className="text-xs text-indigo-300">في تاريخ:</span>
+                                                <input
+                                                    type="datetime-local"
+                                                    value={rem.customDateTime || ''}
+                                                    onChange={(e) => {
+                                                        const newRems = [...formData.reminders];
+                                                        newRems[idx].customDateTime = e.target.value;
+                                                        setFormData({ ...formData, reminders: newRems });
+                                                    }}
+                                                    className="bg-black/40 border border-white/10 rounded-lg px-2 py-1 text-white text-xs flex-1 font-mono outline-none focus:border-indigo-500"
+                                                />
+                                            </div>
+                                        ) : (
+                                            <div className="flex items-center gap-1.5">
+                                                <span className="text-gray-400 text-xs">تنبيه قبل:</span>
+                                                <input
+                                                    type="number"
+                                                    min="1"
+                                                    value={rem.value ?? 15}
+                                                    onChange={(e) => {
+                                                        const newRems = [...formData.reminders];
+                                                        newRems[idx].value = parseInt(e.target.value) || 0;
+                                                        setFormData({ ...formData, reminders: newRems });
+                                                    }}
+                                                    className="bg-black/40 border border-white/10 rounded-lg px-2 py-1 text-white w-16 text-center text-xs"
+                                                />
+                                            </div>
+                                        )}
+
                                         <button
                                             type="button"
                                             onClick={() => {
@@ -672,7 +710,8 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                                                 newRems.splice(idx, 1);
                                                 setFormData({ ...formData, reminders: newRems });
                                             }}
-                                            className="text-red-400 hover:bg-red-500/10 p-1 rounded"
+                                            className="text-red-400 hover:bg-red-500/10 p-1.5 rounded-lg mr-auto transition-colors"
+                                            title="حذف التذكير"
                                         >
                                             <Trash2 size={14} />
                                         </button>
@@ -758,7 +797,7 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                                     </select>
                                 </div>
                                 <div className="pb-0.5">
-                                    <button type="button" onClick={() => { setSelectedGrade(''); setSelectedSection(''); }} className="p-2 text-gray-500 hover:text-white bg-white/5 rounded-lg border border-white/5" title="إلغاء التصفية">
+                                    <button type="button" aria-label="إلغاء التصفية" onClick={() => { setSelectedGrade(''); setSelectedSection(''); }} className="p-2 text-gray-400 hover:text-white bg-white/5 rounded-lg border border-white/5" title="إلغاء التصفية">
                                         <Filter size={16} className={selectedGrade ? "text-indigo-400" : ""} />
                                     </button>
                                 </div>
@@ -780,7 +819,7 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                                 onChange={(vals) => handleChange('assetIds', vals)}
                                 icon={Box}
                             />
-                            <p className="text-xs text-gray-500">* الموارد التي "تحت الصيانة" لا تظهر هنا.</p>
+                            <p className="text-xs text-gray-400">* الموارد التي "تحت الصيانة" لا تظهر هنا.</p>
                         </div>
                     </form>
                 </div>
@@ -794,8 +833,8 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
 
                     <div className="flex space-x-3 space-x-reverse mr-auto">
                         <button type="button" onClick={onClose} className="px-6 py-3 rounded-xl text-gray-400 hover:bg-white/5 transition-all">إلغاء</button>
-                        <button form="eventForm" type="submit" disabled={checking} className="px-8 py-3 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold shadow-lg transition-transform transform active:scale-95 flex items-center hover:shadow-indigo-500/25">
-                            {checking ? 'جاري التحقق...' : (initialData?.id ? 'حفظ التعديلات' : (isRecurring ? 'إنشاء المتكرر' : 'إنشاء النشاط'))}
+                        <button form="eventForm" type="submit" disabled={checking || isSubmitting} className="px-8 py-3 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold shadow-lg transition-transform transform active:scale-95 flex items-center hover:shadow-indigo-500/25">
+                            {checking || isSubmitting ? 'جاري التحقق...' : (initialData?.id ? 'حفظ التعديلات' : (isRecurring ? 'إنشاء المتكرر' : 'إنشاء النشاط'))}
                         </button>
 
                         {/* Status Change Button (Simplified) - usually handled in parent or here? */}

@@ -1,6 +1,4 @@
 import { useState, useEffect } from 'react';
-import { db } from '../firebase';
-import { collection, getDocs, query, limit } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import { Search, X } from 'lucide-react';
 
@@ -23,19 +21,13 @@ export default function CommandPalette() {
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, []);
 
-    // Search logic (Basic client-side filtering of limited fetch or specific collections)
-    // For production: use Algolia/Meilisearch. Here: Simple query.
+    // Search logic
     useEffect(() => {
-        if (!queryText.trim()) {
-            setResults([]);
-            return;
-        }
-
-        // Quick debounce
-        const timeoutId = setTimeout(async () => {
-            // Search students and assets (simplified)
-            // Note: Full text search in Firestore is limited. Simple prefix match simulation (via startAt) or client filter.
-            // We'll simplisticly fetch recent/all and filter for prototype.
+        const timeoutId = setTimeout(() => {
+            if (!queryText.trim()) {
+                setResults([]);
+                return;
+            }
 
             const r = [];
             // Add static navigation
@@ -62,7 +54,7 @@ export default function CommandPalette() {
                         value={queryText}
                         onChange={e => setQueryText(e.target.value)}
                     />
-                    <button onClick={() => setIsOpen(false)}><X className="text-gray-400 hover:text-gray-600" /></button>
+                    <button aria-label="إغلاق نافذة البحث" onClick={() => setIsOpen(false)}><X className="text-gray-400 hover:text-gray-600" /></button>
                 </div>
                 <div className="max-h-64 overflow-y-auto p-2">
                     {results.length === 0 && queryText && <p className="text-center text-gray-500 py-4">No results found.</p>}

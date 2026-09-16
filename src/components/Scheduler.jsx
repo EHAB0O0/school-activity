@@ -1,9 +1,8 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useSettings } from '../contexts/SettingsContext';
 import { db } from '../firebase';
 import { collection, query, where, getDocs, addDoc, Timestamp, writeBatch, doc, increment, deleteDoc, updateDoc, runTransaction } from 'firebase/firestore';
-import { checkConflicts } from '../utils/ConflictGuard';
-import { format, startOfWeek, endOfWeek, addDays, startOfMonth, endOfMonth, isSameDay, parse, set, isPast } from 'date-fns';
+import { format, startOfWeek, endOfWeek, addDays, startOfMonth, endOfMonth, isSameDay } from 'date-fns';
 import { ar } from 'date-fns/locale';
 import { ChevronRight, ChevronLeft, Plus, CheckCircle, Calendar, Clock, MapPin, AlertTriangle, Users, Box, X, Search, Check, Trash2, Edit3, Lock, Printer } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -43,7 +42,7 @@ export default function Scheduler() {
         return new Intl.DateTimeFormat('ar-SA-u-ca-islamic-umalqura', { day: 'numeric', month: 'long', year: 'numeric' }).format(date);
     };
     const getHijriDay = (date) => {
-        return new Intl.DateTimeFormat('ar-SA-u-ca-islamic-umalqura', { day: 'numeric' }).format(date);
+        return new Intl.DateTimeFormat('ar-SA-u-ca-islamic-umalqura', { day: 'numeric', month: 'long', year: 'numeric' }).format(date);
     };
     const getMonthTitle = (date) => {
         if (calendarSystem === 'hijri') {
@@ -53,7 +52,7 @@ export default function Scheduler() {
     };
 
     // Fetch Events Logic
-    const fetchEvents = async () => {
+    const fetchEvents = useCallback(async () => {
         setIsLoading(true);
         try {
             let start, end;
@@ -86,11 +85,11 @@ export default function Scheduler() {
         } finally {
             setIsLoading(false);
         }
-    };
+    }, [currentDate, view]);
 
     useEffect(() => {
         fetchEvents();
-    }, [currentDate, view]);
+    }, [fetchEvents]);
 
     const handleSaveEvent = async (eventPayload) => {
         try {
@@ -241,7 +240,7 @@ export default function Scheduler() {
             toast.success("تم حذف النشاط");
             setIsModalOpen(false);
             fetchEvents();
-        } catch (e) { toast.error("فشل الحذف"); }
+        } catch { toast.error("فشل الحذف"); }
     }
 
     const handleSmartDelete = async ({ reversePoints, actionType }) => {
@@ -295,72 +294,250 @@ export default function Scheduler() {
 
         try {
             if (type === 'visual') {
-                if (!schedulerRef.current) throw new Error("Scheduler element not found");
+                // Isolated Iframe Visual Grid Renderer (Zero risk of Tailwind v4 oklab crashes)
+                const iframe = document.createElement('iframe');
+                iframe.style.position = 'fixed';
+                iframe.style.top = '-9999px';
+                iframe.style.left = '0';
+                iframe.style.width = '1200px';
+                iframe.style.height = '850px';
+                iframe.style.border = 'none';
+                document.body.appendChild(iframe);
 
-                const canvas = await html2canvas(schedulerRef.current, {
-                    useCORS: true,
-                    backgroundColor: '#1f2937', // Force Hex background
-                    scale: 2,
-                    logging: false,
-                    ignoreElements: (element) => element.classList.contains('no-print'),
-                    onclone: (clonedDoc) => {
-                        // LOCKSTEP COLOR SANITIZER (CANVAS BACKED)
-                        // Uses Canvas 2D context to force-serialize modern colors (oklch) to Hex/RGB
-                        const ctx = document.createElement('canvas').getContext('2d');
-                        const forceRGB = (color) => {
-                            if (!color || color === 'transparent' || color === 'inherit') return color;
-                            // Optimistically return if already safe
-                            if (color.startsWith('#') || (color.startsWith('rgb') && !color.includes('oklch'))) return color;
+                const doc = iframe.contentWindow.document;
+                doc.open();
 
-                            try {
-                                ctx.fillStyle = color;
-                                return ctx.fillStyle; // Browsers normalize to hex or rgba
-                            } catch (e) {
-                                return color;
-                            }
-                        };
-
-                        const sanitize = (orig, clone) => {
-                            if (!orig || !clone) return;
-                            if (orig.nodeType !== 1 || clone.nodeType !== 1) return;
-
-                            const computed = window.getComputedStyle(orig);
-                            const props = [
-                                'color', 'backgroundColor', 'borderColor',
-                                'borderTopColor', 'borderRightColor', 'borderBottomColor', 'borderLeftColor',
-                                'outlineColor', 'textDecorationColor', 'columnRuleColor'
-                            ];
-
-                            props.forEach(prop => {
-                                const val = computed[prop];
-                                if (val) {
-                                    clone.style[prop] = forceRGB(val);
-                                }
-                            });
-
-                            // Parallel traversal
-                            const len = Math.min(orig.children.length, clone.children.length);
-                            for (let i = 0; i < len; i++) {
-                                sanitize(orig.children[i], clone.children[i]);
-                            }
-                        };
-
-                        sanitize(schedulerRef.current, clonedDoc.body);
-                    }
+                // 1. Prepare Days (Sunday to Thursday by default, or all non-weekend school days)
+                const start = startOfWeek(currentDate, { weekStartsOn: 0 });
+                const schoolDays = [0, 1, 2, 3, 4, 5, 6].map(offset => addDays(start, offset)).filter(d => {
+                    const dayOfWeek = d.getDay();
+                    const isWeekendDay = (weekends && weekends.length > 0) ? weekends.includes(dayOfWeek) : (dayOfWeek === 5 || dayOfWeek === 6);
+                    return !isWeekendDay;
                 });
 
-                const imgData = canvas.toDataURL('image/jpeg', 0.8); // Define it here
-                const pdf = new jsPDF('l', 'pt', 'a4'); // Landscape
+                // 2. Prepare Slots
+                const slots = (activeProfile?.slots && activeProfile.slots.length > 0) ? activeProfile.slots : [
+                    { label: 'الحصة 1', start: '08:00', end: '08:45' },
+                    { label: 'الحصة 2', start: '08:45', end: '09:30' },
+                    { label: 'الحصة 3', start: '09:30', end: '10:15' },
+                    { label: 'فسحة', start: '10:15', end: '10:45' },
+                    { label: 'الحصة 4', start: '10:45', end: '11:30' },
+                    { label: 'الحصة 5', start: '11:30', end: '12:15' },
+                    { label: 'الحصة 6', start: '12:15', end: '13:00' }
+                ];
+
+                const weekRangeStr = `${format(schoolDays[0], 'd MMMM', { locale: ar })} - ${format(schoolDays[schoolDays.length - 1], 'd MMMM yyyy', { locale: ar })}`;
+                const hijriWeekRangeStr = `${getHijriDate(schoolDays[0])} إلى ${getHijriDate(schoolDays[schoolDays.length - 1])}`;
+
+                // 3. Build Table Headers
+                const slotHeadersHtml = slots.map(s => `
+                    <th style="padding: 10px 6px; font-size: 11px; background: #1e293b; color: #f8fafc; border: 1px solid #334155; text-align: center;">
+                        <div style="font-weight: bold; color: #facc15;">${s.label}</div>
+                        <div style="font-size: 9px; color: #94a3b8; font-family: monospace; margin-top: 2px;">${s.start} - ${s.end}</div>
+                    </th>
+                `).join('');
+
+                // 4. Build Table Rows
+                const rowsHtml = schoolDays.map(day => {
+                    const dStr = format(day, 'yyyy-MM-dd');
+                    const dayName = format(day, 'EEEE', { locale: ar });
+                    const hijriDayStr = getHijriDay(day);
+
+                    // Holiday check
+                    const holiday = holidays?.find(h => {
+                        if (h.date === dStr) return true;
+                        if (h.start && h.end && dStr >= h.start && dStr <= h.end) return true;
+                        return false;
+                    });
+
+                    if (holiday) {
+                        return `
+                            <tr>
+                                <td style="padding: 12px; background: #1e293b; border: 1px solid #334155; text-align: center; width: 140px;">
+                                    <div style="font-weight: bold; font-size: 14px; color: #ffffff;">${dayName}</div>
+                                    <div style="font-size: 10px; color: #94a3b8; font-family: monospace;">${dStr}</div>
+                                    <div style="font-size: 10px; color: #38bdf8;">${hijriDayStr}</div>
+                                </td>
+                                <td colspan="${slots.length}" style="padding: 20px; background: #451a03; border: 1px solid #78350f; text-align: center; color: #fde047;">
+                                    <div style="font-size: 15px; font-weight: bold;">🌴 إجازة رسمية: ${holiday.reason}</div>
+                                    <div style="font-size: 11px; color: #fef08a; margin-top: 4px;">عطلة رسمية معتمدة لكافة الأنشطة والمنسوبين</div>
+                                </td>
+                            </tr>
+                        `;
+                    }
+
+                    const dayEvents = events.filter(e => {
+                        const eDate = e.startTime?.toDate ? format(e.startTime.toDate(), 'yyyy-MM-dd') : e.date;
+                        return eDate === dStr;
+                    });
+
+                    const cellsHtml = slots.map(slot => {
+                        const matchingEvents = dayEvents.filter(ev => {
+                            const evStart = ev.startTime?.toDate ? format(ev.startTime.toDate(), 'HH:mm') : (ev.startTime || '08:00');
+                            const evEnd = ev.endTime?.toDate ? format(ev.endTime.toDate(), 'HH:mm') : (ev.endTime || '09:00');
+                            return evStart < slot.end && evEnd > slot.start;
+                        });
+
+                        if (matchingEvents.length === 0) {
+                            return `
+                                <td style="padding: 8px; border: 1px solid #334155; background: #0f172a; text-align: center; color: #475569; font-size: 12px;">
+                                    -
+                                </td>
+                            `;
+                        }
+
+                        const cardsHtml = matchingEvents.map(ev => {
+                            const isDone = ev.status === 'Done' || ev.status === 'مكتمل';
+                            const bg = isDone ? '#064e3b' : '#1e1b4b';
+                            const border = isDone ? '#059669' : '#6366f1';
+                            const text = isDone ? '#6ee7b7' : '#c7d2fe';
+                            return `
+                                <div style="background: ${bg}; border: 1px solid ${border}; border-radius: 6px; padding: 6px; margin-bottom: 4px; text-align: right;">
+                                    <div style="font-weight: bold; font-size: 11px; color: #ffffff; margin-bottom: 2px;">${ev.title}</div>
+                                    <div style="font-size: 9px; color: ${text}; display: flex; justify-content: space-between;">
+                                        <span>📍 ${ev.venueId || 'المدرسة'}</span>
+                                        <span>⭐ ${ev.points || 10}ن</span>
+                                    </div>
+                                    ${ev.typeName ? `<div style="font-size: 8px; color: #94a3b8; margin-top: 2px;">🏷️ ${ev.typeName}</div>` : ''}
+                                </div>
+                            `;
+                        }).join('');
+
+                        return `
+                            <td style="padding: 6px; border: 1px solid #334155; background: #0f172a; vertical-align: top;">
+                                ${cardsHtml}
+                            </td>
+                        `;
+                    }).join('');
+
+                    return `
+                        <tr>
+                            <td style="padding: 10px; background: #1e293b; border: 1px solid #334155; text-align: center; width: 140px;">
+                                <div style="font-weight: bold; font-size: 13px; color: #ffffff;">${dayName}</div>
+                                <div style="font-size: 10px; color: #94a3b8; font-family: monospace;">${dStr}</div>
+                                <div style="font-size: 10px; color: #38bdf8;">${hijriDayStr}</div>
+                            </td>
+                            ${cellsHtml}
+                        </tr>
+                    `;
+                }).join('');
+
+                // 5. Write pure HTML into iframe
+                doc.write(`
+                    <!DOCTYPE html>
+                    <html dir="rtl" lang="ar">
+                    <head>
+                        <meta charset="utf-8" />
+                        <style>
+                            @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap');
+                            * { box-sizing: border-box; }
+                            body {
+                                margin: 0;
+                                padding: 25px;
+                                background-color: #0b0f19;
+                                color: #ffffff;
+                                font-family: 'Cairo', Arial, sans-serif;
+                                direction: rtl;
+                            }
+                            .header-table {
+                                width: 100%;
+                                margin-bottom: 20px;
+                                border-bottom: 2px solid #334155;
+                                padding-bottom: 15px;
+                            }
+                            .title {
+                                font-size: 22px;
+                                font-weight: bold;
+                                color: #facc15;
+                                margin: 0 0 5px 0;
+                            }
+                            .subtitle {
+                                font-size: 12px;
+                                color: #94a3b8;
+                                margin: 0;
+                            }
+                            .grid-table {
+                                width: 100%;
+                                border-collapse: collapse;
+                                table-layout: fixed;
+                            }
+                            .footer {
+                                margin-top: 15px;
+                                display: flex;
+                                justify-content: space-between;
+                                font-size: 10px;
+                                color: #64748b;
+                                border-top: 1px solid #1e293b;
+                                padding-top: 10px;
+                            }
+                        </style>
+                    </head>
+                    <body>
+                        <table class="header-table">
+                            <tr>
+                                <td style="text-align: right; vertical-align: middle;">
+                                    <div class="title">الجدول الأسبوعي للأنشطة المدرسية</div>
+                                    <div class="subtitle">الفترة: ${weekRangeStr} &bull; (${hijriWeekRangeStr})</div>
+                                </td>
+                                <td style="text-align: left; vertical-align: middle;">
+                                    <div style="font-weight: bold; font-size: 14px; color: #ffffff;">نظام إدارة النشاط المدرسي</div>
+                                    <div style="font-size: 11px; color: #94a3b8;">المملكة العربية السعودية</div>
+                                </td>
+                            </tr>
+                        </table>
+
+                        <table class="grid-table">
+                            <thead>
+                                <tr>
+                                    <th style="padding: 10px; background: #0f172a; color: #94a3b8; border: 1px solid #334155; width: 140px;">اليوم / التاريخ</th>
+                                    ${slotHeadersHtml}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${rowsHtml}
+                            </tbody>
+                        </table>
+
+                        <div class="footer">
+                            <span>تم تصدير الجدول آلياً عبر منظومة النشاط المدرسي</span>
+                            <span>تاريخ الاستخراج: ${format(new Date(), 'yyyy-MM-dd HH:mm')}</span>
+                        </div>
+                    </body>
+                    </html>
+                `);
+                doc.close();
+
+                await new Promise(r => setTimeout(r, 200));
+
+                const canvas = await html2canvas(doc.body, {
+                    useCORS: true,
+                    backgroundColor: '#0b0f19',
+                    scale: 2,
+                    logging: false
+                });
+
+                document.body.removeChild(iframe);
+
+                const imgData = canvas.toDataURL('image/jpeg', 0.95);
+                const pdf = new jsPDF('l', 'pt', 'a4');
                 const pdfWidth = 841.89;
                 const pdfHeight = 595.28;
+                const margin = 20;
 
-                const imgProps = pdf.getImageProperties(imgData);
-                const ratio = imgProps.width / imgProps.height;
-                const width = pdfWidth;
-                const height = width / ratio;
+                const maxAvailableWidth = pdfWidth - (margin * 2);
+                const maxAvailableHeight = pdfHeight - (margin * 2);
 
-                pdf.addImage(imgData, 'JPEG', 0, (pdfHeight - height) / 2, width, height); // Use it here
-                pdf.save(`Scheduler_Visual_${format(new Date(), 'yyyy-MM-dd')}.pdf`);
+                const fitRatio = Math.min(maxAvailableWidth / canvas.width, maxAvailableHeight / canvas.height);
+                const finalWidth = canvas.width * fitRatio;
+                const finalHeight = canvas.height * fitRatio;
+
+                const posX = (pdfWidth - finalWidth) / 2;
+                const posY = (pdfHeight - finalHeight) / 2;
+
+                pdf.addImage(imgData, 'JPEG', posX, posY, finalWidth, finalHeight);
+                pdf.save(`Scheduler_Visual_Grid_${format(new Date(), 'yyyy-MM-dd')}.pdf`);
+                toast.success("تم تحميل صورة الجدول الأسبوعي بنجاح", { id: toastId });
+                return;
 
             } else if (type === 'agenda') {
                 const title = `جدول الأنشطة - ${format(startOfWeek(currentDate, { weekStartsOn: 0 }), 'd MMM')} إلى ${format(endOfWeek(currentDate, { weekStartsOn: 0 }), 'd MMM yyyy')}`;
@@ -592,7 +769,7 @@ export default function Scheduler() {
     }, [currentDate]);
 
     // Slots from Active Profile
-    const slots = activeProfile?.slots || [];
+    const slots = useMemo(() => activeProfile?.slots || [], [activeProfile?.slots]);
 
     // --- Visual Grid Helpers ---
     const gridMetrics = useMemo(() => {
@@ -719,6 +896,7 @@ export default function Scheduler() {
 
                     <button
                         onClick={() => setIsPrintModalOpen(true)}
+                        aria-label="طباعة الجدول"
                         className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white transition-colors border border-white/5"
                     >
                         <Printer size={18} />
@@ -732,6 +910,7 @@ export default function Scheduler() {
                             setModalData(null);
                             setIsModalOpen(true);
                         }}
+                        aria-label="إضافة نشاط"
                         className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-2 rounded-lg font-bold shadow-lg shadow-emerald-600/20 transition-all active:scale-95"
                     >
                         <Plus size={18} />
@@ -742,7 +921,7 @@ export default function Scheduler() {
 
             {/* Navigation Bar */}
             <div className="flex items-center justify-between mb-6 bg-white/5 p-2 rounded-xl border border-white/5 no-print">
-                <button onClick={prev} className="p-2 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-colors">
+                <button onClick={prev} aria-label="الفترة السابقة" className="p-2 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-colors">
                     <ChevronRight size={20} />
                 </button>
 
@@ -759,27 +938,29 @@ export default function Scheduler() {
                     )}
                 </h2>
 
-                <button onClick={next} className="p-2 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-colors">
+                <button onClick={next} aria-label="الفترة التالية" className="p-2 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-colors">
                     <ChevronLeft size={20} />
                 </button>
             </div>
 
             {/* View Toggle */}
             <div className="flex items-center space-x-4 space-x-reverse bg-black/20 p-1 rounded-xl mt-4 md:mt-0 no-print">
-                <button onClick={() => setView('week')} className={`px-6 py-2 rounded-lg transition-all ${view === 'week' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}>أسبوع</button>
-                <button onClick={() => setView('month')} className={`px-6 py-2 rounded-lg transition-all ${view === 'month' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}>شهر</button>
+                <button onClick={() => setView('week')} aria-label="عرض الأسبوع" className={`px-6 py-2 rounded-lg transition-all ${view === 'week' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}>أسبوع</button>
+                <button onClick={() => setView('month')} aria-label="عرض الشهر" className={`px-6 py-2 rounded-lg transition-all ${view === 'month' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}>شهر</button>
             </div>
 
             {/* Calendar System Toggle */}
             <div className="bg-black/30 p-1 rounded-lg flex items-center ml-4 border border-white/5 no-print">
                 <button
                     onClick={() => setCalendarSystem('gregory')}
+                    aria-label="التقويم الميلادي"
                     className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${calendarSystem === 'gregory' ? 'bg-indigo-600 text-white shadow' : 'text-gray-400 hover:text-white'}`}
                 >
                     ميلادي
                 </button>
                 <button
                     onClick={() => setCalendarSystem('hijri')}
+                    aria-label="التقويم الهجري"
                     className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${calendarSystem === 'hijri' ? 'bg-emerald-600 text-white shadow' : 'text-gray-400 hover:text-white'}`}
                 >
                     هجري
@@ -812,7 +993,7 @@ export default function Scheduler() {
                                         const pos = getPositionStyle(slot.start, slot.end);
                                         return (
                                             <div key={idx}
-                                                className="absolute h-full flex items-center justify-center border-l border-[rgba(255,255,255,0.05)] text-[10px] text-gray-500 font-mono tracking-tighter"
+                                                className="absolute h-full flex items-center justify-center border-l border-[rgba(255,255,255,0.05)] text-[10px] text-gray-400 font-mono tracking-tighter"
                                                 style={{
                                                     right: `${pos.left}%`, // RTL: Use right instead of left
                                                     width: `${pos.width}%`
@@ -993,7 +1174,7 @@ export default function Scheduler() {
                                         day = addDays(day, 1);
                                     }
 
-                                    return days.map((day, idx) => {
+                                    return days.map((day) => {
                                         const dayFormatted = format(day, 'yyyy-MM-dd');
                                         const isCurrentMonth = isSameDay(day, monthStart) || (day >= monthStart && day <= monthEnd);
                                         const isToday = isSameDay(day, new Date());

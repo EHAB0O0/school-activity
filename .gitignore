@@ -23,5 +23,7 @@ dist-ssr
 *.suo
 *.ntvs*
 *.njsproj
-*.sln
 *.sw?
+
+# Temporary & AI context files
+ai_studio_code.ts
