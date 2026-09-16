@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { db } from '../firebase';
-import { collection, addDoc, query, where, doc, updateDoc, orderBy, onSnapshot } from 'firebase/firestore';
+import { collection, addDoc, query, where, doc, updateDoc, orderBy, onSnapshot, writeBatch, getDocs, limit } from 'firebase/firestore';
 import { Search, Plus, Trash2, Award, User, FileText, Clock, Edit3, X, Save, ArrowUpDown, Tag, Filter, Printer } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useSettings } from '../contexts/SettingsContext';
@@ -8,6 +8,9 @@ import MultiSelect from '../components/ui/MultiSelect';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import ConfirmModal from '../components/ui/ConfirmModal';
+import BulkActionsBar from '../components/students/BulkActionsBar';
+import BulkOperationsModal from '../components/students/BulkOperationsModal';
+import BulkPrintCertificatesModal from '../components/students/BulkPrintCertificatesModal';
 
 export default function StudentsPage() {
     const [students, setStudents] = useState([]);
@@ -17,7 +20,14 @@ export default function StudentsPage() {
     const [sectionFilter, setSectionFilter] = useState('');
     const [specFilter, setSpecFilter] = useState('All');
 
-    const { eventTypes, grades } = useSettings();
+    // Selection & Bulk Actions State
+    const [selectedIds, setSelectedIds] = useState([]);
+    const [isOperationsModalOpen, setIsOperationsModalOpen] = useState(false);
+    const [operationsInitialTab, setOperationsInitialTab] = useState('transfer');
+    const [isCertificatesModalOpen, setIsCertificatesModalOpen] = useState(false);
+    const [isProcessingBulk, setIsProcessingBulk] = useState(false);
+
+    const { eventTypes, grades, settings } = useSettings();
     const [isAddModalOpen, setIsAddModalOpen] = useState(false);
     const [newStudent, setNewStudent] = useState({ name: '', class: '', grade: '', section: '', specializations: [] });
 
@@ -302,6 +312,504 @@ export default function StudentsPage() {
             return a.name.localeCompare(b.name);
         });
 
+    // Selection Computed Properties
+    const isAllDisplayedSelected = displayedStudents.length > 0 && displayedStudents.every(s => selectedIds.includes(s.id));
+    const isPartiallySelected = selectedIds.length > 0 && !isAllDisplayedSelected;
+    const selectedStudentsList = students.filter(s => selectedIds.includes(s.id));
+
+    // Selection Handlers
+    const toggleSelectStudent = (id) => {
+        setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+    };
+
+    const toggleSelectAllHeader = () => {
+        if (isAllDisplayedSelected) {
+            setSelectedIds(prev => prev.filter(id => !displayedStudents.some(s => s.id === id)));
+        } else {
+            setSelectedIds(Array.from(new Set([...selectedIds, ...displayedStudents.map(s => s.id)])));
+        }
+    };
+
+    const handleSelectAllDisplayed = () => {
+        setSelectedIds(Array.from(new Set([...selectedIds, ...displayedStudents.map(s => s.id)])));
+    };
+
+    const handleSelectAllSchool = () => {
+        setSelectedIds(students.map(s => s.id));
+    };
+
+    const handleClearSelection = () => {
+        setSelectedIds([]);
+    };
+
+    const handleOpenOperationsModal = (tab = 'transfer') => {
+        setOperationsInitialTab(tab);
+        setIsOperationsModalOpen(true);
+    };
+
+    // --- Bulk Action Handlers ---
+    // 1. Bulk Transfer Grade & Section
+    const handleBulkTransfer = async ({ targetGrade, targetSection }) => {
+        setIsProcessingBulk(true);
+        const toastId = toast.loading(`جاري نقل ${selectedIds.length} طالب إلى ${targetGrade} - ${targetSection}...`);
+        try {
+            const classString = `${targetGrade} - ${targetSection}`;
+            const chunks = [];
+            for (let i = 0; i < selectedIds.length; i += 400) {
+                chunks.push(selectedIds.slice(i, i + 400));
+            }
+            for (const chunk of chunks) {
+                const batch = writeBatch(db);
+                chunk.forEach(id => {
+                    batch.update(doc(db, 'students', id), {
+                        grade: targetGrade,
+                        section: targetSection,
+                        class: classString
+                    });
+                });
+                await batch.commit();
+            }
+            toast.success(`تم نقل ${selectedIds.length} طالب بنجاح!`, { id: toastId });
+            setIsOperationsModalOpen(false);
+            setSelectedIds([]);
+        } catch (err) {
+            console.error("Bulk transfer error:", err);
+            toast.error('حدث خطأ أثناء نقل الطلاب', { id: toastId });
+        } finally {
+            setIsProcessingBulk(false);
+        }
+    };
+
+    // 2. Bulk Specializations
+    const handleBulkSpecialization = async ({ specializations, mode }) => {
+        setIsProcessingBulk(true);
+        const toastId = toast.loading(`جاري تحديث تخصصات ${selectedIds.length} طالب...`);
+        try {
+            const selectedMap = new Map(students.filter(s => selectedIds.includes(s.id)).map(s => [s.id, s]));
+            const chunks = [];
+            for (let i = 0; i < selectedIds.length; i += 400) {
+                chunks.push(selectedIds.slice(i, i + 400));
+            }
+            for (const chunk of chunks) {
+                const batch = writeBatch(db);
+                chunk.forEach(id => {
+                    const currentStudent = selectedMap.get(id);
+                    let newSpecs = [];
+                    if (mode === 'append') {
+                        const existing = currentStudent?.specializations || [];
+                        newSpecs = Array.from(new Set([...existing, ...specializations]));
+                    } else {
+                        newSpecs = [...specializations];
+                    }
+                    batch.update(doc(db, 'students', id), {
+                        specializations: newSpecs
+                    });
+                });
+                await batch.commit();
+            }
+            toast.success(`تم تحديث التخصصات بنجاح!`, { id: toastId });
+            setIsOperationsModalOpen(false);
+            setSelectedIds([]);
+        } catch (err) {
+            console.error("Bulk specialization error:", err);
+            toast.error('حدث خطأ أثناء تحديث التخصصات', { id: toastId });
+        } finally {
+            setIsProcessingBulk(false);
+        }
+    };
+
+    // 3. Bulk Points
+    const handleBulkPoints = async ({ points, reason }) => {
+        setIsProcessingBulk(true);
+        const toastId = toast.loading(`جاري تحديث نقاط ${selectedIds.length} طالب...`);
+        try {
+            const selectedMap = new Map(students.filter(s => selectedIds.includes(s.id)).map(s => [s.id, s]));
+            const chunks = [];
+            for (let i = 0; i < selectedIds.length; i += 400) {
+                chunks.push(selectedIds.slice(i, i + 400));
+            }
+            for (const chunk of chunks) {
+                const batch = writeBatch(db);
+                chunk.forEach(id => {
+                    const currentStudent = selectedMap.get(id);
+                    const oldPoints = Number(currentStudent?.totalPoints) || 0;
+                    const updatedPoints = Math.max(0, oldPoints + points);
+                    const payload = { totalPoints: updatedPoints };
+                    if (reason) {
+                        payload.lastPointsNote = reason;
+                    }
+                    batch.update(doc(db, 'students', id), payload);
+                });
+                await batch.commit();
+            }
+            toast.success(`تم تحديث نقاط التميز بنجاح!`, { id: toastId });
+            setIsOperationsModalOpen(false);
+            setSelectedIds([]);
+        } catch (err) {
+            console.error("Bulk points error:", err);
+            toast.error('حدث خطأ أثناء تحديث النقاط', { id: toastId });
+        } finally {
+            setIsProcessingBulk(false);
+        }
+    };
+
+    // 4. Bulk Status
+    const handleBulkStatus = async ({ status }) => {
+        setIsProcessingBulk(true);
+        const toastId = toast.loading(`جاري تعديل حالة ${selectedIds.length} طالب...`);
+        try {
+            const chunks = [];
+            for (let i = 0; i < selectedIds.length; i += 400) {
+                chunks.push(selectedIds.slice(i, i + 400));
+            }
+            for (const chunk of chunks) {
+                const batch = writeBatch(db);
+                chunk.forEach(id => {
+                    batch.update(doc(db, 'students', id), {
+                        status: status,
+                        active: status === 'active'
+                    });
+                });
+                await batch.commit();
+            }
+            toast.success(`تم تعديل الحالة بنجاح!`, { id: toastId });
+            setIsOperationsModalOpen(false);
+            setSelectedIds([]);
+        } catch (err) {
+            console.error("Bulk status error:", err);
+            toast.error('حدث خطأ أثناء تعديل الحالة', { id: toastId });
+        } finally {
+            setIsProcessingBulk(false);
+        }
+    };
+
+    // 5. Bulk Archive
+    const handleBulkArchive = () => {
+        setConfirmModal({
+            isOpen: true,
+            title: "أرشفة الطلاب المحددين",
+            message: `هل أنت متأكد من نقل ${selectedIds.length} طالب إلى الأرشيف؟ يمكنك استعادتهم لاحقاً.`,
+            isDestructive: true,
+            onConfirm: async () => {
+                setIsProcessingBulk(true);
+                const toastId = toast.loading(`جاري أرشفة ${selectedIds.length} طالب...`);
+                try {
+                    const chunks = [];
+                    for (let i = 0; i < selectedIds.length; i += 400) {
+                        chunks.push(selectedIds.slice(i, i + 400));
+                    }
+                    for (const chunk of chunks) {
+                        const batch = writeBatch(db);
+                        chunk.forEach(id => {
+                            batch.update(doc(db, 'students', id), { active: false });
+                        });
+                        await batch.commit();
+                    }
+                    toast.success(`تم أرشفة ${selectedIds.length} طالب بنجاح!`, { id: toastId });
+                    setSelectedIds([]);
+                    setConfirmModal(prev => ({ ...prev, isOpen: false }));
+                } catch (err) {
+                    console.error("Bulk archive error:", err);
+                    toast.error('فشل نقل الطلاب للأرشيف', { id: toastId });
+                } finally {
+                    setIsProcessingBulk(false);
+                }
+            }
+        });
+    };
+
+    // 6. Bulk Export to Excel / CSV
+    const handleExportCSV = () => {
+        const selectedList = students.filter(s => selectedIds.includes(s.id));
+        if (selectedList.length === 0) return;
+
+        const headers = ["اسم الطالب", "الصف", "الشعبة", "الفصل الكامل", "نقاط التميز", "التخصصات", "تاريخ الانضمام"];
+        const rows = selectedList.map(s => [
+            `"${(s.name || '').replace(/"/g, '""')}"`,
+            `"${(s.grade || '').replace(/"/g, '""')}"`,
+            `"${(s.section || '').replace(/"/g, '""')}"`,
+            `"${(s.class || '').replace(/"/g, '""')}"`,
+            s.totalPoints || 0,
+            `"${(s.specializations || []).join('، ').replace(/"/g, '""')}"`,
+            s.joinedAt?.toDate ? s.joinedAt.toDate().toLocaleDateString('ar-SA') : '-'
+        ]);
+
+        const csvContent = "\uFEFF" + [headers.join(','), ...rows.map(r => r.join(','))].join('\r\n');
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.setAttribute('href', url);
+        link.setAttribute('download', `قائمة_الطلاب_المحددين_${new Date().toLocaleDateString('en-CA')}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        toast.success(`تم تصدير كشف ${selectedList.length} طالب إلى Excel بنجاح!`);
+    };
+
+    // 7. Bulk Consolidated Sheet Print
+    const handlePrintConsolidated = () => {
+        const selectedList = students.filter(s => selectedIds.includes(s.id));
+        if (selectedList.length === 0) return;
+
+        const schoolName = settings?.schoolName || 'ثانوية الملك عبدالله';
+        const currentDate = new Date().toLocaleDateString('ar-SA');
+
+        const iframe = document.createElement('iframe');
+        iframe.style.position = 'fixed';
+        iframe.style.right = '0';
+        iframe.style.bottom = '0';
+        iframe.style.width = '0';
+        iframe.style.height = '0';
+        iframe.style.border = 'none';
+        iframe.style.zIndex = '-9999';
+        document.body.appendChild(iframe);
+
+        const doc = iframe.contentWindow.document;
+        doc.open();
+
+        const rowsHtml = selectedList.map((st, idx) => `
+            <tr>
+                <td style="text-align: center; font-weight: bold;">${idx + 1}</td>
+                <td style="font-weight: bold;">${st.name}</td>
+                <td style="text-align: center;">${st.class || '-'}</td>
+                <td>${(st.specializations || []).join('، ') || 'عام'}</td>
+                <td style="text-align: center; font-weight: bold; color: #047857;">${st.totalPoints || 0}</td>
+                <td style="min-width: 120px;"></td>
+            </tr>
+        `).join('');
+
+        doc.write(`
+            <!DOCTYPE html>
+            <html dir="rtl" lang="ar">
+            <head>
+                <meta charset="UTF-8">
+                <title>كشف مجمّع لبيانات الطلاب</title>
+                <style>
+                    @page { size: A4 portrait; margin: 15mm; }
+                    * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; color: #111827; }
+                    .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #1e1b4b; padding-bottom: 12px; margin-bottom: 20px; }
+                    .header-side { font-size: 13px; line-height: 1.6; }
+                    .header-title { text-align: center; }
+                    .header-title h1 { margin: 0; font-size: 22px; color: #1e1b4b; }
+                    .header-title p { margin: 4px 0 0 0; font-size: 13px; color: #4b5563; }
+                    table { width: 100%; border-collapse: collapse; margin-bottom: 30px; font-size: 13px; }
+                    th, td { border: 1px solid #d1d5db; padding: 8px 10px; }
+                    th { background-color: #f3f4f6; color: #1f2937; font-weight: bold; }
+                    tr:nth-child(even) { background-color: #f9fafb; }
+                    .signatures { display: flex; justify-content: space-between; margin-top: 40px; padding: 0 30px; font-size: 14px; }
+                    .sig-box { text-align: center; width: 200px; }
+                    .sig-role { font-weight: bold; margin-bottom: 40px; color: #1f2937; }
+                    .sig-line { border-top: 1px dashed #9ca3af; padding-top: 5px; font-size: 12px; color: #6b7280; }
+                </style>
+            </head>
+            <body>
+                <div class="header">
+                    <div class="header-side">
+                        <div>المملكة العربية السعودية</div>
+                        <div>وزارة التعليم</div>
+                        <div>${schoolName}</div>
+                    </div>
+                    <div class="header-title">
+                        <h1>كشف بيانات الطلاب المشاركين</h1>
+                        <p>العدد الإجمالي: ${selectedList.length} طالب</p>
+                    </div>
+                    <div class="header-side" style="text-align: left;">
+                        <div>التاريخ: ${currentDate}</div>
+                        <div>قسم النشاط المدرسي</div>
+                    </div>
+                </div>
+
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 5%;">#</th>
+                            <th style="width: 30%;">اسم الطالب</th>
+                            <th style="width: 20%;">الصف / الشعبة</th>
+                            <th style="width: 25%;">التخصصات والأنشطة</th>
+                            <th style="width: 10%;">نقاط التميز</th>
+                            <th style="width: 10%;">ملاحظات والتوقيع</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rowsHtml}
+                    </tbody>
+                </table>
+
+                <div class="signatures">
+                    <div class="sig-box">
+                        <div class="sig-role">مشرف النشاط الطلابي</div>
+                        <div class="sig-line">التوقيع: .....................</div>
+                    </div>
+                    <div class="sig-box">
+                        <div class="sig-role">مدير المدرسة</div>
+                        <div class="sig-line">الختم والتوقيع: .....................</div>
+                    </div>
+                </div>
+            </body>
+            </html>
+        `);
+        doc.close();
+
+        setTimeout(() => {
+            iframe.contentWindow.focus();
+            iframe.contentWindow.print();
+            setTimeout(() => {
+                if (document.body.contains(iframe)) {
+                    document.body.removeChild(iframe);
+                }
+            }, 2000);
+        }, 600);
+    };
+
+    // 8. Bulk Detailed Records Print
+    const handlePrintDetailed = async () => {
+        const selectedList = students.filter(s => selectedIds.includes(s.id));
+        if (selectedList.length === 0) return;
+
+        const toastId = toast.loading(`جاري تجهيز سجلات ${selectedList.length} طالب للطباعة...`);
+        try {
+            const schoolName = settings?.schoolName || 'ثانوية الملك عبدالله';
+            const currentDate = new Date().toLocaleDateString('ar-SA');
+
+            const eventsSnap = await getDocs(query(collection(db, 'events'), orderBy('startTime', 'desc'), limit(150)));
+            const allEvents = eventsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+            const iframe = document.createElement('iframe');
+            iframe.style.position = 'fixed';
+            iframe.style.right = '0';
+            iframe.style.bottom = '0';
+            iframe.style.width = '0';
+            iframe.style.height = '0';
+            iframe.style.border = 'none';
+            iframe.style.zIndex = '-9999';
+            document.body.appendChild(iframe);
+
+            const doc = iframe.contentWindow.document;
+            doc.open();
+
+            const pagesHtml = selectedList.map(st => {
+                const studentEvents = allEvents.filter(e => e.participatingStudents && e.participatingStudents.includes(st.id));
+                const eventsRows = studentEvents.length > 0 ? studentEvents.map((evt, idx) => `
+                    <div class="row">
+                        <div class="cell w-5">${idx + 1}</div>
+                        <div class="cell w-45 bold">${evt.title}</div>
+                        <div class="cell w-20 dim">${evt.typeName || '-'}</div>
+                        <div class="cell w-15">${evt.date || (evt.startTime?.toDate ? evt.startTime.toDate().toLocaleDateString('en-GB') : '-')}</div>
+                        <div class="cell w-15 center"><span class="status ${evt.status === 'Done' ? 'success' : ''}">${evt.status === 'Done' ? 'مكتمل' : (evt.status || 'مجدول')}</span></div>
+                    </div>
+                `).join('') : '<div class="empty">لا توجد مشاركات مسجلة لهذا الطالب حتى الآن</div>';
+
+                const specsHtml = (st.specializations || []).map(sp => `<span class="badge">${sp === 'General' ? 'عام' : sp}</span>`).join(' ') || '<span style="color:#9ca3af">لا يوجد تخصيص</span>';
+
+                return `
+                    <div class="student-page">
+                        <div class="header">
+                            <div class="school-info">
+                                <div>المملكة العربية السعودية - وزارة التعليم</div>
+                                <div style="font-weight: bold; color: #4338ca;">${schoolName}</div>
+                            </div>
+                            <div class="report-title">
+                                <h2>الملف الفردي للطالب</h2>
+                                <p>تاريخ الاستخراج: ${currentDate}</p>
+                            </div>
+                        </div>
+
+                        <div class="profile-card">
+                            <div class="avatar">${st.name.charAt(0)}</div>
+                            <div class="student-meta">
+                                <h1>${st.name}</h1>
+                                <div class="meta-row">
+                                    <span>الفصل: <strong>${st.class || '-'}</strong></span>
+                                    <span>نقاط التميز: <strong class="points">${st.totalPoints || 0}</strong></span>
+                                    <span>تاريخ الانضمام: <strong>${st.joinedAt?.toDate ? st.joinedAt.toDate().toLocaleDateString('ar-SA') : '-'}</strong></span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="section-box">
+                            <h3>التخصصات والفرق المسجل بها</h3>
+                            <div>${specsHtml}</div>
+                        </div>
+
+                        <div class="section-box">
+                            <h3>سجل الأنشطة والمشاركات (${studentEvents.length})</h3>
+                            <div class="table">
+                                <div class="row head">
+                                    <div class="cell w-5">#</div>
+                                    <div class="cell w-45">النشاط</div>
+                                    <div class="cell w-20">النوع</div>
+                                    <div class="cell w-15">التاريخ</div>
+                                    <div class="cell w-15 center">الحالة</div>
+                                </div>
+                                ${eventsRows}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            doc.write(`
+                <!DOCTYPE html>
+                <html dir="rtl" lang="ar">
+                <head>
+                    <meta charset="UTF-8">
+                    <title>سجلات تفصيلية للطلاب</title>
+                    <style>
+                        @page { size: A4 portrait; margin: 12mm; }
+                        * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; color: #111827; }
+                        .student-page { page-break-after: always; min-height: 250mm; display: flex; flex-direction: column; }
+                        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #e5e7eb; padding-bottom: 10px; margin-bottom: 20px; }
+                        .school-info { font-size: 12px; line-height: 1.5; }
+                        .report-title { text-align: left; }
+                        .report-title h2 { margin: 0; font-size: 18px; color: #1e1b4b; }
+                        .report-title p { margin: 2px 0 0 0; font-size: 11px; color: #6b7280; }
+                        .profile-card { display: flex; align-items: center; gap: 15px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 12px; padding: 15px; margin-bottom: 20px; }
+                        .avatar { width: 50px; height: 50px; border-radius: 50%; background: #4f46e5; color: white; display: flex; align-items: center; justify-content: center; font-size: 22px; font-weight: bold; }
+                        .student-meta h1 { margin: 0 0 6px 0; font-size: 20px; color: #111827; }
+                        .meta-row { display: flex; gap: 20px; font-size: 13px; color: #4b5563; }
+                        .points { color: #059669; }
+                        .section-box { margin-bottom: 20px; }
+                        .section-box h3 { font-size: 14px; border-bottom: 1px solid #e5e7eb; padding-bottom: 5px; margin-bottom: 10px; color: #374151; }
+                        .badge { background: #e0e7ff; color: #4338ca; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin-left: 5px; }
+                        .table { border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; }
+                        .row { display: flex; border-bottom: 1px solid #e5e7eb; padding: 8px 10px; font-size: 12px; }
+                        .row.head { background: #f9fafb; font-weight: bold; color: #374151; }
+                        .row:last-child { border-bottom: none; }
+                        .cell { padding: 0 5px; }
+                        .w-5 { width: 5%; } .w-45 { width: 45%; } .w-20 { width: 20%; } .w-15 { width: 15%; }
+                        .bold { font-weight: bold; } .dim { color: #6b7280; } .center { text-align: center; }
+                        .status { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: #f3f4f6; color: #4b5563; }
+                        .status.success { background: #ecfdf5; color: #059669; }
+                        .empty { padding: 20px; text-align: center; color: #9ca3af; font-size: 12px; }
+                    </style>
+                </head>
+                <body>
+                    ${pagesHtml}
+                </body>
+                </html>
+            `);
+            doc.close();
+
+            setTimeout(() => {
+                toast.dismiss(toastId);
+                iframe.contentWindow.focus();
+                iframe.contentWindow.print();
+                setTimeout(() => {
+                    if (document.body.contains(iframe)) {
+                        document.body.removeChild(iframe);
+                    }
+                }, 2000);
+            }, 600);
+        } catch (err) {
+            console.error("Print detailed error:", err);
+            toast.error("فشل تجهيز السجلات للطباعة", { id: toastId });
+        }
+    };
+
+
     return (
         <div className="space-y-6 font-cairo h-full flex flex-col">
             {/* Header */}
@@ -393,6 +901,20 @@ export default function StudentsPage() {
                 <table className="w-full min-w-[700px] text-right bg-transparent">
                     <thead className="bg-black/20 text-gray-300 sticky top-0 backdrop-blur-md z-10">
                         <tr>
+                            <th className="p-4 w-12 text-center">
+                                <input
+                                    type="checkbox"
+                                    ref={el => {
+                                        if (el) {
+                                            el.indeterminate = isPartiallySelected && !isAllDisplayedSelected;
+                                        }
+                                    }}
+                                    checked={isAllDisplayedSelected && displayedStudents.length > 0}
+                                    onChange={toggleSelectAllHeader}
+                                    aria-label="تحديد جميع الطلاب الظاهرين"
+                                    className="w-4 h-4 rounded bg-white/10 border-white/20 text-indigo-600 focus:ring-indigo-500 cursor-pointer accent-indigo-600"
+                                />
+                            </th>
                             <th className="p-4 font-medium">اسم الطالب</th>
                             <th className="p-4 font-medium hidden md:table-cell">التخصصات</th>
                             <th className="p-4 font-medium hidden md:table-cell">الفصل</th>
@@ -406,8 +928,17 @@ export default function StudentsPage() {
                             <tr
                                 key={student.id}
                                 onClick={() => openProfile(student)}
-                                className="hover:bg-white/5 transition-colors group cursor-pointer"
+                                className={`hover:bg-white/5 transition-colors group cursor-pointer ${selectedIds.includes(student.id) ? 'bg-indigo-600/10' : ''}`}
                             >
+                                <td className="p-4 w-12 text-center" onClick={e => e.stopPropagation()}>
+                                    <input
+                                        type="checkbox"
+                                        checked={selectedIds.includes(student.id)}
+                                        onChange={() => toggleSelectStudent(student.id)}
+                                        aria-label={`تحديد الطالب ${student.name}`}
+                                        className="w-4 h-4 rounded bg-white/10 border-white/20 text-indigo-600 focus:ring-indigo-500 cursor-pointer accent-indigo-600"
+                                    />
+                                </td>
                                 <td className="p-4 text-white font-bold flex items-center">
                                     <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-600 to-purple-600 flex items-center justify-center text-sm font-bold ml-3 border border-white/10 shadow-lg">
                                         {student.name.charAt(0)}
@@ -713,6 +1244,45 @@ export default function StudentsPage() {
                 title={confirmModal.title}
                 message={confirmModal.message}
                 isDestructive={confirmModal.isDestructive}
+            />
+
+            {/* --- BULK ACTIONS FLOATING BAR & MODALS --- */}
+            <BulkActionsBar
+                selectedCount={selectedIds.length}
+                totalDisplayed={displayedStudents.length}
+                totalAll={students.length}
+                isAllDisplayedSelected={isAllDisplayedSelected}
+                onSelectAllDisplayed={handleSelectAllDisplayed}
+                onSelectAllSchool={handleSelectAllSchool}
+                onClearSelection={handleClearSelection}
+                onOpenOperationsModal={handleOpenOperationsModal}
+                onOpenCertificatesModal={() => setIsCertificatesModalOpen(true)}
+                onPrintConsolidated={handlePrintConsolidated}
+                onPrintDetailed={handlePrintDetailed}
+                onExportCSV={handleExportCSV}
+                onBulkArchive={handleBulkArchive}
+                isProcessing={isProcessingBulk}
+            />
+
+            <BulkOperationsModal
+                key={operationsInitialTab + (isOperationsModalOpen ? '_open' : '_closed')}
+                isOpen={isOperationsModalOpen}
+                onClose={() => setIsOperationsModalOpen(false)}
+                initialTab={operationsInitialTab}
+                selectedStudents={selectedStudentsList}
+                grades={grades}
+                eventTypes={eventTypes}
+                onApplyTransfer={handleBulkTransfer}
+                onApplySpecialization={handleBulkSpecialization}
+                onApplyPoints={handleBulkPoints}
+                onApplyStatus={handleBulkStatus}
+                isProcessing={isProcessingBulk}
+            />
+
+            <BulkPrintCertificatesModal
+                isOpen={isCertificatesModalOpen}
+                onClose={() => setIsCertificatesModalOpen(false)}
+                selectedStudents={selectedStudentsList}
             />
         </div>
     );
