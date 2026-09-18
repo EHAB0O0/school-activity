@@ -1,34 +1,39 @@
 import { useState } from 'react';
 import { ChevronLeft, Search, Check, X } from 'lucide-react';
 
-const MultiSelect = ({ label, options, selectedValues, onChange, placeholder, icon: Icon }) => {
+const MultiSelect = ({ label, options = [], selectedValues, value, onChange, placeholder, icon: Icon }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [search, setSearch] = useState('');
 
-    const filteredOptions = options.filter(opt =>
-        opt.label.toLowerCase().includes(search.toLowerCase())
+    const currentValues = Array.isArray(selectedValues) ? selectedValues : (Array.isArray(value) ? value : []);
+    const safeOptions = Array.isArray(options) ? options : [];
+
+    const filteredOptions = safeOptions.filter(opt =>
+        (opt?.label || '').toLowerCase().includes(search.toLowerCase())
     );
 
-    const toggleSelection = (value) => {
-        const newSelection = selectedValues.includes(value)
-            ? selectedValues.filter(v => v !== value)
-            : [...selectedValues, value];
+    const toggleSelection = (val) => {
+        const newSelection = currentValues.includes(val)
+            ? currentValues.filter(v => v !== val)
+            : [...currentValues, val];
         onChange(newSelection);
     };
 
     return (
         <div className="relative">
-            <label className="flex items-center gap-1.5 text-sm text-gray-400 mb-1">
-                {Icon && <Icon size={15} className="text-indigo-400" />}
-                <span>{label}</span>
-            </label>
+            {label && (
+                <label className="flex items-center gap-1.5 text-sm text-gray-400 mb-1">
+                    {Icon && <Icon size={15} className="text-indigo-400" />}
+                    <span>{label}</span>
+                </label>
+            )}
             <div
                 className="w-full bg-black/40 border border-white/10 rounded-xl p-3 text-white min-h-[46px] cursor-pointer flex flex-wrap gap-2 items-center hover:border-indigo-500/50 transition-colors"
                 onClick={() => setIsOpen(!isOpen)}
             >
-                {selectedValues.length === 0 && <span className="text-gray-500">{placeholder}</span>}
-                {selectedValues.map(val => {
-                    const opt = options.find(o => o.value === val);
+                {currentValues.length === 0 && <span className="text-gray-500">{placeholder}</span>}
+                {currentValues.map(val => {
+                    const opt = safeOptions.find(o => o.value === val);
                     return (
                         <span key={val} className="bg-indigo-600/40 text-indigo-200 px-2 py-0.5 rounded-lg text-xs flex items-center border border-indigo-500/30">
                             {opt?.label || val}
@@ -58,10 +63,10 @@ const MultiSelect = ({ label, options, selectedValues, onChange, placeholder, ic
                             <div
                                 key={opt.value}
                                 onClick={() => toggleSelection(opt.value)}
-                                className={`flex items-center p-2 rounded-lg cursor-pointer transition-colors ${selectedValues.includes(opt.value) ? 'bg-indigo-600/20 text-indigo-300' : 'hover:bg-white/5 text-gray-300'}`}
+                                className={`flex items-center p-2 rounded-lg cursor-pointer transition-colors ${currentValues.includes(opt.value) ? 'bg-indigo-600/20 text-indigo-300' : 'hover:bg-white/5 text-gray-300'}`}
                             >
-                                <div className={`w-4 h-4 rounded border flex items-center justify-center ml-3 ${selectedValues.includes(opt.value) ? 'bg-indigo-500 border-indigo-500' : 'border-gray-600'}`}>
-                                    {selectedValues.includes(opt.value) && <Check size={10} className="text-white" />}
+                                <div className={`w-4 h-4 rounded border flex items-center justify-center ml-3 ${currentValues.includes(opt.value) ? 'bg-indigo-500 border-indigo-500' : 'border-gray-600'}`}>
+                                    {currentValues.includes(opt.value) && <Check size={10} className="text-white" />}
                                 </div>
                                 <span>{opt.label}</span>
                             </div>

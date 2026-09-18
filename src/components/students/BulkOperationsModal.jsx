@@ -207,7 +207,7 @@ export default function BulkOperationsModal({
                                 <label className="block text-xs font-bold text-gray-300 mb-1.5">التخصصات والأنشطة:</label>
                                 <MultiSelect
                                     options={specOptions}
-                                    value={selectedSpecs}
+                                    selectedValues={selectedSpecs}
                                     onChange={setSelectedSpecs}
                                     placeholder="اختر تخصصاً واحداً أو أكثر..."
                                 />
