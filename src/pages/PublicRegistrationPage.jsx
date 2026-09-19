@@ -35,15 +35,15 @@ export default function PublicRegistrationPage() {
         grade: '',
         section: '',
         phone: '',
-        customFieldValue: ''
+        customValues: {}
     });
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     // Rapid Entry State (multi-row)
     const [rapidRows, setRapidRows] = useState([
-        { studentName: '', grade: '', section: '', customFieldValue: '', phone: '' },
-        { studentName: '', grade: '', section: '', customFieldValue: '', phone: '' },
-        { studentName: '', grade: '', section: '', customFieldValue: '', phone: '' }
+        { studentName: '', grade: '', section: '', customValues: {}, phone: '' },
+        { studentName: '', grade: '', section: '', customValues: {}, phone: '' },
+        { studentName: '', grade: '', section: '', customValues: {}, phone: '' }
     ]);
 
     // Submissions by this link listener
@@ -75,13 +75,9 @@ export default function PublicRegistrationPage() {
         return () => unsubscribe();
     }, [linkId]);
 
-    // 2. Fetch Submissions for this link (Real-time) - only after passcode verification if passcode is set
+    // 2. Real-time Submissions Listener (only attach if passcode is verified or not required)
     useEffect(() => {
-        if (!linkId) return;
-        if (linkData?.passcode && !isPasscodeVerified) {
-            setSubmissions([]);
-            return;
-        }
+        if (!linkId || !isPasscodeVerified) return;
 
         const q = query(
             collection(db, 'link_submissions'),
@@ -90,7 +86,6 @@ export default function PublicRegistrationPage() {
 
         const unsubscribe = onSnapshot(q, (snapshot) => {
             const list = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-            // Sort by createdAt descending
             list.sort((a, b) => {
                 const tA = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
                 const tB = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
@@ -98,11 +93,11 @@ export default function PublicRegistrationPage() {
             });
             setSubmissions(list);
         }, (err) => {
-            console.warn("Submissions fetch error:", err);
+            console.error("Error fetching submissions:", err);
         });
 
         return () => unsubscribe();
-    }, [linkId, linkData?.passcode, isPasscodeVerified]);
+    }, [linkId, isPasscodeVerified]);
 
     // Set default grade when linkData loads
     useEffect(() => {
@@ -118,20 +113,22 @@ export default function PublicRegistrationPage() {
     // Verify Passcode
     const handleVerifyPasscode = (e) => {
         e.preventDefault();
-        if (enteredPasscode.trim() === linkData?.passcode) {
+        if (enteredPasscode.trim() === linkData.passcode?.trim()) {
             setIsPasscodeVerified(true);
             setPasscodeError('');
-            toast.success("تم التحقق بنجاح");
+            toast.success("تم الدخول بنجاح");
         } else {
-            setPasscodeError("رمز المرور غير صحيح، يرجى مراجعة الطالب المفوض");
+            setPasscodeError("رمز المرور غير صحيح، يرجى التأكد من الرمز والمحاولة مجدداً.");
         }
     };
 
     if (loading) {
         return (
-            <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-white p-4 font-cairo">
-                <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mb-4" />
-                <p className="text-sm text-slate-400">جاري تحميل رابط التسجيل...</p>
+            <div className="min-h-screen bg-slate-950 flex items-center justify-center text-white">
+                <div className="flex flex-col items-center gap-3">
+                    <div className="w-10 h-10 border-3 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                    <span className="text-xs text-slate-400">جاري تحميل صفحة التسجيل...</span>
+                </div>
             </div>
         );
     }
@@ -139,13 +136,13 @@ export default function PublicRegistrationPage() {
     if (notFound || !linkData) {
         return (
             <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-white p-4 font-cairo text-right" dir="rtl">
-                <div className="bg-slate-900 border border-slate-800 p-8 rounded-3xl max-w-md w-full text-center shadow-2xl">
-                    <div className="w-16 h-16 bg-rose-500/10 border border-rose-500/30 rounded-2xl flex items-center justify-center mx-auto text-rose-400 mb-4">
-                        <AlertTriangle size={32} />
+                <div className="bg-slate-900 border border-slate-800 p-8 rounded-3xl max-w-md w-full shadow-2xl text-center space-y-4">
+                    <div className="w-16 h-16 bg-rose-500/10 border border-rose-500/30 rounded-2xl flex items-center justify-center mx-auto text-rose-400">
+                        <AlertCircle size={32} />
                     </div>
-                    <h2 className="text-xl font-bold text-white mb-2">الرابط غير موجود</h2>
-                    <p className="text-sm text-slate-400 leading-relaxed mb-6">
-                        عذراً، يبدو أن رابط التسجيل المطلوب غير صالح أو تم حذفه من قبل إدارة المدرسة.
+                    <h2 className="text-xl font-bold text-white">رابط التسجيل غير موجود</h2>
+                    <p className="text-xs text-slate-400 leading-relaxed">
+                        عذراً، هذا الرابط غير متاح أو قد تم حذفه من قِبل إدارة النشاط المدرسي. يرجى التواصل مع رائد النشاط أو الطالب المفوض.
                     </p>
                 </div>
             </div>
@@ -166,23 +163,29 @@ export default function PublicRegistrationPage() {
             .replace(/\s+/g, ' ');
     };
 
+    // Parse Custom Fields
+    const customFields = Array.isArray(linkData.customFields)
+        ? linkData.customFields
+        : (linkData.customFieldLabel ? [{ id: 'f_legacy', label: linkData.customFieldLabel, required: !!linkData.customFieldRequired }] : []);
+
     // Status checks
     const now = new Date();
     const isExpired = linkData.endAt && new Date(linkData.endAt) < now;
     const isNotStarted = linkData.startAt && new Date(linkData.startAt) > now;
     const isPaused = linkData.status === 'paused';
 
-    const maxCap = Number(linkData.maxCapacity) || 30;
+    const hasMaxCap = linkData.maxCapacity !== null && linkData.maxCapacity !== undefined && linkData.maxCapacity !== '' && Number(linkData.maxCapacity) > 0;
+    const maxCap = hasMaxCap ? Number(linkData.maxCapacity) : null;
     const approvedCount = submissions.filter(s => s.status === 'approved').length;
     const pendingCount = submissions.filter(s => s.status === 'pending').length;
     // In review mode, pending submissions occupy seats until reviewed; in immediate mode, approved count is used
     const activeCount = linkData.approvalMode === 'immediate' ? approvedCount : (approvedCount + pendingCount);
-    const isFull = activeCount >= maxCap;
+    const isFull = hasMaxCap ? activeCount >= maxCap : false;
     const canWaitlist = !!linkData.allowWaitlist;
 
     // Remaining Seats
-    const remainingSeats = Math.max(0, maxCap - activeCount);
-    const capacityPercent = Math.min(100, Math.round((activeCount / maxCap) * 100));
+    const remainingSeats = hasMaxCap ? Math.max(0, maxCap - activeCount) : null;
+    const capacityPercent = hasMaxCap ? Math.min(100, Math.round((activeCount / maxCap) * 100)) : 100;
 
     // Allowed grade options
     const gradeOptions = linkData.allowedGrades?.includes('all') || !linkData.allowedGrades?.length
@@ -254,9 +257,12 @@ export default function PublicRegistrationPage() {
             return;
         }
 
-        if (linkData.customFieldRequired && !singleForm.customFieldValue?.trim()) {
-            toast.error(`يرجى تحديد ${linkData.customFieldLabel || "الحقل المطلوب"}`);
-            return;
+        // Validate multiple custom fields
+        for (const field of customFields) {
+            if (field.required && !singleForm.customValues?.[field.id]?.trim()) {
+                toast.error(`يرجى تحديد ${field.label}`);
+                return;
+            }
         }
 
         const normInput = normalizeArabic(singleForm.studentName);
@@ -273,6 +279,9 @@ export default function PublicRegistrationPage() {
                 ? (canWaitlist ? 'waitlist' : 'rejected')
                 : (linkData.approvalMode === 'immediate' ? 'approved' : 'pending');
 
+            const customValues = singleForm.customValues || {};
+            const customFieldValue = Object.values(customValues).filter(Boolean).join(' | ');
+
             const payload = {
                 linkId: linkData.id,
                 studentName: singleForm.studentName.trim(),
@@ -280,7 +289,8 @@ export default function PublicRegistrationPage() {
                 section: singleForm.section || '1',
                 class: `${singleForm.grade || ''} / ${singleForm.section || '1'}`.trim(),
                 phone: singleForm.phone || '',
-                customFieldValue: singleForm.customFieldValue?.trim() || '',
+                customValues,
+                customFieldValue,
                 status: submissionStatus,
                 createdAt: serverTimestamp()
             };
@@ -304,7 +314,7 @@ export default function PublicRegistrationPage() {
                     ...prev,
                     studentName: '',
                     phone: '',
-                    customFieldValue: ''
+                    customValues: {}
                 }));
             } else {
                 setSingleForm({
@@ -312,7 +322,7 @@ export default function PublicRegistrationPage() {
                     grade: gradeOptions[0] || '',
                     section: '1',
                     phone: '',
-                    customFieldValue: ''
+                    customValues: {}
                 });
             }
         } catch (err) {
@@ -331,11 +341,14 @@ export default function PublicRegistrationPage() {
             return;
         }
 
-        if (linkData.customFieldRequired) {
-            const missingCustom = validRows.some(r => !r.customFieldValue?.trim());
-            if (missingCustom) {
-                toast.error(`يرجى تحديد ${linkData.customFieldLabel || "الحقل المطلوب"} لجميع الطلاب المدخلين`);
-                return;
+        // Validate multiple custom fields in rapid mode
+        for (const field of customFields) {
+            if (field.required) {
+                const missingCustom = validRows.some(r => !r.customValues?.[field.id]?.trim());
+                if (missingCustom) {
+                    toast.error(`يرجى تحديد "${field.label}" لجميع الطلاب المدخلين`);
+                    return;
+                }
             }
         }
 
@@ -343,17 +356,20 @@ export default function PublicRegistrationPage() {
         const toastId = toast.loading(`جاري حفظ ${validRows.length} طالب...`);
 
         try {
-            let seatsLeft = Math.max(0, maxCap - activeCount);
+            let seatsLeft = hasMaxCap ? Math.max(0, maxCap - activeCount) : 999999;
 
             for (const row of validRows) {
-                const rowIsFull = seatsLeft <= 0;
+                const rowIsFull = hasMaxCap && seatsLeft <= 0;
                 const submissionStatus = rowIsFull
                     ? (canWaitlist ? 'waitlist' : 'rejected')
                     : (linkData.approvalMode === 'immediate' ? 'approved' : 'pending');
 
-                if (!rowIsFull) {
+                if (hasMaxCap && !rowIsFull) {
                     seatsLeft--;
                 }
+
+                const customValues = row.customValues || {};
+                const customFieldValue = Object.values(customValues).filter(Boolean).join(' | ');
 
                 await addDoc(collection(db, 'link_submissions'), {
                     linkId: linkData.id,
@@ -362,7 +378,8 @@ export default function PublicRegistrationPage() {
                     section: row.section || '1',
                     class: `${row.grade || ''} / ${row.section || '1'}`.trim(),
                     phone: row.phone || '',
-                    customFieldValue: row.customFieldValue?.trim() || '',
+                    customValues,
+                    customFieldValue,
                     status: submissionStatus,
                     createdAt: serverTimestamp()
                 });
@@ -376,9 +393,9 @@ export default function PublicRegistrationPage() {
 
             toast.success("تم تسجيل جميع الطلاب بنجاح", { id: toastId });
             setRapidRows([
-                { studentName: '', grade: gradeOptions[0] || '', section: '1', customFieldValue: '', phone: '' },
-                { studentName: '', grade: gradeOptions[0] || '', section: '1', customFieldValue: '', phone: '' },
-                { studentName: '', grade: gradeOptions[0] || '', section: '1', customFieldValue: '', phone: '' }
+                { studentName: '', grade: gradeOptions[0] || '', section: '1', customValues: {}, phone: '' },
+                { studentName: '', grade: gradeOptions[0] || '', section: '1', customValues: {}, phone: '' },
+                { studentName: '', grade: gradeOptions[0] || '', section: '1', customValues: {}, phone: '' }
             ]);
         } catch (err) {
             console.error("Rapid submit error:", err);
@@ -409,12 +426,16 @@ export default function PublicRegistrationPage() {
         e.preventDefault();
         if (!editingSub) return;
         try {
+            const customValues = editingSub.customValues || {};
+            const customFieldValue = Object.values(customValues).filter(Boolean).join(' | ') || editingSub.customFieldValue || '';
+
             await updateDoc(doc(db, 'link_submissions', editingSub.id), {
                 studentName: editingSub.studentName,
                 grade: editingSub.grade,
                 section: editingSub.section,
                 class: `${editingSub.grade || ''} / ${editingSub.section || ''}`.trim(),
-                customFieldValue: editingSub.customFieldValue || '',
+                customValues,
+                customFieldValue,
                 phone: editingSub.phone || '',
                 status: editingSub.status,
                 linkId: linkData.id,
@@ -452,9 +473,9 @@ export default function PublicRegistrationPage() {
                             <span className="text-xs font-bold px-3 py-1 rounded-full bg-indigo-950 text-indigo-300 border border-indigo-800/60">
                                 استمارة تسجيل مشاركة
                             </span>
-                            {linkData.specialization && (
+                            {(linkData.specializations?.length > 0 || linkData.specialization) && (
                                 <span className="text-xs font-bold px-3 py-1 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
-                                    المجال: {linkData.specialization}
+                                    المجال: {Array.isArray(linkData.specializations) && linkData.specializations.length > 0 ? linkData.specializations.join('، ') : linkData.specialization}
                                 </span>
                             )}
                         </div>
@@ -502,10 +523,14 @@ export default function PublicRegistrationPage() {
                     <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-800/80 space-y-2">
                         <div className="flex items-center justify-between text-xs">
                             <span className="text-slate-400 font-semibold flex items-center gap-1.5">
-                                <Users size={14} /> الطاقة الاستيعابية للنشاط
+                                <Users size={14} /> {hasMaxCap ? "الطاقة الاستيعابية للنشاط" : "المشاركون في النشاط"}
                             </span>
                             <span className="font-bold text-white">
-                                {activeCount} من {maxCap} مقعد ({capacityPercent}%)
+                                {hasMaxCap ? (
+                                    <span>{activeCount} من {maxCap} مقعد ({capacityPercent}%)</span>
+                                ) : (
+                                    <span>{activeCount} مسجل (مفتوح بدون حد أقصى)</span>
+                                )}
                                 {linkData.approvalMode === 'review' && pendingCount > 0 && (
                                     <span className="text-amber-400 font-normal mr-1 text-[11px]">
                                         ({approvedCount} معتمد، {pendingCount} قيد المراجعة)
@@ -517,14 +542,20 @@ export default function PublicRegistrationPage() {
                         <div className="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden">
                             <div
                                 className={`h-full rounded-full transition-all duration-500 ${
-                                    capacityPercent >= 100 ? 'bg-rose-500' : capacityPercent >= 80 ? 'bg-amber-500' : 'bg-indigo-500'
+                                    !hasMaxCap
+                                        ? 'bg-gradient-to-r from-indigo-500 to-emerald-500'
+                                        : capacityPercent >= 100 ? 'bg-rose-500' : capacityPercent >= 80 ? 'bg-amber-500' : 'bg-indigo-500'
                                 }`}
-                                style={{ width: `${capacityPercent}%` }}
+                                style={{ width: hasMaxCap ? `${capacityPercent}%` : '100%' }}
                             />
                         </div>
 
                         <div className="flex justify-between text-[11px] text-slate-500 pt-1">
-                            <span>المقاعد المتبقية: <strong className="text-indigo-400">{remainingSeats}</strong></span>
+                            {hasMaxCap ? (
+                                <span>المقاعد المتبقية: <strong className="text-indigo-400">{remainingSeats}</strong></span>
+                            ) : (
+                                <span className="text-emerald-400 font-semibold">التسجيل متاح لجميع الطلاب بدون حد أقصى</span>
+                            )}
                             {isFull && canWaitlist && (
                                 <span className="text-blue-400 font-semibold">متاح التسجيل في قائمة الانتظار</span>
                             )}
@@ -659,34 +690,41 @@ export default function PublicRegistrationPage() {
                                     </div>
                                 </div>
 
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                                            {linkData.customFieldLabel || "نوع الطبق / الصنف / الدور"}
-                                            {linkData.customFieldRequired && <span className="text-rose-400 mr-1">*</span>}
-                                        </label>
-                                        <input
-                                            type="text"
-                                            required={linkData.customFieldRequired}
-                                            placeholder={`أدخل ${linkData.customFieldLabel || "الصنف أو الملاحظة"}...`}
-                                            value={singleForm.customFieldValue}
-                                            onChange={(e) => setSingleForm({ ...singleForm, customFieldValue: e.target.value })}
-                                            className="w-full px-4 py-3 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500 transition-colors"
-                                        />
+                                {/* Dynamic Custom Fields for Single Mode */}
+                                {customFields.length > 0 && (
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                        {customFields.map((field) => (
+                                            <div key={field.id}>
+                                                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                                                    {field.label} {field.required ? <span className="text-rose-400 mr-1">*</span> : <span className="text-slate-500 font-normal mr-1">(اختياري)</span>}
+                                                </label>
+                                                <input
+                                                    type="text"
+                                                    required={field.required}
+                                                    placeholder={`أدخل ${field.label}...`}
+                                                    value={singleForm.customValues?.[field.id] || ''}
+                                                    onChange={(e) => setSingleForm({
+                                                        ...singleForm,
+                                                        customValues: { ...(singleForm.customValues || {}), [field.id]: e.target.value }
+                                                    })}
+                                                    className="w-full px-4 py-3 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500 transition-colors"
+                                                />
+                                            </div>
+                                        ))}
                                     </div>
+                                )}
 
-                                    <div>
-                                        <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                                            رقم الجوال للتواصل (اختياري)
-                                        </label>
-                                        <input
-                                            type="tel"
-                                            placeholder="05xxxxxxxx"
-                                            value={singleForm.phone}
-                                            onChange={(e) => setSingleForm({ ...singleForm, phone: e.target.value })}
-                                            className="w-full px-4 py-3 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500 transition-colors font-mono"
-                                        />
-                                    </div>
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                                        رقم الجوال للتواصل (اختياري)
+                                    </label>
+                                    <input
+                                        type="tel"
+                                        placeholder="05xxxxxxxx"
+                                        value={singleForm.phone}
+                                        onChange={(e) => setSingleForm({ ...singleForm, phone: e.target.value })}
+                                        className="w-full px-4 py-3 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500 transition-colors font-mono"
+                                    />
                                 </div>
 
                                 <div className="pt-2 flex flex-col sm:flex-row gap-3">
@@ -760,17 +798,23 @@ export default function PublicRegistrationPage() {
                                                 className="w-16 px-2 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white text-center"
                                             />
 
-                                            <input
-                                                type="text"
-                                                placeholder={linkData.customFieldLabel || "المساهمة..."}
-                                                value={row.customFieldValue}
-                                                onChange={(e) => {
-                                                    const updated = [...rapidRows];
-                                                    updated[idx].customFieldValue = e.target.value;
-                                                    setRapidRows(updated);
-                                                }}
-                                                className="flex-1 min-w-[120px] px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white"
-                                            />
+                                            {customFields.map((field) => (
+                                                <input
+                                                    key={field.id}
+                                                    type="text"
+                                                    placeholder={`${field.label}${field.required ? ' *' : ''}`}
+                                                    value={row.customValues?.[field.id] || ''}
+                                                    onChange={(e) => {
+                                                        const updated = [...rapidRows];
+                                                        updated[idx].customValues = {
+                                                            ...(updated[idx].customValues || {}),
+                                                            [field.id]: e.target.value
+                                                        };
+                                                        setRapidRows(updated);
+                                                    }}
+                                                    className="flex-1 min-w-[110px] px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white"
+                                                />
+                                            ))}
 
                                             {rapidRows.length > 1 && (
                                                 <button
@@ -788,7 +832,7 @@ export default function PublicRegistrationPage() {
                                 <div className="flex items-center justify-between pt-2">
                                     <button
                                         type="button"
-                                        onClick={() => setRapidRows([...rapidRows, { studentName: '', grade: gradeOptions[0] || '', section: '1', customFieldValue: '', phone: '' }])}
+                                        onClick={() => setRapidRows([...rapidRows, { studentName: '', grade: gradeOptions[0] || '', section: '1', customValues: {}, phone: '' }])}
                                         className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors"
                                     >
                                         <Plus size={14} />
@@ -853,11 +897,20 @@ export default function PublicRegistrationPage() {
                                                     {sub.status === 'approved' ? 'معتمد' : sub.status === 'waitlist' ? 'قائمة انتظار' : 'بانتظار الاعتماد'}
                                                 </span>
                                             </div>
-                                            {sub.customFieldValue && (
-                                                <p className="text-xs text-indigo-300 mt-0.5">
-                                                    <span className="text-slate-500">{linkData.customFieldLabel || "المساهمة"}: </span>
-                                                    {sub.customFieldValue}
-                                                </p>
+                                            {/* Custom Fields Badges */}
+                                            {customFields.length > 0 && (
+                                                <div className="flex flex-wrap gap-1.5 mt-1">
+                                                    {customFields.map((f) => {
+                                                        const val = sub.customValues?.[f.id] || (f.id === 'f_legacy' ? sub.customFieldValue : '');
+                                                        if (!val) return null;
+                                                        return (
+                                                            <span key={f.id} className="text-[11px] px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-indigo-300">
+                                                                <span className="text-slate-400">{f.label}: </span>
+                                                                {val}
+                                                            </span>
+                                                        );
+                                                    })}
+                                                </div>
                                             )}
                                         </div>
                                     </div>
@@ -932,15 +985,24 @@ export default function PublicRegistrationPage() {
                                         />
                                     </div>
                                 </div>
-                                <div>
-                                    <label className="block text-xs text-slate-400 mb-1">{linkData.customFieldLabel || "المساهمة"}</label>
-                                    <input
-                                        type="text"
-                                        value={editingSub.customFieldValue || ''}
-                                        onChange={(e) => setEditingSub({ ...editingSub, customFieldValue: e.target.value })}
-                                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm"
-                                    />
-                                </div>
+
+                                {customFields.map((field) => (
+                                    <div key={field.id}>
+                                        <label className="block text-xs text-slate-400 mb-1">{field.label}</label>
+                                        <input
+                                            type="text"
+                                            value={editingSub.customValues?.[field.id] || (field.id === 'f_legacy' ? editingSub.customFieldValue : '') || ''}
+                                            onChange={(e) => setEditingSub({
+                                                ...editingSub,
+                                                customValues: {
+                                                    ...(editingSub.customValues || {}),
+                                                    [field.id]: e.target.value
+                                                }
+                                            })}
+                                            className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm"
+                                        />
+                                    </div>
+                                ))}
                                 <div>
                                     <label className="block text-xs text-slate-400 mb-1">رقم الجوال</label>
                                     <input

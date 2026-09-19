@@ -300,9 +300,10 @@ export default function RegistrationLinksPage() {
                     {filteredLinks.map((link) => {
                         const status = getLinkStatus(link);
                         const pendingCount = pendingCounts[link.id] || 0;
-                        const capacity = Number(link.maxCapacity) || 1;
+                        const hasCapacity = link.maxCapacity !== null && link.maxCapacity !== undefined && link.maxCapacity !== '' && Number(link.maxCapacity) > 0;
+                        const capacity = hasCapacity ? Number(link.maxCapacity) : null;
                         const current = Number(link.currentCount) || 0;
-                        const percent = Math.min(100, Math.round((current / capacity) * 100));
+                        const percent = hasCapacity ? Math.min(100, Math.round((current / capacity) * 100)) : 100;
 
                         return (
                             <div
@@ -370,7 +371,11 @@ export default function RegistrationLinksPage() {
                                         <div className="flex justify-between text-xs mb-1.5">
                                             <span className="text-slate-400 font-semibold">المقاعد المشغولة</span>
                                             <span className="font-bold text-white">
-                                                {current} / {capacity} مقعد ({percent}%)
+                                                {hasCapacity ? (
+                                                    <span>{current} / {capacity} مقعد ({percent}%)</span>
+                                                ) : (
+                                                    <span>{current} مسجل (مفتوح بدون حد)</span>
+                                                )}
                                                 {pendingCount > 0 && (
                                                     <span className="text-amber-400 text-[11px] font-normal mr-1">
                                                         (+{pendingCount} بانتظار الاعتماد)
@@ -381,9 +386,11 @@ export default function RegistrationLinksPage() {
                                         <div className="w-full h-2 bg-slate-900 rounded-full overflow-hidden border border-slate-800">
                                             <div
                                                 className={`h-full transition-all duration-300 rounded-full ${
-                                                    percent >= 100 ? 'bg-rose-500' : percent >= 80 ? 'bg-amber-500' : 'bg-indigo-500'
+                                                    !hasCapacity
+                                                        ? 'bg-gradient-to-r from-indigo-500 to-emerald-500'
+                                                        : percent >= 100 ? 'bg-rose-500' : percent >= 80 ? 'bg-amber-500' : 'bg-indigo-500'
                                                 }`}
-                                                style={{ width: `${percent}%` }}
+                                                style={{ width: hasCapacity ? `${percent}%` : '100%' }}
                                             />
                                         </div>
                                     </div>
@@ -391,7 +398,7 @@ export default function RegistrationLinksPage() {
                                     {/* Meta tags */}
                                     <div className="flex items-center gap-2 flex-wrap text-[11px] text-slate-400">
                                         <span className="bg-slate-900 px-2 py-0.5 rounded-md border border-slate-800">
-                                            المجال: {link.specialization || 'عام'}
+                                            المجال: {Array.isArray(link.specializations) && link.specializations.length > 0 ? link.specializations.join('، ') : (link.specialization || 'عام')}
                                         </span>
                                         {link.passcode && (
                                             <span className="bg-amber-950/40 text-amber-300 px-2 py-0.5 rounded-md border border-amber-800/40 flex items-center gap-1">

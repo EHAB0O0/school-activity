@@ -123,6 +123,16 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
         return map;
     }, [submissions, students]);
 
+    // Parse custom fields (backward compatible)
+    const customFields = Array.isArray(link?.customFields) && link.customFields.length > 0
+        ? link.customFields
+        : (link?.customFieldLabel ? [{ id: 'f_legacy', label: link.customFieldLabel, required: !!link.customFieldRequired }] : []);
+
+    // Parse specializations display
+    const specializationsDisplay = Array.isArray(link?.specializations) && link.specializations.length > 0
+        ? link.specializations.join('، ')
+        : (link?.specialization || 'عام');
+
     if (!isOpen || !link) return null;
 
     // Filtered Submissions
@@ -131,7 +141,8 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
             (sub.studentName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
             (sub.grade || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
             (sub.section || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-            (sub.customFieldValue || '').toLowerCase().includes(searchTerm.toLowerCase());
+            (sub.customFieldValue || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+            (sub.customValues && Object.values(sub.customValues).some(v => String(v).toLowerCase().includes(searchTerm.toLowerCase())));
 
         const matchesStatus = statusFilter === 'all' || sub.status === statusFilter;
         return matchesSearch && matchesStatus;
@@ -167,13 +178,17 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
 
             // If user wants to create a new profile in students collection
             if (!studentId && createProfile) {
+                const specializationsList = (Array.isArray(link.specializations) && link.specializations.length > 0)
+                    ? link.specializations
+                    : (link.specialization ? [link.specialization] : ['عام / جوكر']);
+
                 const newStudentRef = await addDoc(collection(db, 'students'), {
                     name: sub.studentName,
                     grade: sub.grade || '',
                     section: sub.section || '',
                     class: `${sub.grade || ''} / ${sub.section || ''}`.trim(),
                     phone: sub.phone || '',
-                    specializations: link.specialization ? [link.specialization] : ['عام / جوكر'],
+                    specializations: specializationsList,
                     totalPoints: points,
                     active: true,
                     joinedAt: serverTimestamp(),
@@ -339,6 +354,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                 section: editingSubmission.section,
                 class: `${editingSubmission.grade || ''} / ${editingSubmission.section || ''}`.trim(),
                 phone: editingSubmission.phone || '',
+                customValues: editingSubmission.customValues || {},
                 customFieldValue: editingSubmission.customFieldValue || '',
                 updatedAt: serverTimestamp()
             });
@@ -356,18 +372,28 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
             return;
         }
 
+        const customHeaders = customFields.length > 0
+            ? customFields.map(f => f.label)
+            : [link.customFieldLabel || "الملاحظة/الصنف"];
+
         const data = [
-            ["م", "اسم الطالب", "المرحلة", "الشعبة", link.customFieldLabel || "الملاحظة/الصنف", "رقم الجوال", "الحالة", "تاريخ الإدخال"],
-            ...submissions.map((s, idx) => [
-                idx + 1,
-                s.studentName || '',
-                s.grade || '',
-                s.section || '',
-                s.customFieldValue || '',
-                s.phone || '',
-                s.status === 'approved' ? 'معتمد' : s.status === 'pending' ? 'بانتظار المراجعة' : s.status === 'waitlist' ? 'قائمة انتظار' : 'مرفوض',
-                s.createdAt?.toDate ? s.createdAt.toDate().toLocaleDateString('ar-SA') : ''
-            ])
+            ["م", "اسم الطالب", "المرحلة", "الشعبة", ...customHeaders, "رقم الجوال", "الحالة", "تاريخ الإدخال"],
+            ...submissions.map((s, idx) => {
+                const customVals = customFields.length > 0
+                    ? customFields.map(f => s.customValues?.[f.id] || (f.id === 'f_legacy' ? s.customFieldValue : '') || (customFields.length === 1 ? s.customFieldValue : '') || '-')
+                    : [s.customFieldValue || '-'];
+
+                return [
+                    idx + 1,
+                    s.studentName || '',
+                    s.grade || '',
+                    s.section || '',
+                    ...customVals,
+                    s.phone || '',
+                    s.status === 'approved' ? 'معتمد' : s.status === 'pending' ? 'بانتظار المراجعة' : s.status === 'waitlist' ? 'قائمة انتظار' : 'مرفوض',
+                    s.createdAt?.toDate ? s.createdAt.toDate().toLocaleDateString('ar-SA') : ''
+                ];
+            })
         ];
 
         const ws = XLSX.utils.aoa_to_sheet(data);
@@ -396,16 +422,26 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
         const docIframe = iframe.contentWindow.document;
         docIframe.open();
 
-        const rowsHtml = submissions.map((s, idx) => `
-            <tr>
-                <td style="text-align:center;">${idx + 1}</td>
-                <td style="font-weight:bold;">${s.studentName || ''}</td>
-                <td style="text-align:center;">${s.grade || ''} / ${s.section || ''}</td>
-                <td>${s.customFieldValue || '-'}</td>
-                <td style="text-align:center;">${s.status === 'approved' ? 'معتمد' : s.status === 'pending' ? 'بانتظار الاعتماد' : s.status === 'waitlist' ? 'انتظار' : 'مرفوض'}</td>
-                <td style="width:120px; border-bottom: 1px dotted #94a3b8;"></td>
-            </tr>
-        `).join('');
+        const customThs = customFields.length > 0
+            ? customFields.map(f => `<th>${f.label}</th>`).join('')
+            : `<th>${link.customFieldLabel || "البيان / المساهمة"}</th>`;
+
+        const rowsHtml = submissions.map((s, idx) => {
+            const customTds = customFields.length > 0
+                ? customFields.map(f => `<td>${s.customValues?.[f.id] || (f.id === 'f_legacy' ? s.customFieldValue : '') || (customFields.length === 1 ? s.customFieldValue : '') || '-'}</td>`).join('')
+                : `<td>${s.customFieldValue || '-'}</td>`;
+
+            return `
+                <tr>
+                    <td style="text-align:center;">${idx + 1}</td>
+                    <td style="font-weight:bold;">${s.studentName || ''}</td>
+                    <td style="text-align:center;">${s.grade || ''} / ${s.section || ''}</td>
+                    ${customTds}
+                    <td style="text-align:center;">${s.status === 'approved' ? 'معتمد' : s.status === 'pending' ? 'بانتظار الاعتماد' : s.status === 'waitlist' ? 'انتظار' : 'مرفوض'}</td>
+                    <td style="width:120px; border-bottom: 1px dotted #94a3b8;"></td>
+                </tr>
+            `;
+        }).join('');
 
         docIframe.write(`
             <!DOCTYPE html>
@@ -449,8 +485,8 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
 
                 <div class="meta-bar">
                     <div>إشراف الطالب المفوض: <strong>${link.delegateName}</strong></div>
-                    <div>المجال: <strong>${link.specialization || 'عام'}</strong></div>
-                    <div>الحد الأقصى: <strong>${link.maxCapacity} مقعد</strong></div>
+                    <div>المجال: <strong>${specializationsDisplay}</strong></div>
+                    <div>الحد الأقصى: <strong>${link.maxCapacity ? `${link.maxCapacity} مقعد` : 'غير محدود (مفتوح)'}</strong></div>
                 </div>
 
                 <table>
@@ -459,7 +495,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                             <th style="width:40px;">#</th>
                             <th>اسم الطالب</th>
                             <th style="width:110px;">الصف والشعبة</th>
-                            <th>${link.customFieldLabel || "البيان / المساهمة"}</th>
+                            ${customThs}
                             <th style="width:90px;">الحالة</th>
                             <th style="width:130px;">توقيع الاستلام / الحضور</th>
                         </tr>
@@ -536,7 +572,9 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                     <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-2">
                         <div className="bg-slate-900/80 p-2.5 rounded-xl border border-slate-700/60 text-center">
                             <span className="text-[11px] text-slate-400 block">الإجمالي / المقاعد</span>
-                            <span className="text-sm font-black text-white">{counts.total} / {link.maxCapacity}</span>
+                            <span className="text-sm font-black text-white">
+                                {counts.total} {link.maxCapacity ? `/ ${link.maxCapacity}` : '(مفتوح)'}
+                            </span>
                         </div>
                         <div className="bg-amber-950/30 p-2.5 rounded-xl border border-amber-800/40 text-center">
                             <span className="text-[11px] text-amber-300 block">بانتظار المراجعة</span>
@@ -743,13 +781,26 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                                         </span>
                                                     </div>
 
-                                                    {/* Custom Field and Phone */}
+                                                    {/* Custom Fields and Phone */}
                                                     <div className="flex items-center gap-4 text-xs text-slate-400 pt-1 flex-wrap">
-                                                        {sub.customFieldValue && (
-                                                            <div>
-                                                                <span className="text-slate-500">{link.customFieldLabel || "المساهمة"}: </span>
-                                                                <span className="text-indigo-300 font-semibold">{sub.customFieldValue}</span>
-                                                            </div>
+                                                        {customFields.length > 0 ? (
+                                                            customFields.map(f => {
+                                                                const val = sub.customValues?.[f.id] || (f.id === 'f_legacy' ? sub.customFieldValue : '') || (customFields.length === 1 ? sub.customFieldValue : null);
+                                                                if (!val) return null;
+                                                                return (
+                                                                    <div key={f.id}>
+                                                                        <span className="text-slate-500">{f.label}: </span>
+                                                                        <span className="text-indigo-300 font-semibold">{val}</span>
+                                                                    </div>
+                                                                );
+                                                            })
+                                                        ) : (
+                                                            sub.customFieldValue && (
+                                                                <div>
+                                                                    <span className="text-slate-500">المساهمة: </span>
+                                                                    <span className="text-indigo-300 font-semibold">{sub.customFieldValue}</span>
+                                                                </div>
+                                                            )
                                                         )}
                                                         {sub.phone && (
                                                             <div>
@@ -798,7 +849,10 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                                 )}
 
                                                 <button
-                                                    onClick={() => setEditingSubmission(sub)}
+                                                    onClick={() => setEditingSubmission({
+                                                        ...sub,
+                                                        customValues: { ...(sub.customValues || {}) }
+                                                    })}
                                                     className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"
                                                     title="تعديل البيانات"
                                                 >
@@ -857,15 +911,44 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                         />
                                     </div>
                                 </div>
-                                <div>
-                                    <label className="block text-xs text-slate-400 mb-1">{link.customFieldLabel || "المساهمة / الصنف"}</label>
-                                    <input
-                                        type="text"
-                                        value={editingSubmission.customFieldValue || ''}
-                                        onChange={(e) => setEditingSubmission({ ...editingSubmission, customFieldValue: e.target.value })}
-                                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm"
-                                    />
-                                </div>
+                                {customFields.length > 0 ? (
+                                    customFields.map(field => (
+                                        <div key={field.id}>
+                                            <label className="block text-xs text-slate-400 mb-1">
+                                                {field.label} {field.required && <span className="text-rose-400">*</span>}
+                                            </label>
+                                            <input
+                                                type="text"
+                                                required={field.required}
+                                                value={editingSubmission.customValues?.[field.id] ?? (field.id === 'f_legacy' ? editingSubmission.customFieldValue : '') ?? ''}
+                                                onChange={(e) => {
+                                                    const newValues = {
+                                                        ...(editingSubmission.customValues || {}),
+                                                        [field.id]: e.target.value
+                                                    };
+                                                    setEditingSubmission({
+                                                        ...editingSubmission,
+                                                        customValues: newValues,
+                                                        customFieldValue: Object.values(newValues).filter(Boolean).join(' | ')
+                                                    });
+                                                }}
+                                                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm"
+                                            />
+                                        </div>
+                                    ))
+                                ) : (
+                                    editingSubmission.customFieldValue && (
+                                        <div>
+                                            <label className="block text-xs text-slate-400 mb-1">المساهمة / البيان</label>
+                                            <input
+                                                type="text"
+                                                value={editingSubmission.customFieldValue || ''}
+                                                onChange={(e) => setEditingSubmission({ ...editingSubmission, customFieldValue: e.target.value })}
+                                                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm"
+                                            />
+                                        </div>
+                                    )
+                                )}
                                 <div>
                                     <label className="block text-xs text-slate-400 mb-1">رقم الجوال</label>
                                     <input
