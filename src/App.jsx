@@ -9,6 +9,8 @@ import AssetsPage from './pages/AssetsPage';
 import SettingsPage from './pages/SettingsPage';
 import ReportsPage from './pages/ReportsPage';
 import PublicView from './pages/PublicView';
+import RegistrationLinksPage from './pages/RegistrationLinksPage';
+import PublicRegistrationPage from './pages/PublicRegistrationPage';
 
 import NotificationManager from './components/NotificationManager';
 import LoadingScreen from './components/ui/LoadingScreen';
@@ -25,6 +27,7 @@ function App() {
       <Routes>
         <Route path="/view" element={<PublicView />} />
         <Route path="/login" element={<Login />} />
+        <Route path="/register/:linkId" element={<PublicRegistrationPage />} />
 
         <Route path="/" element={
           <PrivateRoute>
@@ -34,6 +37,7 @@ function App() {
         }>
           <Route index element={<Dashboard />} />
           <Route path="scheduler" element={<Scheduler />} />
+          <Route path="registration-links" element={<RegistrationLinksPage />} />
           <Route path="students" element={<StudentsPage />} />
           <Route path="assets" element={<AssetsPage />} />
           <Route path="reports" element={<ReportsPage />} />

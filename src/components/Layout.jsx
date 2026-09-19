@@ -1,18 +1,34 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Outlet, useLocation, Link, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Users, Calendar, LogOut, Menu, Box, FileText, Lock, Mail, Settings } from 'lucide-react';
+import { LayoutDashboard, Users, Calendar, LogOut, Menu, Box, FileText, Lock, Mail, Settings, Link2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { sendPasswordResetEmail } from 'firebase/auth';
-import { auth } from '../firebase';
+import { auth, db } from '../firebase';
+import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 
 import AppLogo from './ui/AppLogo';
 
 export default function Layout() {
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+    const [pendingSubmissionsCount, setPendingSubmissionsCount] = useState(0);
     const { logout, currentUser, isEmergency } = useAuth();
     const location = useLocation();
     const navigate = useNavigate();
+
+    // Live listener for pending submissions badge
+    useEffect(() => {
+        const q = query(
+            collection(db, 'link_submissions'),
+            where('status', '==', 'pending')
+        );
+        const unsubscribe = onSnapshot(q, (snap) => {
+            setPendingSubmissionsCount(snap.size);
+        }, (err) => {
+            console.warn("Layout pending count error:", err);
+        });
+        return () => unsubscribe();
+    }, []);
 
     // Close sidebar on route change (Mobile UX)
     const [prevPath, setPrevPath] = useState(location.pathname);
@@ -42,6 +58,7 @@ export default function Layout() {
     const navItems = [
         { path: '/', label: 'لوحة التحكم', icon: LayoutDashboard },
         { path: '/scheduler', label: 'الجدول والأنشطة', icon: Calendar },
+        { path: '/registration-links', label: 'روابط التسجيل', icon: Link2, badge: pendingSubmissionsCount },
         { path: '/students', label: 'الطلاب والنقاط', icon: Users },
         { path: '/assets', label: 'الموارد والقاعات', icon: Box },
         { path: '/reports', label: 'التقارير', icon: FileText },
@@ -122,15 +139,22 @@ export default function Layout() {
                             <Link
                                 key={item.path}
                                 to={item.path}
-                                className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 group
+                                className={`flex items-center justify-between px-4 py-3 rounded-xl transition-all duration-200 group
                                     ${isActive
                                         ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/30'
                                         : 'text-slate-400 hover:bg-slate-700/50 hover:text-white'
                                     }
                                 `}
                             >
-                                <item.icon size={20} className={isActive ? 'text-white' : 'text-slate-400 group-hover:text-white transition-colors'} />
-                                <span className="font-semibold">{item.label}</span>
+                                <div className="flex items-center gap-3">
+                                    <item.icon size={20} className={isActive ? 'text-white' : 'text-slate-400 group-hover:text-white transition-colors'} />
+                                    <span className="font-semibold">{item.label}</span>
+                                </div>
+                                {item.badge > 0 && (
+                                    <span className="px-2 py-0.5 rounded-full text-[11px] font-black bg-amber-500 text-slate-950 animate-pulse">
+                                        {item.badge}
+                                    </span>
+                                )}
                             </Link>
                         );
                     })}
