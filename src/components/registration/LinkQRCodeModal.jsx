@@ -171,11 +171,15 @@ export default function LinkQRCodeModal({ isOpen, onClose, link }) {
         `);
         doc.close();
 
-        iframe.contentWindow.focus();
         setTimeout(() => {
+            iframe.contentWindow.focus();
             iframe.contentWindow.print();
-            document.body.removeChild(iframe);
-        }, 500);
+            setTimeout(() => {
+                if (document.body.contains(iframe)) {
+                    document.body.removeChild(iframe);
+                }
+            }, 2000);
+        }, 600);
     };
 
     return (

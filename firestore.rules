@@ -63,15 +63,16 @@ service cloud.firestore {
       );
     }
 
-    // Link Submissions Collection: Public delegates register and manage pending entries, staff full control
+    // Link Submissions Collection: Public delegates register and manage entries, staff full control
     match /link_submissions/{submissionId} {
       allow read: if true;
       allow create: if request.resource.data.linkId is string
                     && request.resource.data.studentName is string;
       allow update: if isAuthenticated()
-                    || (resource.data.status == 'pending' && request.resource.data.status == 'pending');
+                    || (request.resource.data.status == resource.data.status
+                        && request.resource.data.linkId == resource.data.linkId);
       allow delete: if isAuthenticated()
-                    || (resource.data.status == 'pending');
+                    || resource.data.status in ['pending', 'waitlist', 'approved'];
     }
 
     // Default deny all other collections

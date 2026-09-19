@@ -75,9 +75,13 @@ export default function PublicRegistrationPage() {
         return () => unsubscribe();
     }, [linkId]);
 
-    // 2. Fetch Submissions for this link (Real-time)
+    // 2. Fetch Submissions for this link (Real-time) - only after passcode verification if passcode is set
     useEffect(() => {
         if (!linkId) return;
+        if (linkData?.passcode && !isPasscodeVerified) {
+            setSubmissions([]);
+            return;
+        }
 
         const q = query(
             collection(db, 'link_submissions'),
@@ -98,7 +102,7 @@ export default function PublicRegistrationPage() {
         });
 
         return () => unsubscribe();
-    }, [linkId]);
+    }, [linkId, linkData?.passcode, isPasscodeVerified]);
 
     // Set default grade when linkData loads
     useEffect(() => {
@@ -148,6 +152,20 @@ export default function PublicRegistrationPage() {
         );
     }
 
+    // Arabic string normalization helper
+    const normalizeArabic = (str) => {
+        if (!str) return '';
+        return str
+            .trim()
+            .toLowerCase()
+            .replace(/[\u064B-\u065F\u0670]/g, '')
+            .replace(/[أإآٱ]/g, 'ا')
+            .replace(/ة/g, 'ه')
+            .replace(/ى/g, 'ي')
+            .replace(/\u0640/g, '')
+            .replace(/\s+/g, ' ');
+    };
+
     // Status checks
     const now = new Date();
     const isExpired = linkData.endAt && new Date(linkData.endAt) < now;
@@ -155,13 +173,16 @@ export default function PublicRegistrationPage() {
     const isPaused = linkData.status === 'paused';
 
     const maxCap = Number(linkData.maxCapacity) || 30;
-    const currentApprovedCount = submissions.filter(s => s.status === 'approved').length;
-    const isFull = currentApprovedCount >= maxCap;
-    const canWaitlist = linkData.allowWaitlist;
+    const approvedCount = submissions.filter(s => s.status === 'approved').length;
+    const pendingCount = submissions.filter(s => s.status === 'pending').length;
+    // In review mode, pending submissions occupy seats until reviewed; in immediate mode, approved count is used
+    const activeCount = linkData.approvalMode === 'immediate' ? approvedCount : (approvedCount + pendingCount);
+    const isFull = activeCount >= maxCap;
+    const canWaitlist = !!linkData.allowWaitlist;
 
     // Remaining Seats
-    const remainingSeats = Math.max(0, maxCap - currentApprovedCount);
-    const capacityPercent = Math.min(100, Math.round((currentApprovedCount / maxCap) * 100));
+    const remainingSeats = Math.max(0, maxCap - activeCount);
+    const capacityPercent = Math.min(100, Math.round((activeCount / maxCap) * 100));
 
     // Allowed grade options
     const gradeOptions = linkData.allowedGrades?.includes('all') || !linkData.allowedGrades?.length
@@ -238,6 +259,14 @@ export default function PublicRegistrationPage() {
             return;
         }
 
+        const normInput = normalizeArabic(singleForm.studentName);
+        const isDupInLink = submissions.some(s => normalizeArabic(s.studentName) === normInput);
+        if (isDupInLink) {
+            if (!window.confirm(`تنبيه: الطالب "${singleForm.studentName.trim()}" مسجل مسبقاً في هذا الرابط. هل ترغب في المتابعة وتأكيد تسجيله مرة أخرى؟`)) {
+                return;
+            }
+        }
+
         setIsSubmitting(true);
         try {
             const submissionStatus = isFull
@@ -302,14 +331,29 @@ export default function PublicRegistrationPage() {
             return;
         }
 
+        if (linkData.customFieldRequired) {
+            const missingCustom = validRows.some(r => !r.customFieldValue?.trim());
+            if (missingCustom) {
+                toast.error(`يرجى تحديد ${linkData.customFieldLabel || "الحقل المطلوب"} لجميع الطلاب المدخلين`);
+                return;
+            }
+        }
+
         setIsSubmitting(true);
         const toastId = toast.loading(`جاري حفظ ${validRows.length} طالب...`);
 
         try {
+            let seatsLeft = Math.max(0, maxCap - activeCount);
+
             for (const row of validRows) {
-                const submissionStatus = isFull
+                const rowIsFull = seatsLeft <= 0;
+                const submissionStatus = rowIsFull
                     ? (canWaitlist ? 'waitlist' : 'rejected')
                     : (linkData.approvalMode === 'immediate' ? 'approved' : 'pending');
+
+                if (!rowIsFull) {
+                    seatsLeft--;
+                }
 
                 await addDoc(collection(db, 'link_submissions'), {
                     linkId: linkData.id,
@@ -344,12 +388,17 @@ export default function PublicRegistrationPage() {
         }
     };
 
-    // Delete Submission (by delegate if pending)
-    const handleDeleteSubmission = async (subId) => {
-        if (!window.confirm("هل أنت متأكد من حذف هذا الاسم؟")) return;
+    // Delete Submission (by delegate)
+    const handleDeleteSubmission = async (sub) => {
+        if (!window.confirm(`هل أنت متأكد من حذف اسم الطالب "${sub.studentName}"؟`)) return;
         try {
-            await deleteDoc(doc(db, 'link_submissions', subId));
-            toast.success("تم حذف الاسم");
+            await deleteDoc(doc(db, 'link_submissions', sub.id));
+            if (sub.status === 'approved') {
+                await updateDoc(doc(db, 'registration_links', linkData.id), {
+                    currentCount: increment(-1)
+                }).catch(console.warn);
+            }
+            toast.success("تم حذف الاسم بنجاح");
         } catch (err) {
             toast.error("فشل في الحذف: " + err.message);
         }
@@ -367,12 +416,15 @@ export default function PublicRegistrationPage() {
                 class: `${editingSub.grade || ''} / ${editingSub.section || ''}`.trim(),
                 customFieldValue: editingSub.customFieldValue || '',
                 phone: editingSub.phone || '',
+                status: editingSub.status,
+                linkId: linkData.id,
                 updatedAt: serverTimestamp()
             });
             toast.success("تم تحديث البيانات");
             setEditingSub(null);
-        } catch {
-            toast.error("فشل في الحفظ");
+        } catch (err) {
+            console.error("Save edit error:", err);
+            toast.error("فشل في الحفظ: " + err.message);
         }
     };
 
@@ -453,7 +505,12 @@ export default function PublicRegistrationPage() {
                                 <Users size={14} /> الطاقة الاستيعابية للنشاط
                             </span>
                             <span className="font-bold text-white">
-                                {currentApprovedCount} من {maxCap} مقعد ({capacityPercent}%)
+                                {activeCount} من {maxCap} مقعد ({capacityPercent}%)
+                                {linkData.approvalMode === 'review' && pendingCount > 0 && (
+                                    <span className="text-amber-400 font-normal mr-1 text-[11px]">
+                                        ({approvedCount} معتمد، {pendingCount} قيد المراجعة)
+                                    </span>
+                                )}
                             </span>
                         </div>
 
@@ -816,7 +873,7 @@ export default function PublicRegistrationPage() {
                                                 <Edit2 size={14} />
                                             </button>
                                             <button
-                                                onClick={() => handleDeleteSubmission(sub.id)}
+                                                onClick={() => handleDeleteSubmission(sub)}
                                                 className="p-2 text-slate-400 hover:text-rose-400 hover:bg-slate-700 rounded-lg transition-colors"
                                                 title="حذف"
                                             >

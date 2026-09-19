@@ -7,7 +7,7 @@ import {
 import { db } from '../firebase';
 import {
     collection, query, onSnapshot, doc, updateDoc,
-    deleteDoc, increment, where
+    increment, where, getDocs, writeBatch
 } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import CreateLinkModal from '../components/registration/CreateLinkModal';
@@ -123,15 +123,21 @@ export default function RegistrationLinksPage() {
         }
     };
 
-    // Delete Link
+    // Delete Link and all associated submissions (clean up orphaned submissions)
     const handleDeleteLink = async (linkId, e) => {
         e.stopPropagation();
-        if (!window.confirm("هل أنت متأكد من حذف رابط التسجيل؟ سيتم حذف الرابط والبيانات المرتبطة به.")) return;
+        if (!window.confirm("هل أنت متأكد من حذف رابط التسجيل؟ سيتم حذف الرابط وجميع المشاركات المرتبطة به نهائياً.")) return;
 
         try {
-            await deleteDoc(doc(db, 'registration_links', linkId));
-            toast.success("تم حذف الرابط بنجاح");
+            const subsSnap = await getDocs(query(collection(db, 'link_submissions'), where('linkId', '==', linkId)));
+            const batch = writeBatch(db);
+            subsSnap.docs.forEach(d => batch.delete(d.ref));
+            batch.delete(doc(db, 'registration_links', linkId));
+            await batch.commit();
+
+            toast.success("تم حذف الرابط وجميع سجلاته بنجاح");
         } catch (err) {
+            console.error("Delete link error:", err);
             toast.error("فشل في حذف الرابط: " + err.message);
         }
     };
@@ -365,6 +371,11 @@ export default function RegistrationLinksPage() {
                                             <span className="text-slate-400 font-semibold">المقاعد المشغولة</span>
                                             <span className="font-bold text-white">
                                                 {current} / {capacity} مقعد ({percent}%)
+                                                {pendingCount > 0 && (
+                                                    <span className="text-amber-400 text-[11px] font-normal mr-1">
+                                                        (+{pendingCount} بانتظار الاعتماد)
+                                                    </span>
+                                                )}
                                             </span>
                                         </div>
                                         <div className="w-full h-2 bg-slate-900 rounded-full overflow-hidden border border-slate-800">

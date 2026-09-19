@@ -76,27 +76,47 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
         }
     }, [submissions, link?.id, link?.currentCount, loading, onLinkUpdated]);
 
+    // Arabic normalization helper
+    const normalizeArabic = (str) => {
+        if (!str) return '';
+        return str
+            .trim()
+            .toLowerCase()
+            .replace(/[\u064B-\u065F\u0670]/g, '')
+            .replace(/[أإآٱ]/g, 'ا')
+            .replace(/ة/g, 'ه')
+            .replace(/ى/g, 'ي')
+            .replace(/\u0640/g, '')
+            .replace(/\s+/g, ' ');
+    };
+
     // Duplicate Detection Logic
     const duplicateMap = useMemo(() => {
         const map = {};
         const nameCountInLink = {};
 
         submissions.forEach(sub => {
-            const normName = sub.studentName?.trim().toLowerCase();
+            const normName = normalizeArabic(sub.studentName);
             nameCountInLink[normName] = (nameCountInLink[normName] || 0) + 1;
         });
 
         submissions.forEach(sub => {
-            const normName = sub.studentName?.trim().toLowerCase();
+            const normName = normalizeArabic(sub.studentName);
             const matchedExisting = students.find(s =>
-                s.name?.trim().toLowerCase() === normName &&
-                (s.grade === sub.grade || s.class?.includes(sub.grade))
+                normalizeArabic(s.name) === normName
+            );
+
+            const isSameGrade = matchedExisting && (
+                matchedExisting.grade === sub.grade ||
+                matchedExisting.class?.includes(sub.grade)
             );
 
             map[sub.id] = {
                 duplicateInLink: nameCountInLink[normName] > 1,
                 matchedStudent: matchedExisting || null,
-                isExistingInGrade: !!matchedExisting
+                isExistingInGrade: !!isSameGrade,
+                isExistingOtherGrade: !!matchedExisting && !isSameGrade,
+                existingGrade: matchedExisting?.grade || matchedExisting?.class || ''
             };
         });
 
@@ -126,8 +146,19 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
         rejected: submissions.filter(s => s.status === 'rejected').length,
     };
 
+    // Selection helpers
+    const allFilteredSelected = filteredSubmissions.length > 0 && filteredSubmissions.every(s => selectedIds.includes(s.id));
+    const toggleSelectAll = () => {
+        if (allFilteredSelected) {
+            setSelectedIds([]);
+        } else {
+            setSelectedIds(filteredSubmissions.map(s => s.id));
+        }
+    };
+
     // Approve a submission
     const handleApprove = async (sub, createProfile = false) => {
+        if (sub.status === 'approved') return;
         try {
             const points = Number(link.pointsPerStudent) || 0;
             const dupInfo = duplicateMap[sub.id];
@@ -203,7 +234,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
         }
     };
 
-    // Bulk Approve
+    // Bulk Approve (fixed to prevent duplicate document writes in batch)
     const handleBulkApprove = async () => {
         if (selectedIds.length === 0) return;
         const confirmMsg = `هل أنت متأكد من اعتماد ${selectedIds.length} طالب دفعة واحدة؟`;
@@ -211,8 +242,10 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
 
         const toastId = toast.loading("جاري الاعتماد الجماعي...");
         try {
-            const batch = writeBatch(db);
             const points = Number(link.pointsPerStudent) || 0;
+            const pointsPerStudent = {};
+            const studentIdsToAddToEvent = new Set();
+            const subsToApprove = [];
 
             for (const id of selectedIds) {
                 const sub = submissions.find(s => s.id === id);
@@ -222,21 +255,46 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                 const studentId = dupInfo?.matchedStudent?.id;
 
                 if (studentId && points > 0) {
-                    batch.update(doc(db, 'students', studentId), {
-                        totalPoints: increment(points)
-                    });
+                    pointsPerStudent[studentId] = (pointsPerStudent[studentId] || 0) + points;
                 }
 
                 if (link.eventId && studentId) {
-                    batch.update(doc(db, 'events', link.eventId), {
-                        participatingStudents: arrayUnion(studentId)
-                    });
+                    studentIdsToAddToEvent.add(studentId);
                 }
 
-                batch.update(doc(db, 'link_submissions', sub.id), {
+                subsToApprove.push({ subId: sub.id, studentId: studentId || null });
+            }
+
+            if (subsToApprove.length === 0) {
+                toast.dismiss(toastId);
+                toast.error("جميع الطلاب المحددين معتمدون مسبقاً");
+                return;
+            }
+
+            const batch = writeBatch(db);
+
+            // 1. Update submissions
+            subsToApprove.forEach(({ subId, studentId }) => {
+                batch.update(doc(db, 'link_submissions', subId), {
                     status: 'approved',
-                    matchedStudentId: studentId || null,
+                    matchedStudentId: studentId,
                     approvedAt: serverTimestamp()
+                });
+            });
+
+            // 2. Update points once per unique student
+            Object.entries(pointsPerStudent).forEach(([stuId, pts]) => {
+                if (pts > 0) {
+                    batch.update(doc(db, 'students', stuId), {
+                        totalPoints: increment(pts)
+                    });
+                }
+            });
+
+            // 3. Update event participants once if eventId exists
+            if (link.eventId && studentIdsToAddToEvent.size > 0) {
+                batch.update(doc(db, 'events', link.eventId), {
+                    participatingStudents: arrayUnion(...Array.from(studentIdsToAddToEvent))
                 });
             }
 
@@ -245,7 +303,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
             toast.success("تم الاعتماد الجماعي بنجاح", { id: toastId });
         } catch (err) {
             console.error("Bulk approve error:", err);
-            toast.error("حدث خطأ أثناء الاعتماد الجماعي", { id: toastId });
+            toast.error("حدث خطأ أثناء الاعتماد الجماعي: " + err.message, { id: toastId });
         }
     };
 
@@ -433,11 +491,15 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
         `);
         docIframe.close();
 
-        iframe.contentWindow.focus();
         setTimeout(() => {
+            iframe.contentWindow.focus();
             iframe.contentWindow.print();
-            document.body.removeChild(iframe);
-        }, 500);
+            setTimeout(() => {
+                if (document.body.contains(iframe)) {
+                    document.body.removeChild(iframe);
+                }
+            }, 2000);
+        }, 600);
     };
 
     return (
@@ -584,6 +646,25 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                         </div>
                     ) : (
                         <div className="space-y-2.5">
+                            {/* Select All Bar */}
+                            <div className="flex items-center justify-between bg-slate-800/60 p-2.5 rounded-xl border border-slate-700/60 mb-1">
+                                <button
+                                    type="button"
+                                    onClick={toggleSelectAll}
+                                    className="flex items-center gap-2 text-xs font-semibold text-slate-300 hover:text-white transition-colors"
+                                >
+                                    {allFilteredSelected ? (
+                                        <CheckSquare size={16} className="text-indigo-400" />
+                                    ) : (
+                                        <Square size={16} className="text-slate-400" />
+                                    )}
+                                    <span>تحديد جميع المعروض ({filteredSubmissions.length})</span>
+                                </button>
+                                <span className="text-[11px] text-slate-400">
+                                    {selectedIds.length > 0 ? `المحدد: ${selectedIds.length}` : `إجمالي المعروض: ${filteredSubmissions.length}`}
+                                </span>
+                            </div>
+
                             {filteredSubmissions.map((sub) => {
                                 const isSelected = selectedIds.includes(sub.id);
                                 const dupInfo = duplicateMap[sub.id] || {};
@@ -632,12 +713,17 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                                                 <UserCheck size={11} /> مسجل مسبقاً بنفس الصف
                                                             </span>
                                                         )}
+                                                        {dupInfo.isExistingOtherGrade && (
+                                                            <span className="text-[11px] px-2 py-0.5 rounded-md bg-cyan-950/70 border border-cyan-700/50 text-cyan-300 font-semibold flex items-center gap-1">
+                                                                <UserCheck size={11} /> مقيد بصف ({dupInfo.existingGrade})
+                                                            </span>
+                                                        )}
                                                         {dupInfo.duplicateInLink && (
                                                             <span className="text-[11px] px-2 py-0.5 rounded-md bg-amber-950/80 border border-amber-700/50 text-amber-300 font-semibold flex items-center gap-1">
                                                                 <AlertTriangle size={11} /> مكرر بنفس الرابط
                                                             </span>
                                                         )}
-                                                        {!dupInfo.isExistingInGrade && (
+                                                        {!dupInfo.matchedStudent && (
                                                             <span className="text-[11px] px-2 py-0.5 rounded-md bg-purple-950/60 border border-purple-700/50 text-purple-300 font-semibold">
                                                                 ✨ طالب غير مقيد
                                                             </span>
@@ -686,7 +772,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                                 {sub.status !== 'approved' && (
                                                     <button
                                                         onClick={() => {
-                                                            if (!dupInfo.isExistingInGrade) {
+                                                            if (!dupInfo.matchedStudent) {
                                                                 setShowCreateStudentModal(sub);
                                                             } else {
                                                                 handleApprove(sub, false);
