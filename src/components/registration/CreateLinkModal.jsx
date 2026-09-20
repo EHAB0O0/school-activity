@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import {
     X, Save, Shield, Calendar, Award, Users, AlertCircle,
-    Link2, CheckCircle2, Plus, Trash2, Search, Check, ChevronDown
+    Link2, CheckCircle2, Plus, Trash2, Search, Check, ChevronDown, Loader2
 } from 'lucide-react';
 import { db } from '../../firebase';
 import { collection, addDoc, updateDoc, doc, serverTimestamp, query, where, getDocs } from 'firebase/firestore';
@@ -10,7 +10,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import toast from 'react-hot-toast';
 
 export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, onSuccess }) {
-    const { grades, eventTypes } = useSettings();
+    const { grades, eventTypes, updateEventTypes } = useSettings();
     const { currentUser } = useAuth();
 
     const [eventsList, setEventsList] = useState([]);
@@ -21,6 +21,11 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
     const [delegateSearchTerm, setDelegateSearchTerm] = useState('');
     const [isDelegateDropdownOpen, setIsDelegateDropdownOpen] = useState(false);
     const delegateDropdownRef = useRef(null);
+
+    // New Specialization Creation State
+    const [isAddingNewSpec, setIsAddingNewSpec] = useState(false);
+    const [newSpecName, setNewSpecName] = useState('');
+    const [isSavingNewSpec, setIsSavingNewSpec] = useState(false);
 
     // Form State
     const [hasMaxCapacity, setHasMaxCapacity] = useState(true);
@@ -347,10 +352,70 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
         }
     };
 
-    const specOptions = [
-        'عام / جوكر',
-        ...(eventTypes || []).map(t => t.name)
-    ];
+    // Dynamic Specializations Options: System EventTypes + Custom ones
+    const specOptions = (() => {
+        const set = new Set(['عام / جوكر', ...(eventTypes || []).map(t => t.name)]);
+        if (Array.isArray(formData.specializations)) {
+            formData.specializations.forEach(s => {
+                if (s && s.trim()) set.add(s.trim());
+            });
+        }
+        return Array.from(set);
+    })();
+
+    // Add New Specialization Handler
+    const handleAddNewSpecialization = async (e) => {
+        if (e) e.preventDefault();
+        const trimmed = newSpecName.trim();
+        if (!trimmed) {
+            toast.error("يرجى كتابة اسم المجال أو التخصص");
+            return;
+        }
+
+        // Check if already in specOptions
+        const existingMatch = specOptions.find(opt => opt.toLowerCase() === trimmed.toLowerCase());
+        if (existingMatch) {
+            if (!formData.specializations?.includes(existingMatch)) {
+                handleSpecializationToggle(existingMatch);
+            }
+            setNewSpecName('');
+            setIsAddingNewSpec(false);
+            toast.success(`تم اختيار المجال: ${existingMatch}`);
+            return;
+        }
+
+        setIsSavingNewSpec(true);
+        try {
+            // 1. Add to formData.specializations
+            setFormData(prev => {
+                const current = (prev.specializations || []).filter(s => s !== 'عام / جوكر');
+                return {
+                    ...prev,
+                    specializations: [...current, trimmed]
+                };
+            });
+
+            // 2. Persist to Firestore settings/global via updateEventTypes
+            const newType = {
+                id: Date.now(),
+                name: trimmed,
+                fields: []
+            };
+            const updatedEventTypes = [...(eventTypes || []), newType];
+            if (updateEventTypes) {
+                await updateEventTypes(updatedEventTypes);
+            }
+
+            toast.success(`تمت إضافة مجال "${trimmed}" واعتماده في النظام بنجاح!`);
+            setNewSpecName('');
+            setIsAddingNewSpec(false);
+        } catch (err) {
+            console.error("Error adding new specialization:", err);
+            toast.error("فشل في حفظ المجال الجديد بالنظام: " + err.message);
+        } finally {
+            setIsSavingNewSpec(false);
+        }
+    };
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 overflow-y-auto">
@@ -523,11 +588,25 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
                                     />
                                 </div>
 
-                                {/* Specializations (Multi-Select) */}
-                                <div>
-                                    <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                                        المجال / التخصص المسند للطلاب (يمكن اختيار أكثر من مجال)
-                                    </label>
+                                {/* Specializations (Multi-Select & Add Custom) */}
+                                <div className="space-y-2">
+                                    <div className="flex items-center justify-between">
+                                        <label className="block text-xs font-semibold text-slate-300">
+                                            المجال / التخصص المسند للطلاب (يمكن اختيار أكثر من مجال)
+                                        </label>
+                                        {!isAddingNewSpec && (
+                                            <button
+                                                type="button"
+                                                onClick={() => setIsAddingNewSpec(true)}
+                                                className="text-[11px] text-indigo-400 hover:text-indigo-300 font-bold flex items-center gap-1 transition-colors"
+                                            >
+                                                <Plus size={13} />
+                                                <span>+ إضافة مجال جديد للنظام</span>
+                                            </button>
+                                        )}
+                                    </div>
+
+                                    {/* Chips List */}
                                     <div className="flex flex-wrap gap-1.5 pt-0.5">
                                         {specOptions.map((opt) => {
                                             const isSelected = formData.specializations?.includes(opt);
@@ -547,6 +626,53 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
                                             );
                                         })}
                                     </div>
+
+                                    {/* Inline Add New Specialization Form */}
+                                    {isAddingNewSpec && (
+                                        <div className="flex items-center gap-2 p-2 bg-slate-900/90 rounded-xl border border-indigo-500/40 animate-in fade-in duration-200">
+                                            <input
+                                                type="text"
+                                                autoFocus
+                                                placeholder="اكتب اسم المجال الجديد (مثال: إعلامي، روبوت، تطوعي)..."
+                                                value={newSpecName}
+                                                onChange={(e) => setNewSpecName(e.target.value)}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter') {
+                                                        e.preventDefault();
+                                                        handleAddNewSpecialization();
+                                                    } else if (e.key === 'Escape') {
+                                                        setIsAddingNewSpec(false);
+                                                        setNewSpecName('');
+                                                    }
+                                                }}
+                                                className="flex-1 px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white placeholder-slate-400 focus:outline-none focus:border-indigo-500"
+                                            />
+                                            <button
+                                                type="button"
+                                                disabled={isSavingNewSpec}
+                                                onClick={handleAddNewSpecialization}
+                                                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-lg text-xs font-bold flex items-center gap-1 transition-colors shrink-0"
+                                            >
+                                                {isSavingNewSpec ? (
+                                                    <Loader2 size={13} className="animate-spin" />
+                                                ) : (
+                                                    <Plus size={13} />
+                                                )}
+                                                <span>إضافة واعتماد</span>
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setIsAddingNewSpec(false);
+                                                    setNewSpecName('');
+                                                }}
+                                                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors shrink-0"
+                                                title="إلغاء"
+                                            >
+                                                <X size={14} />
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         </div>
