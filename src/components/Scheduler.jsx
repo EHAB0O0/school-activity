@@ -147,10 +147,12 @@ export default function Scheduler() {
                 // 1. Update Event
                 transaction.update(eventRef, eventData);
 
-                // 2. Adjust Students
+                // 2. Adjust Students (excluding link-registered students)
                 const diff = newPoints - oldPoints;
-                if (eventData.participatingStudents && eventData.participatingStudents.length > 0) {
-                    for (const studentId of eventData.participatingStudents) {
+                const linkStudents = eventData.linkStudentIds || [];
+                const eligibleStudents = (eventData.participatingStudents || []).filter(id => !linkStudents.includes(id));
+                if (eligibleStudents.length > 0) {
+                    for (const studentId of eligibleStudents) {
                         const studentRef = doc(db, 'students', studentId);
                         transaction.update(studentRef, {
                             totalPoints: increment(diff)
@@ -177,14 +179,14 @@ export default function Scheduler() {
                 // 1. Update Event Status
                 transaction.update(eventRef, { status: 'Done', points: pointsToAward });
 
-                // 2. Award Points to Students
-                if (eventData.participatingStudents && eventData.participatingStudents.length > 0) {
-                    for (const studentId of eventData.participatingStudents) {
+                // 2. Award Points to Students (excluding link-registered students)
+                const linkStudents = eventData.linkStudentIds || [];
+                const eligibleStudents = (eventData.participatingStudents || []).filter(id => !linkStudents.includes(id));
+                if (eligibleStudents.length > 0) {
+                    for (const studentId of eligibleStudents) {
                         const studentRef = doc(db, 'students', studentId);
                         transaction.update(studentRef, {
                             totalPoints: increment(pointsToAward)
-                            // Note: We use 'totalPoints' in StudentsPage, verify schema matches 'points' or 'totalPoints'
-                            // StudentsPage uses 'totalPoints'. Scheduler delete used 'points'. Correcting to 'totalPoints'.
                         });
                     }
                 }
@@ -200,7 +202,6 @@ export default function Scheduler() {
         }
     };
 
-    // Logic for deleting event click
     // Logic for deleting event click
     const confirmDeleteEvent = (eventData) => {
         let eventStart;
@@ -253,17 +254,14 @@ export default function Scheduler() {
             await runTransaction(db, async (transaction) => {
                 const eventRef = doc(db, 'events', eventData.id);
 
-                // 1. Reverse Points (if requested)
-                if (reversePoints && eventData.participatingStudents && eventData.participatingStudents.length > 0) {
-                    // We assume points awarded were e.g. 10 (hardcoded or from event type). 
-                    // For now, let's assume a standard deduction or retrieve from event customData if implemented.
-                    // Assuming 10 for demo or fetch logic. 
-                    // Ideally, event document should store "pointsAwarded". Let's assume 10 for safety or skip if unknown.
-                    const pointsToDeduct = -10; // Negative increment
+                // 1. Reverse Points (if requested, excluding link-registered students)
+                const linkStudents = eventData.linkStudentIds || [];
+                const eligibleStudents = (eventData.participatingStudents || []).filter(id => !linkStudents.includes(id));
+                if (reversePoints && eligibleStudents.length > 0) {
+                    const pointsToDeduct = -(Number(eventData.points) || 10);
 
-                    for (const studentId of eventData.participatingStudents) {
+                    for (const studentId of eligibleStudents) {
                         const studentRef = doc(db, 'students', studentId);
-                        // Using totalPoints to match schema (verified in StudentsPage)
                         transaction.update(studentRef, { totalPoints: increment(pointsToDeduct) });
                     }
                 }

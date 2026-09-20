@@ -37,6 +37,7 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
         points: 10,
         customFields: {},
         studentIds: [],
+        linkStudentIds: initialData?.linkStudentIds || [],
         assetIds: [],
         reminders: initialData?.reminders || []
     });
@@ -147,6 +148,7 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                 startTime: st,
                 endTime: et,
                 studentIds: initialData.participatingStudents || [],
+                linkStudentIds: initialData.linkStudentIds || [],
                 assetIds: initialData.assets || [],
                 customFields: initialData.customData || initialData.customFields || {}
             }));
@@ -248,6 +250,7 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
             typeId: importedEvent.typeId || prev.typeId,
             points: importedEvent.points || 10,
             studentIds: importedEvent.participatingStudents || [],
+            linkStudentIds: importedEvent.linkStudentIds || [],
             assetIds: importedEvent.assets || [],
             customFields: importedEvent.customData || {}
             // Date, StartTime, EndTime are explicitly PRESERVED from 'prev' (or not touched)
@@ -282,18 +285,20 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
             });
         }
 
-        // 4. Map to Options with Class Name
+        // 4. Map to Options with Class Name and Link Registration Badge
         return list.map(s => {
             const gradeName = s.grade || grades.find(g => g.id === s.gradeId || g.name === s.grade)?.name || '';
             const sectionName = s.section || (grades.find(g => g.id === s.gradeId || g.name === s.grade)?.sections?.find(sec => sec.id === s.sectionId || sec.name === s.section)?.name) || '';
             const classLabel = gradeName ? (sectionName ? `(${gradeName} - ${sectionName})` : `(${gradeName})`) : (s.class ? `(${s.class})` : '');
+            const isFromLink = (formData.linkStudentIds || []).includes(s.value);
+            const linkBadge = isFromLink ? ' [🔗 عبر رابط التسجيل]' : '';
 
             return {
                 ...s,
-                label: classLabel ? `${s.name} ${classLabel}` : s.name
+                label: `${classLabel ? `${s.name} ${classLabel}` : s.name}${linkBadge}`
             };
         });
-    }, [studentsList, activeType, selectedGrade, selectedSection, grades, formData.studentIds]);
+    }, [studentsList, activeType, selectedGrade, selectedSection, grades, formData.studentIds, formData.linkStudentIds]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -313,6 +318,7 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                 date: dateBase,
                 venueId: formData.venueId,
                 participatingStudents: formData.studentIds,
+                linkStudentIds: (formData.linkStudentIds || []).filter(id => formData.studentIds.includes(id)),
                 assets: formData.assetIds,
                 startTime: Timestamp.fromDate(start),
                 endTime: Timestamp.fromDate(end),
@@ -839,7 +845,18 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
 
                         {/* Status Change Button (Simplified) - usually handled in parent or here? */}
                         {initialData?.id && initialData?.status !== 'Done' && (
-                            <button type="button" onClick={() => onSave({ ...initialData, ...formData, status: 'Done', markDone: true })} className="px-4 py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold shadow-lg flex items-center text-sm">
+                            <button
+                                type="button"
+                                onClick={() => onSave({
+                                    ...initialData,
+                                    ...formData,
+                                    participatingStudents: formData.studentIds,
+                                    linkStudentIds: (formData.linkStudentIds || []).filter(id => formData.studentIds.includes(id)),
+                                    status: 'Done',
+                                    markDone: true
+                                })}
+                                className="px-4 py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold shadow-lg flex items-center text-sm"
+                            >
                                 <CheckCircle size={16} className="ml-1" />
                                 تأكيد التنفيذ ورصد النقاط
                             </button>

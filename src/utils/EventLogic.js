@@ -31,13 +31,20 @@ export async function updateEventWithSmartSync(eventId, newData) {
             const oldStudents = currentServerData.participatingStudents || [];
             const newStudents = newData.participatingStudents || [];
 
+            // Link-registered students are excluded from receiving event points (they keep link points)
+            const oldLinkStudents = currentServerData.linkStudentIds || [];
+            const newLinkStudents = newData.linkStudentIds !== undefined ? newData.linkStudentIds : oldLinkStudents;
+
+            const eligibleOldStudents = oldStudents.filter(id => !oldLinkStudents.includes(id));
+            const eligibleNewStudents = newStudents.filter(id => !newLinkStudents.includes(id));
+
             // Points
             const oldPoints = Number(currentServerData.points) || 0;
             const newPoints = Number(newData.points) || 0;
 
             // 1. If it WAS Done and is NO LONGER Done -> Revert all points
             if (wasDone && !isDone) {
-                oldStudents.forEach(studentId => {
+                eligibleOldStudents.forEach(studentId => {
                     const sRef = doc(db, 'students', studentId);
                     transaction.update(sRef, { totalPoints: increment(-oldPoints) });
                 });
@@ -55,9 +62,9 @@ export async function updateEventWithSmartSync(eventId, newData) {
                     // B. Added Students (In New, Not in Old) -> Add New Points
                     // C. Kept Students (In Both) -> Add (NewPoints - OldPoints)
 
-                    const removed = oldStudents.filter(id => !newStudents.includes(id));
-                    const added = newStudents.filter(id => !oldStudents.includes(id));
-                    const kept = newStudents.filter(id => oldStudents.includes(id));
+                    const removed = eligibleOldStudents.filter(id => !eligibleNewStudents.includes(id));
+                    const added = eligibleNewStudents.filter(id => !eligibleOldStudents.includes(id));
+                    const kept = eligibleNewStudents.filter(id => eligibleOldStudents.includes(id));
 
                     // A. Removed
                     removed.forEach(id => {
@@ -82,8 +89,8 @@ export async function updateEventWithSmartSync(eventId, newData) {
 
                 } else {
                     // Was NOT Done, now IS Done.
-                    // Simply add newPoints to all newStudents
-                    newStudents.forEach(id => {
+                    // Simply add newPoints to all eligible newStudents
+                    eligibleNewStudents.forEach(id => {
                         const sRef = doc(db, 'students', id);
                         transaction.update(sRef, { totalPoints: increment(newPoints) });
                     });
@@ -95,6 +102,7 @@ export async function updateEventWithSmartSync(eventId, newData) {
                 ...newData,
                 // Ensure specific fields are updated
                 participatingStudents: newStudents,
+                linkStudentIds: newLinkStudents,
                 points: newPoints,
                 status: newData.status,
                 venueId: newData.venueId,

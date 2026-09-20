@@ -4,7 +4,7 @@ import {
     Link2, CheckCircle2, Plus, Trash2, Search, Check, ChevronDown, Loader2
 } from 'lucide-react';
 import { db } from '../../firebase';
-import { collection, addDoc, updateDoc, doc, serverTimestamp, query, where, getDocs } from 'firebase/firestore';
+import { collection, addDoc, updateDoc, doc, serverTimestamp, query, where, getDocs, arrayUnion, arrayRemove } from 'firebase/firestore';
 import { useSettings } from '../../contexts/SettingsContext';
 import { useAuth } from '../../contexts/AuthContext';
 import toast from 'react-hot-toast';
@@ -26,6 +26,17 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
     const [isAddingNewSpec, setIsAddingNewSpec] = useState(false);
     const [newSpecName, setNewSpecName] = useState('');
     const [isSavingNewSpec, setIsSavingNewSpec] = useState(false);
+
+    // Event Sync Confirmation State
+    const [eventSyncConfirm, setEventSyncConfirm] = useState({
+        isOpen: false,
+        type: null, // 'transfer' | 'unlink'
+        oldEventId: '',
+        newEventId: '',
+        approvedCount: 0,
+        submissions: [],
+        payload: null
+    });
 
     // Form State
     const [hasMaxCapacity, setHasMaxCapacity] = useState(true);
@@ -288,6 +299,90 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
         }));
     };
 
+    // Sync approved submissions to event
+    const syncSubmissionsToEvent = async (linkId, targetEventId, sourceEventId, shouldRemoveFromOld, approvedSubs, linkPayload) => {
+        if (!approvedSubs || approvedSubs.length === 0) return;
+
+        const studentIdsToSync = [];
+        const specializationsList = (Array.isArray(linkPayload.specializations) && linkPayload.specializations.length > 0)
+            ? linkPayload.specializations
+            : ['عام / جوكر'];
+        const points = Number(linkPayload.pointsPerStudent) || 0;
+
+        for (const sub of approvedSubs) {
+            let studentId = sub.matchedStudentId;
+
+            // If no matched student profile exists, auto-create one
+            if (!studentId) {
+                try {
+                    const existing = studentsList.find(s => s.name?.trim().toLowerCase() === sub.studentName?.trim().toLowerCase());
+                    if (existing) {
+                        studentId = existing.id;
+                    } else {
+                        const newStudentRef = await addDoc(collection(db, 'students'), {
+                            name: sub.studentName,
+                            grade: sub.grade || '',
+                            section: sub.section || '',
+                            class: `${sub.grade || ''} / ${sub.section || ''}`.trim(),
+                            phone: sub.phone || '',
+                            specializations: specializationsList,
+                            totalPoints: points,
+                            active: true,
+                            joinedAt: serverTimestamp(),
+                            notes: `مسجل عبر رابط: ${linkPayload.title}`
+                        });
+                        studentId = newStudentRef.id;
+                    }
+                    await updateDoc(doc(db, 'link_submissions', sub.id), {
+                        matchedStudentId: studentId
+                    });
+                } catch (err) {
+                    console.error("Error creating student profile during sync:", err);
+                }
+            }
+
+            if (studentId) {
+                studentIdsToSync.push(studentId);
+            }
+        }
+
+        // Attach to target event
+        if (targetEventId && studentIdsToSync.length > 0) {
+            await updateDoc(doc(db, 'events', targetEventId), {
+                participatingStudents: arrayUnion(...studentIdsToSync),
+                linkStudentIds: arrayUnion(...studentIdsToSync)
+            }).catch(console.warn);
+        }
+
+        // Remove from old event if requested
+        if (sourceEventId && shouldRemoveFromOld && studentIdsToSync.length > 0) {
+            await updateDoc(doc(db, 'events', sourceEventId), {
+                participatingStudents: arrayRemove(...studentIdsToSync),
+                linkStudentIds: arrayRemove(...studentIdsToSync)
+            }).catch(console.warn);
+        }
+    };
+
+    const executeSaveWithSync = async (shouldRemoveFromOld) => {
+        if (!eventSyncConfirm.payload) return;
+        setIsSubmitting(true);
+        const { oldEventId, newEventId, submissions, payload } = eventSyncConfirm;
+        setEventSyncConfirm(prev => ({ ...prev, isOpen: false }));
+
+        try {
+            await updateDoc(doc(db, 'registration_links', linkToEdit.id), payload);
+            await syncSubmissionsToEvent(linkToEdit.id, newEventId, oldEventId, shouldRemoveFromOld, submissions, payload);
+            toast.success("تم تحديث رابط التسجيل ومزامنة الطلاب بنجاح");
+            if (onSuccess) onSuccess();
+            onClose();
+        } catch (err) {
+            console.error("Error executing save with sync:", err);
+            toast.error("حدث خطأ أثناء المزامنة: " + err.message);
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+
     const handleSubmit = async (e) => {
         e.preventDefault();
         if (!formData.title.trim()) {
@@ -330,6 +425,59 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
                 delegateRewardPoints: Number(formData.delegateRewardPoints) || 0,
                 updatedAt: serverTimestamp()
             };
+
+            const oldEventId = linkToEdit?.eventId || '';
+            const newEventId = formData.eventId || '';
+
+            if (linkToEdit && oldEventId !== newEventId) {
+                // Fetch approved submissions
+                const subsSnap = await getDocs(
+                    query(
+                        collection(db, 'link_submissions'),
+                        where('linkId', '==', linkToEdit.id),
+                        where('status', '==', 'approved')
+                    )
+                );
+                const approvedSubs = subsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+                if (approvedSubs.length > 0) {
+                    if (oldEventId && newEventId) {
+                        // Transferring between events -> ask user
+                        setEventSyncConfirm({
+                            isOpen: true,
+                            type: 'transfer',
+                            oldEventId,
+                            newEventId,
+                            approvedCount: approvedSubs.length,
+                            submissions: approvedSubs,
+                            payload
+                        });
+                        setIsSubmitting(false);
+                        return;
+                    } else if (oldEventId && !newEventId) {
+                        // Unlinking -> ask user
+                        setEventSyncConfirm({
+                            isOpen: true,
+                            type: 'unlink',
+                            oldEventId,
+                            newEventId: '',
+                            approvedCount: approvedSubs.length,
+                            submissions: approvedSubs,
+                            payload
+                        });
+                        setIsSubmitting(false);
+                        return;
+                    } else if (!oldEventId && newEventId) {
+                        // Linking for first time -> auto sync immediately
+                        await updateDoc(doc(db, 'registration_links', linkToEdit.id), payload);
+                        await syncSubmissionsToEvent(linkToEdit.id, newEventId, '', false, approvedSubs, payload);
+                        toast.success("تم تحديث الرابط ومزامنة الطلاب مع الفعالية بنجاح");
+                        if (onSuccess) onSuccess();
+                        onClose();
+                        return;
+                    }
+                }
+            }
 
             if (linkToEdit) {
                 await updateDoc(doc(db, 'registration_links', linkToEdit.id), payload);
@@ -979,6 +1127,74 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
                         </button>
                     </div>
                 </form>
+
+                {/* Event Sync Confirmation Modal */}
+                {eventSyncConfirm.isOpen && (
+                    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+                        <div className="bg-slate-900 border border-slate-700 w-full max-w-md rounded-2xl shadow-2xl p-6 text-right space-y-4" dir="rtl">
+                            <div className="flex items-center gap-3 text-amber-400">
+                                <div className="p-2.5 rounded-xl bg-amber-400/10 border border-amber-400/20">
+                                    <AlertCircle size={24} />
+                                </div>
+                                <div>
+                                    <h3 className="text-base font-bold text-white">
+                                        {eventSyncConfirm.type === 'transfer' ? 'تغيير الفعالية المرتبطة' : 'فك ربط الفعالية'}
+                                    </h3>
+                                    <p className="text-xs text-slate-400">
+                                        تحديد مصير الطلاب المعتمدين في الفعالية
+                                    </p>
+                                </div>
+                            </div>
+
+                            <p className="text-sm text-slate-300 leading-relaxed">
+                                {eventSyncConfirm.type === 'transfer' ? (
+                                    <>
+                                        يوجد <span className="font-bold text-amber-400">{eventSyncConfirm.approvedCount}</span> طالب/طلاب معتمدون في هذا الرابط. تم تغيير الفعالية المرتبطة إلى ({eventsList.find(e => e.id === eventSyncConfirm.newEventId)?.title || 'فعالية جديدة'}).
+                                        <br /><br />
+                                        ماذا تريد أن تفعل بمشاركتهم في الفعالية السابقة ({eventsList.find(e => e.id === eventSyncConfirm.oldEventId)?.title || 'الفعالية السابقة'})؟
+                                    </>
+                                ) : (
+                                    <>
+                                        يوجد <span className="font-bold text-amber-400">{eventSyncConfirm.approvedCount}</span> طالب/طلاب معتمدون في هذا الرابط. تم فك الارتباط بالفعالية ({eventsList.find(e => e.id === eventSyncConfirm.oldEventId)?.title || 'الفعالية السابقة'}).
+                                        <br /><br />
+                                        ماذا تريد أن تفعل بمشاركتهم المسجلة في تلك الفعالية؟
+                                    </>
+                                )}
+                            </p>
+
+                            <div className="flex flex-col gap-2 pt-2">
+                                <button
+                                    type="button"
+                                    onClick={() => executeSaveWithSync(true)}
+                                    className="w-full py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold transition-colors flex items-center justify-center gap-2"
+                                >
+                                    <Check size={18} />
+                                    {eventSyncConfirm.type === 'transfer'
+                                        ? 'نقل إلى الفعالية الجديدة (إزالة من السابقة)'
+                                        : 'إزالة الطلاب من الفعالية السابقة'}
+                                </button>
+
+                                <button
+                                    type="button"
+                                    onClick={() => executeSaveWithSync(false)}
+                                    className="w-full py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-semibold transition-colors flex items-center justify-center gap-2"
+                                >
+                                    {eventSyncConfirm.type === 'transfer'
+                                        ? 'إبقاء في كلتيهما (إبقاء في السابقة وإضافة للجديدة)'
+                                        : 'إبقاء الطلاب في الفعالية السابقة'}
+                                </button>
+
+                                <button
+                                    type="button"
+                                    onClick={() => setEventSyncConfirm(prev => ({ ...prev, isOpen: false }))}
+                                    className="w-full py-2 px-4 rounded-xl text-slate-400 hover:text-white text-xs font-medium transition-colors"
+                                >
+                                    إلغاء التراجع
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     );

@@ -7,7 +7,7 @@ import {
 import { db } from '../../firebase';
 import {
     collection, query, where, onSnapshot, doc, updateDoc,
-    deleteDoc, addDoc, writeBatch, serverTimestamp, increment, arrayUnion, getDocs
+    deleteDoc, addDoc, writeBatch, serverTimestamp, increment, arrayUnion, arrayRemove, getDocs
 } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
 import toast from 'react-hot-toast';
@@ -202,10 +202,11 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                 });
             }
 
-            // If event is linked, attach student to event's participating list
+            // If event is linked, attach student to event's participating list and mark as link student
             if (link.eventId && studentId) {
                 await updateDoc(doc(db, 'events', link.eventId), {
-                    participatingStudents: arrayUnion(studentId)
+                    participatingStudents: arrayUnion(studentId),
+                    linkStudentIds: arrayUnion(studentId)
                 }).catch(console.warn);
             }
 
@@ -231,6 +232,15 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                 status: 'rejected',
                 rejectedAt: serverTimestamp()
             });
+
+            // If previously linked to an event, remove from event
+            if (link.eventId && sub.matchedStudentId) {
+                await updateDoc(doc(db, 'events', link.eventId), {
+                    participatingStudents: arrayRemove(sub.matchedStudentId),
+                    linkStudentIds: arrayRemove(sub.matchedStudentId)
+                }).catch(console.warn);
+            }
+
             toast.success(`تم رفض الطلب: ${sub.studentName}`);
         } catch (err) {
             toast.error("فشل في الرفض: " + err.message);
@@ -241,8 +251,18 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
     const handleDelete = async (subId) => {
         if (!window.confirm("هل أنت متأكد من حذف هذا التسجيل؟")) return;
         try {
+            const subToDelete = submissions.find(s => s.id === subId);
             await deleteDoc(doc(db, 'link_submissions', subId));
             setSelectedIds(prev => prev.filter(id => id !== subId));
+
+            // If was participating in linked event, remove
+            if (link.eventId && subToDelete?.matchedStudentId) {
+                await updateDoc(doc(db, 'events', link.eventId), {
+                    participatingStudents: arrayRemove(subToDelete.matchedStudentId),
+                    linkStudentIds: arrayRemove(subToDelete.matchedStudentId)
+                }).catch(console.warn);
+            }
+
             toast.success("تم الحذف بنجاح");
         } catch (err) {
             toast.error("فشل في الحذف: " + err.message);
@@ -308,8 +328,10 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
 
             // 3. Update event participants once if eventId exists
             if (link.eventId && studentIdsToAddToEvent.size > 0) {
+                const idsToAdd = Array.from(studentIdsToAddToEvent);
                 batch.update(doc(db, 'events', link.eventId), {
-                    participatingStudents: arrayUnion(...Array.from(studentIdsToAddToEvent))
+                    participatingStudents: arrayUnion(...idsToAdd),
+                    linkStudentIds: arrayUnion(...idsToAdd)
                 });
             }
 

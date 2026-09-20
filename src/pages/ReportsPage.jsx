@@ -305,6 +305,7 @@ export default function ReportsPage() {
                         status: getStatusLabel(pd.status || 'Draft'),
                         rawStatus: pd.status || 'Draft',
                         rawParticipatingStudents: pd.participatingStudents || [],
+                        linkStudentIds: pd.linkStudentIds || [],
                         studentsCount: participatingStudents.length,
                         studentNames: participatingStudents, // Now Array of Objects {name, grade, section}
                         type: pd.typeName || 'عام',
@@ -1241,9 +1242,11 @@ export default function ReportsPage() {
             await runTransaction(db, async (transaction) => {
                 const eventRef = doc(db, 'events', selectedEvent.id);
 
-                // 1. Deduct Points
-                if (selectedEvent.rawParticipatingStudents && selectedEvent.rawParticipatingStudents.length > 0) {
-                    for (const studentId of selectedEvent.rawParticipatingStudents) {
+                // 1. Deduct Points (excluding link-registered students)
+                const linkStudents = selectedEvent.linkStudentIds || [];
+                const eligibleStudents = (selectedEvent.rawParticipatingStudents || []).filter(id => !linkStudents.includes(id));
+                if (eligibleStudents.length > 0) {
+                    for (const studentId of eligibleStudents) {
                         const studentRef = doc(db, 'students', studentId);
                         transaction.update(studentRef, { totalPoints: increment(-10) });
                     }
