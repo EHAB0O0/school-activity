@@ -402,10 +402,12 @@ export default function PublicRegistrationPage() {
             }
 
             toast.success("تم تسجيل جميع الطلاب بنجاح", { id: toastId });
+            const defaultGrade = gradeOptions[0] || '';
+            const defaultSection = getSectionOptions(defaultGrade)[0] || '1';
             setRapidRows([
-                { studentName: '', grade: gradeOptions[0] || '', section: '1', customValues: {}, phone: '' },
-                { studentName: '', grade: gradeOptions[0] || '', section: '1', customValues: {}, phone: '' },
-                { studentName: '', grade: gradeOptions[0] || '', section: '1', customValues: {}, phone: '' }
+                { studentName: '', grade: defaultGrade, section: defaultSection, customValues: {}, phone: '' },
+                { studentName: '', grade: defaultGrade, section: defaultSection, customValues: {}, phone: '' },
+                { studentName: '', grade: defaultGrade, section: defaultSection, customValues: {}, phone: '' }
             ]);
         } catch (err) {
             console.error("Rapid submit error:", err);
@@ -677,7 +679,11 @@ export default function PublicRegistrationPage() {
                                         </label>
                                         <select
                                             value={singleForm.grade}
-                                            onChange={(e) => setSingleForm({ ...singleForm, grade: e.target.value, section: '1' })}
+                                            onChange={(e) => {
+                                                const newGrade = e.target.value;
+                                                const firstSec = getSectionOptions(newGrade)[0] || '1';
+                                                setSingleForm({ ...singleForm, grade: newGrade, section: firstSec });
+                                            }}
                                             className="w-full px-4 py-3 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500 transition-colors"
                                         >
                                             {gradeOptions.map(g => (
@@ -787,8 +793,14 @@ export default function PublicRegistrationPage() {
                                             <select
                                                 value={row.grade || gradeOptions[0]}
                                                 onChange={(e) => {
+                                                    const newGrade = e.target.value;
+                                                    const availableSections = getSectionOptions(newGrade);
                                                     const updated = [...rapidRows];
-                                                    updated[idx].grade = e.target.value;
+                                                    updated[idx] = {
+                                                        ...updated[idx],
+                                                        grade: newGrade,
+                                                        section: availableSections[0] || '1'
+                                                    };
                                                     setRapidRows(updated);
                                                 }}
                                                 className="w-28 px-2 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white"
@@ -798,17 +810,22 @@ export default function PublicRegistrationPage() {
                                                 ))}
                                             </select>
 
-                                            <input
-                                                type="text"
-                                                placeholder="شعبة"
-                                                value={row.section}
+                                            <select
+                                                value={row.section || getSectionOptions(row.grade || gradeOptions[0])[0] || '1'}
                                                 onChange={(e) => {
                                                     const updated = [...rapidRows];
-                                                    updated[idx].section = e.target.value;
+                                                    updated[idx] = {
+                                                        ...updated[idx],
+                                                        section: e.target.value
+                                                    };
                                                     setRapidRows(updated);
                                                 }}
-                                                className="w-16 px-2 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white text-center"
-                                            />
+                                                className="w-24 px-2 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white text-center"
+                                            >
+                                                {getSectionOptions(row.grade || gradeOptions[0]).map(sec => (
+                                                    <option key={sec} value={sec}>شعبة {sec}</option>
+                                                ))}
+                                            </select>
 
                                             {customFields.map((field) => (
                                                 <input
@@ -844,7 +861,11 @@ export default function PublicRegistrationPage() {
                                 <div className="flex items-center justify-between pt-2">
                                     <button
                                         type="button"
-                                        onClick={() => setRapidRows([...rapidRows, { studentName: '', grade: gradeOptions[0] || '', section: '1', customValues: {}, phone: '' }])}
+                                        onClick={() => {
+                                            const defaultGrade = gradeOptions[0] || '';
+                                            const defaultSection = getSectionOptions(defaultGrade)[0] || '1';
+                                            setRapidRows([...rapidRows, { studentName: '', grade: defaultGrade, section: defaultSection, customValues: {}, phone: '' }]);
+                                        }}
                                         className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors"
                                     >
                                         <Plus size={14} />
