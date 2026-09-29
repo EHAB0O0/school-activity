@@ -1,3 +1,4 @@
+import { useState, useEffect, useMemo } from 'react';
 import {
     X, CheckCircle, XCircle, Search, Download, Printer,
     AlertTriangle, UserCheck, Trash2, Edit2, ShieldAlert,
