@@ -91,13 +91,13 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
                 // Fetch events
                 const eventsSnap = await getDocs(query(collection(db, 'events')));
                 const evs = eventsSnap.docs
-                    .map(d => ({ id: d.id, ...d.data() }))
+                    .map(d => ({ ...d.data(), id: d.id }))
                     .filter(e => e.status !== 'archived');
                 setEventsList(evs);
 
                 // Fetch active students for delegate autocomplete
                 const studentsSnap = await getDocs(query(collection(db, 'students'), where('active', '==', true)));
-                const stus = studentsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+                const stus = studentsSnap.docs.map(d => ({ ...d.data(), id: d.id }));
                 // Sort alphabetically using Arabic collation
                 stus.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ar'));
                 setStudentsList(stus);
@@ -716,32 +716,35 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
                                                 {!formData.eventId && <Check size={14} className="text-emerald-400" />}
                                             </button>
                                             {filteredEvents.length === 0 ? (
-                                                <div className="p-4 text-center text-xs text-slate-500">
-                                                    لا توجد فعاليات مطابقة للبحث
-                                                </div>
-                                            ) : (
-                                                filteredEvents.map((ev) => (
-                                                    <button
-                                                        key={ev.id}
-                                                        type="button"
-                                                        onClick={() => handleSelectEvent(ev.id)}
-                                                        className={`w-full text-right px-3.5 py-2.5 hover:bg-slate-800/80 text-xs transition-colors flex items-center justify-between ${
-                                                            formData.eventId === ev.id ? 'bg-indigo-950/40 text-indigo-300 font-semibold' : 'text-slate-200'
-                                                        }`}
-                                                    >
-                                                        <div className="flex flex-col gap-0.5 truncate">
-                                                            <span className="truncate">{ev.title}</span>
-                                                            <div className="flex items-center gap-2 text-[10px] text-slate-400">
-                                                                {ev.date && <span>📅 {ev.date}</span>}
-                                                                {ev.location && <span>📍 {ev.location}</span>}
-                                                                {ev.type && <span className="bg-slate-800 px-1.5 py-0.5 rounded text-indigo-300">{ev.type}</span>}
-                                                            </div>
-                                                        </div>
-                                                        {formData.eventId === ev.id && <Check size={14} className="text-emerald-400 shrink-0 mr-2" />}
-                                                    </button>
-                                                ))
-                                            )}
-                                        </div>
+                                                 <div className="p-4 text-center text-xs text-slate-500">
+                                                     لا توجد فعاليات مطابقة للبحث
+                                                 </div>
+                                             ) : (
+                                                 filteredEvents.map((ev) => {
+                                                     const isSelected = Boolean(formData.eventId) && Boolean(ev.id) && formData.eventId === ev.id;
+                                                     return (
+                                                         <button
+                                                             key={ev.id}
+                                                             type="button"
+                                                             onClick={() => handleSelectEvent(ev.id)}
+                                                             className={`w-full text-right px-3.5 py-2.5 hover:bg-slate-800/80 text-xs transition-colors flex items-center justify-between ${
+                                                                 isSelected ? 'bg-indigo-950/40 text-indigo-300 font-semibold' : 'text-slate-200'
+                                                             }`}
+                                                         >
+                                                             <div className="flex flex-col gap-0.5 truncate">
+                                                                 <span className="truncate">{ev.title}</span>
+                                                                 <div className="flex items-center gap-2 text-[10px] text-slate-400">
+                                                                     {ev.date && <span>📅 {ev.date}</span>}
+                                                                     {ev.location && <span>📍 {ev.location}</span>}
+                                                                     {ev.type && <span className="bg-slate-800 px-1.5 py-0.5 rounded text-indigo-300">{ev.type}</span>}
+                                                                 </div>
+                                                             </div>
+                                                             {isSelected && <Check size={14} className="text-emerald-400 shrink-0 mr-2" />}
+                                                         </button>
+                                                     );
+                                                 })
+                                             )}
+                                         </div>
                                     </div>
                                 )}
                             </div>

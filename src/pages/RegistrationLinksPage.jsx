@@ -34,7 +34,7 @@ export default function RegistrationLinksPage() {
     useEffect(() => {
         const q = query(collection(db, 'registration_links'));
         const unsubscribe = onSnapshot(q, (snapshot) => {
-            const list = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+            const list = snapshot.docs.map(d => ({ ...d.data(), id: d.id }));
             // Sort by createdAt descending
             list.sort((a, b) => {
                 const tA = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;

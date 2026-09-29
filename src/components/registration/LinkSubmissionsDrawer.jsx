@@ -34,7 +34,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
         );
 
         const unsubscribe = onSnapshot(q, (snapshot) => {
-            const list = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+            const list = snapshot.docs.map(d => ({ ...d.data(), id: d.id }));
             // Sort by createdAt descending
             list.sort((a, b) => {
                 const tA = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
@@ -58,7 +58,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
         async function fetchStudents() {
             try {
                 const snap = await getDocs(query(collection(db, 'students'), where('active', '==', true)));
-                setStudents(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+                setStudents(snap.docs.map(d => ({ ...d.data(), id: d.id })));
             } catch (err) {
                 console.error("Error fetching students:", err);
             }

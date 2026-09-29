@@ -311,9 +311,8 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
         const createPayload = (dateBase) => {
             const start = new Date(`${dateBase}T${formData.startTime}`);
             const end = new Date(`${dateBase}T${formData.endTime}`);
-            return {
+            const payload = {
                 ...initialData,
-                id: initialData?.id || null,
                 title: formData.title,
                 date: dateBase,
                 venueId: formData.venueId,
@@ -328,6 +327,12 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                 customData: formData.customFields,
                 status: initialData?.status || 'Draft'
             };
+            if (initialData?.id) {
+                payload.id = initialData.id;
+            } else {
+                delete payload.id;
+            }
+            return payload;
         };
 
         const checkAndSaveBatch = async (payloads) => {
