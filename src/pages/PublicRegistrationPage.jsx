@@ -103,10 +103,12 @@ export default function PublicRegistrationPage() {
     useEffect(() => {
         if (linkData && (!linkData.allowedGrades || linkData.allowedGrades.includes('all'))) {
             if (grades && grades.length > 0) {
-                setSingleForm(prev => ({ ...prev, grade: prev.grade || grades[0].name }));
+                const firstGrade = typeof grades[0] === 'object' ? (grades[0].name || grades[0].id) : grades[0];
+                setSingleForm(prev => ({ ...prev, grade: prev.grade || firstGrade || '' }));
             }
         } else if (linkData?.allowedGrades && linkData.allowedGrades.length > 0) {
-            setSingleForm(prev => ({ ...prev, grade: prev.grade || linkData.allowedGrades[0] }));
+            const firstAllowed = typeof linkData.allowedGrades[0] === 'object' ? (linkData.allowedGrades[0].name || linkData.allowedGrades[0].id) : linkData.allowedGrades[0];
+            setSingleForm(prev => ({ ...prev, grade: prev.grade || firstAllowed || '' }));
         }
     }, [linkData, grades]);
 
@@ -187,15 +189,23 @@ export default function PublicRegistrationPage() {
     const remainingSeats = hasMaxCap ? Math.max(0, maxCap - activeCount) : null;
     const capacityPercent = hasMaxCap ? Math.min(100, Math.round((activeCount / maxCap) * 100)) : 100;
 
-    // Allowed grade options
-    const gradeOptions = linkData.allowedGrades?.includes('all') || !linkData.allowedGrades?.length
-        ? (grades?.map(g => g.name) || ['أول ثانوي', 'ثاني ثانوي', 'ثالث ثانوي'])
-        : linkData.allowedGrades;
+    // Allowed grade options (always strings)
+    const gradeOptions = (linkData.allowedGrades?.includes('all') || !linkData.allowedGrades?.length
+        ? (grades?.map(g => typeof g === 'object' ? (g.name || g.id) : g) || ['أول ثانوي', 'ثاني ثانوي', 'ثالث ثانوي'])
+        : linkData.allowedGrades.map(g => typeof g === 'object' ? (g.name || g.id) : g)
+    ).filter(Boolean);
 
-    // Section options helper
+    // Section options helper (always returns array of strings)
     const getSectionOptions = (gradeName) => {
-        const found = grades?.find(g => g.name === gradeName);
-        if (found && found.sections?.length > 0) return found.sections;
+        const found = grades?.find(g => (typeof g === 'object' ? (g.name || g.id) : g) === gradeName);
+        if (found && Array.isArray(found.sections) && found.sections.length > 0) {
+            return found.sections.map(sec => {
+                if (typeof sec === 'object' && sec !== null) {
+                    return String(sec.name || sec.id || '');
+                }
+                return String(sec);
+            }).filter(Boolean);
+        }
         return ['1', '2', '3', '4', '5', '6'];
     };
 
@@ -475,7 +485,9 @@ export default function PublicRegistrationPage() {
                             </span>
                             {(linkData.specializations?.length > 0 || linkData.specialization) && (
                                 <span className="text-xs font-bold px-3 py-1 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
-                                    المجال: {Array.isArray(linkData.specializations) && linkData.specializations.length > 0 ? linkData.specializations.join('، ') : linkData.specialization}
+                                    المجال: {Array.isArray(linkData.specializations) && linkData.specializations.length > 0
+                                        ? linkData.specializations.map(s => typeof s === 'object' ? (s.name || s.id) : String(s)).join('، ')
+                                        : (typeof linkData.specialization === 'object' ? (linkData.specialization?.name || '') : String(linkData.specialization || ''))}
                                 </span>
                             )}
                         </div>
@@ -885,7 +897,7 @@ export default function PublicRegistrationPage() {
                                             <div className="flex items-center gap-2">
                                                 <h4 className="font-bold text-white text-sm">{sub.studentName}</h4>
                                                 <span className="text-[11px] px-2 py-0.5 rounded-md bg-slate-900 text-slate-300">
-                                                    {sub.grade} - شعبة {sub.section || '1'}
+                                                    {typeof sub.grade === 'object' ? (sub.grade?.name || '') : sub.grade} - شعبة {typeof sub.section === 'object' ? (sub.section?.name || '') : (sub.section || '1')}
                                                 </span>
                                                 <span className={`text-[10px] px-2 py-0.5 rounded-md font-bold ${
                                                     sub.status === 'approved'
@@ -903,10 +915,11 @@ export default function PublicRegistrationPage() {
                                                     {customFields.map((f) => {
                                                         const val = sub.customValues?.[f.id] || (f.id === 'f_legacy' ? sub.customFieldValue : '');
                                                         if (!val) return null;
+                                                        const displayVal = typeof val === 'object' ? (val.name || val.label || JSON.stringify(val)) : String(val);
                                                         return (
                                                             <span key={f.id} className="text-[11px] px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-indigo-300">
                                                                 <span className="text-slate-400">{f.label}: </span>
-                                                                {val}
+                                                                {displayVal}
                                                             </span>
                                                         );
                                                     })}

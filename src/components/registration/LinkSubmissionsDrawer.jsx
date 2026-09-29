@@ -1,8 +1,7 @@
-import { useState, useEffect, useMemo } from 'react';
 import {
     X, CheckCircle, XCircle, Search, Download, Printer,
     AlertTriangle, UserCheck, Trash2, Edit2, ShieldAlert,
-    Clock, CheckSquare, Square, RefreshCw
+    Clock, CheckSquare, Square, RefreshCw, Calendar, Link2
 } from 'lucide-react';
 import { db } from '../../firebase';
 import {
@@ -13,7 +12,7 @@ import * as XLSX from 'xlsx';
 import toast from 'react-hot-toast';
 import { useSettings } from '../../contexts/SettingsContext';
 
-export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpdated }) {
+export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpdated, onEditLink }) {
     const { schoolInfo } = useSettings();
     const [submissions, setSubmissions] = useState([]);
     const [students, setStudents] = useState([]);
@@ -577,9 +576,43 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                         المفوض: {link.delegateName}
                                     </span>
                                 </h2>
-                                <p className="text-xs text-slate-400 mt-0.5">
-                                    متابعة واعتماد الطلاب المسجلين عبر الرابط مع الكشف الذكي عن التكرار
-                                </p>
+                                <div className="flex items-center gap-2 mt-1">
+                                    <p className="text-xs text-slate-400">
+                                        متابعة واعتماد الطلاب المسجلين عبر الرابط مع الكشف الذكي عن التكرار
+                                    </p>
+                                    <span className="text-slate-600">•</span>
+                                    {link.eventTitle ? (
+                                        <div className="flex items-center gap-1.5">
+                                            <span className="text-[11px] font-semibold text-indigo-400 bg-indigo-950/60 border border-indigo-800/40 px-2 py-0.5 rounded-md flex items-center gap-1">
+                                                <Calendar size={12} /> مرتبط بـ: {link.eventTitle}
+                                            </span>
+                                            {onEditLink && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => onEditLink(link)}
+                                                    className="text-[11px] text-indigo-400 hover:text-indigo-300 underline"
+                                                >
+                                                    تغيير
+                                                </button>
+                                            )}
+                                        </div>
+                                    ) : (
+                                        <div className="flex items-center gap-1.5">
+                                            <span className="text-[11px] text-slate-400 bg-slate-800 px-2 py-0.5 rounded-md">
+                                                غير مرتبط بفعالية
+                                            </span>
+                                            {onEditLink && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => onEditLink(link)}
+                                                    className="text-[11px] text-amber-400 hover:text-amber-300 font-semibold underline flex items-center gap-0.5"
+                                                >
+                                                    <Link2 size={12} /> ربط الآن
+                                                </button>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
                             </div>
                         </div>
                         <button

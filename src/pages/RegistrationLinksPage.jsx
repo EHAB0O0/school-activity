@@ -334,11 +334,36 @@ export default function RegistrationLinksPage() {
                                             </span>
                                         </div>
 
-                                        {link.eventTitle && (
-                                            <span className="text-[11px] text-indigo-400 bg-indigo-950/60 border border-indigo-800/40 px-2 py-0.5 rounded-md inline-block">
-                                                مرتبط بفعالية: {link.eventTitle}
-                                            </span>
-                                        )}
+                                        <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                                            {link.eventTitle ? (
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setLinkToEdit(link);
+                                                        setIsCreateModalOpen(true);
+                                                    }}
+                                                    className="text-[11px] text-indigo-300 hover:text-indigo-200 bg-indigo-950/70 hover:bg-indigo-900/80 border border-indigo-700/50 px-2 py-0.5 rounded-md inline-flex items-center gap-1 transition-colors"
+                                                    title="انقر لتعديل الفعالية المربوطة"
+                                                >
+                                                    <Calendar size={12} className="text-indigo-400" />
+                                                    <span>مرتبط: {link.eventTitle}</span>
+                                                    <Edit3 size={10} className="opacity-70 mr-0.5" />
+                                                </button>
+                                            ) : (
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setLinkToEdit(link);
+                                                        setIsCreateModalOpen(true);
+                                                    }}
+                                                    className="text-[11px] text-amber-300 hover:text-amber-200 bg-amber-950/50 hover:bg-amber-900/60 border border-amber-800/50 px-2 py-0.5 rounded-md inline-flex items-center gap-1 transition-colors"
+                                                    title="انقر لربط الرابط بفعالية في الجدول"
+                                                >
+                                                    <Plus size={11} />
+                                                    <span>ربط بفعالية</span>
+                                                </button>
+                                            )}
+                                        </div>
                                     </div>
 
                                     {/* Delegate Card */}
@@ -502,6 +527,11 @@ export default function RegistrationLinksPage() {
                 onClose={() => setDrawerLink(null)}
                 link={drawerLink}
                 onLinkUpdated={() => {}}
+                onEditLink={(link) => {
+                    setDrawerLink(null);
+                    setLinkToEdit(link);
+                    setIsCreateModalOpen(true);
+                }}
             />
         </div>
     );

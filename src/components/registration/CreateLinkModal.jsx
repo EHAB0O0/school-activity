@@ -22,6 +22,11 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
     const [isDelegateDropdownOpen, setIsDelegateDropdownOpen] = useState(false);
     const delegateDropdownRef = useRef(null);
 
+    // Event Search Dropdown State
+    const [eventSearchTerm, setEventSearchTerm] = useState('');
+    const [isEventDropdownOpen, setIsEventDropdownOpen] = useState(false);
+    const eventDropdownRef = useRef(null);
+
     // New Specialization Creation State
     const [isAddingNewSpec, setIsAddingNewSpec] = useState(false);
     const [newSpecName, setNewSpecName] = useState('');
@@ -63,11 +68,14 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
         status: 'active'
     });
 
-    // Close delegate dropdown on outside click
+    // Close dropdowns on outside click
     useEffect(() => {
         const handleClickOutside = (e) => {
             if (delegateDropdownRef.current && !delegateDropdownRef.current.contains(e.target)) {
                 setIsDelegateDropdownOpen(false);
+            }
+            if (eventDropdownRef.current && !eventDropdownRef.current.contains(e.target)) {
+                setIsEventDropdownOpen(false);
             }
         };
         document.addEventListener('mousedown', handleClickOutside);
@@ -194,6 +202,17 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
         );
     }, [studentsList, delegateSearchTerm]);
 
+    // Filter events for searchable dropdown
+    const filteredEvents = useMemo(() => {
+        if (!eventSearchTerm.trim()) return eventsList;
+        const term = eventSearchTerm.toLowerCase().trim();
+        return eventsList.filter(e =>
+            (e.title || '').toLowerCase().includes(term) ||
+            (e.date || '').toLowerCase().includes(term) ||
+            (e.typeName || e.type || '').toLowerCase().includes(term)
+        );
+    }, [eventsList, eventSearchTerm]);
+
     if (!isOpen) return null;
 
     const handleGradeToggle = (gradeName) => {
@@ -263,6 +282,14 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
         } else {
             setFormData(prev => ({ ...prev, eventId: '', eventTitle: '' }));
         }
+        setIsEventDropdownOpen(false);
+        setEventSearchTerm('');
+    };
+
+    const handleClearEvent = () => {
+        setFormData(prev => ({ ...prev, eventId: '', eventTitle: '' }));
+        setIsEventDropdownOpen(false);
+        setEventSearchTerm('');
     };
 
     // Custom Fields Management
@@ -430,15 +457,16 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
             const newEventId = formData.eventId || '';
 
             if (linkToEdit && oldEventId !== newEventId) {
-                // Fetch approved submissions
+                // Fetch approved submissions without needing a composite index
                 const subsSnap = await getDocs(
                     query(
                         collection(db, 'link_submissions'),
-                        where('linkId', '==', linkToEdit.id),
-                        where('status', '==', 'approved')
+                        where('linkId', '==', linkToEdit.id)
                     )
                 );
-                const approvedSubs = subsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+                const approvedSubs = subsSnap.docs
+                    .map(d => ({ id: d.id, ...d.data() }))
+                    .filter(d => d.status === 'approved');
 
                 if (approvedSubs.length > 0) {
                     if (oldEventId && newEventId) {
@@ -614,22 +642,108 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
                                 />
                             </div>
 
-                            <div>
-                                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                                    ربط بفعالية موجودة في الجدول (اختياري)
+                            <div className="relative" ref={eventDropdownRef}>
+                                <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center justify-between">
+                                    <span>ربط بفعالية موجودة في الجدول (اختياري)</span>
+                                    {formData.eventId && (
+                                        <button
+                                            type="button"
+                                            onClick={handleClearEvent}
+                                            className="text-[11px] text-rose-400 hover:text-rose-300 flex items-center gap-1 font-normal"
+                                        >
+                                            <X size={12} /> إلغاء الربط
+                                        </button>
+                                    )}
                                 </label>
-                                <select
-                                    value={formData.eventId}
-                                    onChange={(e) => handleSelectEvent(e.target.value)}
-                                    className="w-full px-3.5 py-2.5 bg-slate-800/80 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500 transition-colors"
-                                >
-                                    <option value="">-- بدون ربط بفعالية معينة --</option>
-                                    {eventsList.map((ev) => (
-                                        <option key={ev.id} value={ev.id}>
-                                            {ev.title} ({ev.date || 'بدون تاريخ'})
-                                        </option>
-                                    ))}
-                                </select>
+
+                                {formData.eventId ? (
+                                    <div className="flex items-center justify-between px-3.5 py-2.5 bg-indigo-500/10 border border-indigo-500/40 rounded-xl text-indigo-200 text-sm">
+                                        <div className="flex items-center gap-2 truncate">
+                                            <Calendar size={16} className="text-indigo-400 shrink-0" />
+                                            <span className="font-semibold truncate">
+                                                {eventsList.find(e => e.id === formData.eventId)?.title || formData.eventTitle || 'فعالية محددة'}
+                                            </span>
+                                            {eventsList.find(e => e.id === formData.eventId)?.date && (
+                                                <span className="text-xs text-indigo-300/70 shrink-0">
+                                                    ({eventsList.find(e => e.id === formData.eventId).date})
+                                                </span>
+                                            )}
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => setIsEventDropdownOpen(true)}
+                                            className="text-xs text-indigo-400 hover:text-indigo-300 mr-2 shrink-0 underline"
+                                        >
+                                            تغيير
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div className="relative">
+                                        <button
+                                            type="button"
+                                            onClick={() => setIsEventDropdownOpen(!isEventDropdownOpen)}
+                                            className="w-full px-3.5 py-2.5 bg-slate-800/80 border border-slate-700 rounded-xl text-slate-400 text-sm focus:outline-none focus:border-indigo-500 transition-colors flex items-center justify-between"
+                                        >
+                                            <span>-- اختر فعالية لربطها --</span>
+                                            <ChevronDown size={16} className="text-slate-400" />
+                                        </button>
+                                    </div>
+                                )}
+
+                                {/* Searchable Dropdown Modal/Menu */}
+                                {isEventDropdownOpen && (
+                                    <div className="absolute z-30 mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl shadow-2xl overflow-hidden">
+                                        <div className="p-2 border-b border-slate-800 bg-slate-950/60">
+                                            <div className="relative">
+                                                <input
+                                                    type="text"
+                                                    placeholder="ابحث عن فعالية باسمها أو تاريخها..."
+                                                    value={eventSearchTerm}
+                                                    onChange={(e) => setEventSearchTerm(e.target.value)}
+                                                    autoFocus
+                                                    className="w-full px-3 py-1.5 pr-8 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs placeholder:text-slate-500 focus:outline-none focus:border-indigo-500"
+                                                />
+                                                <Search size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                                            </div>
+                                        </div>
+                                        <div className="max-h-52 overflow-y-auto custom-scrollbar divide-y divide-slate-800/60">
+                                            <button
+                                                type="button"
+                                                onClick={handleClearEvent}
+                                                className="w-full text-right px-3.5 py-2.5 hover:bg-slate-800/80 text-xs text-slate-400 hover:text-white transition-colors flex items-center justify-between"
+                                            >
+                                                <span>-- بدون ربط بفعالية --</span>
+                                                {!formData.eventId && <Check size={14} className="text-emerald-400" />}
+                                            </button>
+                                            {filteredEvents.length === 0 ? (
+                                                <div className="p-4 text-center text-xs text-slate-500">
+                                                    لا توجد فعاليات مطابقة للبحث
+                                                </div>
+                                            ) : (
+                                                filteredEvents.map((ev) => (
+                                                    <button
+                                                        key={ev.id}
+                                                        type="button"
+                                                        onClick={() => handleSelectEvent(ev.id)}
+                                                        className={`w-full text-right px-3.5 py-2.5 hover:bg-slate-800/80 text-xs transition-colors flex items-center justify-between ${
+                                                            formData.eventId === ev.id ? 'bg-indigo-950/40 text-indigo-300 font-semibold' : 'text-slate-200'
+                                                        }`}
+                                                    >
+                                                        <div className="flex flex-col gap-0.5 truncate">
+                                                            <span className="truncate">{ev.title}</span>
+                                                            <div className="flex items-center gap-2 text-[10px] text-slate-400">
+                                                                {ev.date && <span>📅 {ev.date}</span>}
+                                                                {ev.location && <span>📍 {ev.location}</span>}
+                                                                {ev.type && <span className="bg-slate-800 px-1.5 py-0.5 rounded text-indigo-300">{ev.type}</span>}
+                                                            </div>
+                                                        </div>
+                                                        {formData.eventId === ev.id && <Check size={14} className="text-emerald-400 shrink-0 mr-2" />}
+                                                    </button>
+                                                ))
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </div>
 
