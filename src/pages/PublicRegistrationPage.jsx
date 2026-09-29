@@ -460,7 +460,7 @@ export default function PublicRegistrationPage() {
     };
 
     return (
-        <div className="min-h-screen bg-slate-950 text-white font-cairo text-right py-8 px-4 sm:px-6 lg:px-8 flex flex-col items-center" dir="rtl">
+        <div className="min-h-screen w-full bg-slate-950 text-white font-cairo text-right py-8 px-4 sm:px-6 lg:px-8 flex flex-col items-center overflow-y-auto" dir="rtl">
             <Toaster position="top-center" />
 
             <div className="max-w-3xl w-full space-y-6">
