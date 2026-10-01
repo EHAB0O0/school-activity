@@ -7,9 +7,7 @@ import {
 import { db } from '../../firebase';
 import {
     collection, query, where, onSnapshot, doc, updateDoc,
-    deleteDoc, addDoc, writeBatch, serverTimestamp, increment, arrayUnion, arrayRemove, getDocs
 } from 'firebase/firestore';
-import * as XLSX from 'xlsx';
 import toast from 'react-hot-toast';
 import { useSettings } from '../../contexts/SettingsContext';
 
@@ -493,11 +491,13 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
     };
 
     // Excel Export
-    const handleExportExcel = () => {
+    const handleExportExcel = async () => {
         if (submissions.length === 0) {
             toast.error("لا توجد بيانات للتصدير");
             return;
         }
+
+        const XLSX = await import('xlsx');
 
         const customHeaders = customFields.length > 0
             ? customFields.map(f => f.label)

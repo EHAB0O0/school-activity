@@ -78,6 +78,7 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
         }
     }, [initialData, settings]);
     useEffect(() => {
+        if (!isOpen) return;
         const fetchResources = async () => {
             try {
                 // Students & Assets & Venues (Same as before)
@@ -124,7 +125,7 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
             }
         };
         fetchResources();
-    }, []);
+    }, [isOpen]);
 
     useEffect(() => {
         if (initialData) {
@@ -444,16 +445,18 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
-            <div className="bg-[#1a1a20] border border-white/10 rounded-2xl w-full max-w-2xl shadow-2xl flex flex-col max-h-[90vh]">
-                <div className="p-6 border-b border-white/5 flex justify-between items-center bg-black/20">
-                    <div className="flex items-center gap-3">
-                        <h2 className="text-2xl font-bold text-white flex items-center">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm animate-fade-in">
+            <div className="bg-[#1a1a20] border border-white/10 rounded-t-3xl sm:rounded-2xl w-full max-w-2xl shadow-2xl flex flex-col max-h-[92vh] sm:max-h-[90vh] overflow-hidden">
+                {/* Mobile Pull Handle */}
+                <div className="w-12 h-1.5 bg-white/20 rounded-full mx-auto my-2.5 sm:hidden shrink-0" />
+                <div className="p-4 sm:p-6 border-b border-white/5 flex justify-between items-center bg-black/20 shrink-0">
+                    <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+                        <h2 className="text-xl sm:text-2xl font-bold text-white flex items-center">
                             {initialData?.id ? 'تفاصيل النشاط' : 'إضافة نشاط جديد'}
-                            {isPastEvent && <span className="text-xs bg-amber-500/20 text-amber-400 border border-amber-500/30 px-2 py-1 rounded-full mr-3 flex items-center"><Clock size={12} className="ml-1" /> سجل سابق</span>}
+                            {isPastEvent && <span className="text-xs bg-amber-500/20 text-amber-400 border border-amber-500/30 px-2 py-0.5 rounded-full mr-2 flex items-center"><Clock size={12} className="ml-1" /> سجل سابق</span>}
                         </h2>
                         {!initialData?.id && (
-                            <button onClick={() => setShowImport(!showImport)} className="text-xs bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 px-3 py-1.5 rounded-lg hover:bg-indigo-600/30 transition-all flex items-center">
+                            <button onClick={() => setShowImport(!showImport)} className="text-xs bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 px-2.5 py-1 rounded-lg hover:bg-indigo-600/30 transition-all flex items-center">
                                 📥 نسخ من نشاط سابق
                             </button>
                         )}
@@ -487,7 +490,7 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                     </div>
                 )}
 
-                <div className="p-6 overflow-y-auto custom-scrollbar space-y-6">
+                <div className="p-4 sm:p-6 overflow-y-auto custom-scrollbar space-y-6 flex-1">
                     {/* READONLY WARNING REMOVED as we want full edit access now */}
 
                     {conflict && (
@@ -512,7 +515,9 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                                 <select disabled={isReadOnly} className="w-full bg-black/40 border border-white/10 rounded-xl p-3 text-white focus:border-indigo-500 outline-none disabled:opacity-50"
                                     value={formData.typeId} onChange={e => handleChange('typeId', e.target.value)}>
                                     <option value="">اختر النوع...</option>
-                                    {eventTypes?.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                    {eventTypes?.map((t, idx) => (
+                                        <option key={t.id || t.name || idx} value={t.id}>{t.name}</option>
+                                    ))}
                                 </select>
                             </div>
 
@@ -801,7 +806,9 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                                         onChange={e => { setSelectedGrade(e.target.value); setSelectedSection(''); }}
                                     >
                                         <option value="">كل الصفوف</option>
-                                        {grades.map(g => <option key={g.id} value={g.name}>{g.name}</option>)}
+                                        {grades.map((g, idx) => (
+                                            <option key={g.id || g.name || idx} value={g.name || g}>{g.name || g}</option>
+                                        ))}
                                     </select>
                                 </div>
                                 <div className="flex-1 min-w-[150px]">
@@ -813,9 +820,11 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                                         onChange={e => setSelectedSection(e.target.value)}
                                     >
                                         <option value="">الكل</option>
-                                        {selectedGrade && grades.find(g => g.name === selectedGrade)?.sections?.map(s => (
-                                            <option key={s.id} value={s.name}>{s.name}</option>
-                                        ))}
+                                        {selectedGrade && (grades.find(g => g.name === selectedGrade)?.sections || []).map((s, idx) => {
+                                            const val = typeof s === 'object' ? (s.name || s.id || '') : s;
+                                            const key = typeof s === 'object' ? (s.id || s.name || idx) : `${s}-${idx}`;
+                                            return <option key={key} value={val}>{val}</option>;
+                                        })}
                                     </select>
                                 </div>
                                 <div className="pb-0.5">
@@ -943,16 +952,16 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                     </form>
                 </div>
 
-                <div className="p-6 border-t border-white/10 flex justify-between space-x-reverse bg-black/20">
+                <div className="p-4 sm:p-6 border-t border-white/10 flex flex-wrap justify-between items-center gap-2.5 bg-[#141418] sticky bottom-0 z-20 shrink-0">
                     {initialData?.id && (
-                        <button type="button" onClick={() => onDelete(initialData)} className="px-4 py-3 rounded-xl text-red-400 hover:bg-red-500/10 border border-transparent hover:border-red-500/30 flex items-center transition-all">
-                            <Trash2 size={18} className="ml-2" /> حذف النشاط
+                        <button type="button" onClick={() => onDelete(initialData)} className="px-3.5 py-2.5 rounded-xl text-red-400 hover:bg-red-500/10 border border-transparent hover:border-red-500/30 flex items-center transition-all text-xs sm:text-sm">
+                            <Trash2 size={16} className="ml-1.5" /> حذف النشاط
                         </button>
                     )}
 
-                    <div className="flex space-x-3 space-x-reverse mr-auto">
-                        <button type="button" onClick={onClose} className="px-6 py-3 rounded-xl text-gray-400 hover:bg-white/5 transition-all">إلغاء</button>
-                        <button form="eventForm" type="submit" disabled={checking || isSubmitting} className="px-8 py-3 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold shadow-lg transition-transform transform active:scale-95 flex items-center hover:shadow-indigo-500/25">
+                    <div className="flex items-center gap-2 mr-auto flex-wrap">
+                        <button type="button" onClick={onClose} className="px-4 py-2.5 rounded-xl text-gray-400 hover:bg-white/5 transition-all text-xs sm:text-sm border border-white/5">إلغاء</button>
+                        <button form="eventForm" type="submit" disabled={checking || isSubmitting} className="px-5 sm:px-8 py-2.5 sm:py-3 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold shadow-lg transition-transform transform active:scale-95 flex items-center hover:shadow-indigo-500/25 text-xs sm:text-sm">
                             {checking || isSubmitting ? 'جاري التحقق...' : (initialData?.id ? 'حفظ التعديلات' : (isRecurring ? 'إنشاء المتكرر' : 'إنشاء النشاط'))}
                         </button>
 

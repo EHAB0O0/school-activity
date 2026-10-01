@@ -9,8 +9,7 @@ import toast from 'react-hot-toast';
 import ConfirmModal from './ui/ConfirmModal';
 import DeleteEventModal from './ui/DeleteEventModal';
 import PrintOptionsModal from './ui/PrintOptionsModal';
-import html2canvas from 'html2canvas';
-import jsPDF from 'jspdf';
+
 
 // --- Internal Component: MultiSelect moved to ui/MultiSelect.jsx ---
 import MultiSelect from './ui/MultiSelect';
@@ -505,7 +504,10 @@ export default function Scheduler() {
                 `);
                 doc.close();
 
-                await new Promise(r => setTimeout(r, 200));
+                const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
+                    import('html2canvas'),
+                    import('jspdf')
+                ]);
 
                 const canvas = await html2canvas(doc.body, {
                     useCORS: true,
@@ -681,6 +683,11 @@ export default function Scheduler() {
                 doc.close();
 
                 await new Promise(r => setTimeout(r, 800)); // Increased wait slightly for fonts
+
+                const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
+                    import('html2canvas'),
+                    import('jspdf')
+                ]);
 
                 const canvas = await html2canvas(doc.body, { scale: 2 });
                 document.body.removeChild(iframe);

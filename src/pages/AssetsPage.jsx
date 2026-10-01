@@ -4,8 +4,7 @@ import { collection, addDoc, getDocs, doc, deleteDoc, updateDoc, query, where, o
 import { Plus, Trash2, Box, Tag, MapPin, Edit3, Save, Clock, FileText, X, AlertTriangle, Power, CheckCircle, PenTool, Loader2, Printer } from 'lucide-react';
 import toast from 'react-hot-toast';
 import ConfirmModal from '../components/ui/ConfirmModal';
-import html2canvas from 'html2canvas';
-import jsPDF from 'jspdf';
+
 
 export default function AssetsPage() {
     const [activeTab, setActiveTab] = useState('equipment'); // equipment | venues
@@ -277,6 +276,10 @@ export default function AssetsPage() {
         // Wait for render (fonts etc)
         setTimeout(async () => {
             try {
+                const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
+                    import('html2canvas'),
+                    import('jspdf')
+                ]);
                 const canvas = await html2canvas(doc.body, { scale: 2 });
                 const imgData = canvas.toDataURL('image/jpeg', 0.9);
                 const pdf = new jsPDF('p', 'mm', 'a4');
@@ -448,6 +451,10 @@ export default function AssetsPage() {
         doc.open(); doc.write(htmlContent); doc.close();
         setTimeout(async () => {
             try {
+                const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
+                    import('html2canvas'),
+                    import('jspdf')
+                ]);
                 const canvas = await html2canvas(doc.body, { scale: 2 });
                 const imgData = canvas.toDataURL('image/jpeg', 0.9);
                 const pdf = new jsPDF('p', 'mm', 'a4');

@@ -1,11 +1,9 @@
 import { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import { db } from '../firebase';
 import { collection, query, orderBy, getDocs, doc, getDoc, updateDoc, deleteDoc, runTransaction, increment } from 'firebase/firestore';
-import jsPDF from 'jspdf';
-import 'jspdf-autotable';
-import html2canvas from 'html2canvas';
-import * as XLSX from 'xlsx';
-import { FileText, Download, Calendar, Users, Box, Filter, Printer, Search, X, Eye, Trash2, RefreshCw, Pen, Hash, Table } from 'lucide-react';
+
+import { FileText, Download, Calendar, Users, Box, Filter, Printer, Search, X, Eye, Trash2, RefreshCw, Pen, Hash, Table, Archive, RotateCcw } from 'lucide-react';
 import { Menu, Transition } from '@headlessui/react';
 import { Fragment } from 'react';
 import EventModal from '../components/EventModal';
@@ -77,14 +75,29 @@ const PrintControls = ({ event, onPrint }) => {
 import { useSettings } from '../contexts/SettingsContext';
 
 export default function ReportsPage() {
+    const location = useLocation();
     const { grades, eventTypes, activeProfile } = useSettings(); // Use Global Grades
-    const [activeTab, setActiveTab] = useState('activities'); // activities | students | assets
+    const [activeTab, setActiveTab] = useState(() => {
+        const searchParams = new URLSearchParams(window.location.search);
+        return location.state?.tab || searchParams.get('tab') || 'activities';
+    });
+
+    useEffect(() => {
+        if (location.state?.tab) {
+            setActiveTab(location.state.tab);
+        }
+    }, [location.state?.tab]);
     const [loading, setLoading] = useState(false);
 
     // Data States
     const [rawData, setRawData] = useState([]);
     const [previewData, setPreviewData] = useState([]);
     const [studentMap, setStudentMap] = useState({}); // id -> name
+
+    // --- Archive Hub State ---
+    const [archiveSubTab, setArchiveSubTab] = useState('students'); // students | activities
+    const [archiveCounts, setArchiveCounts] = useState({ students: 0, activities: 0 });
+    const [archiveSearchTerm, setArchiveSearchTerm] = useState('');
 
     // --- Advanced Filters State ---
     const [dateRange, setDateRange] = useState({ start: '', end: '' });
@@ -174,9 +187,10 @@ export default function ReportsPage() {
     // --- 1. Fetch Data Logic ---
     useEffect(() => {
         const loadInitialData = async () => {
+            let sMap = {};
+            let aMap = {};
+            let eDocs = [];
             try {
-                // Load Students, Assets & Events Maps for lookups and histories
-                let eDocs = [];
                 try {
                     const eSnap = await getDocs(query(collection(db, 'events'), orderBy('startTime', 'desc')));
                     eDocs = eSnap.docs;
@@ -184,15 +198,18 @@ export default function ReportsPage() {
                     const fallbackSnap = await getDocs(collection(db, 'events'));
                     eDocs = fallbackSnap.docs;
                 }
+            } catch (e) {
+                console.warn("Notice loading events for history:", e);
+            }
 
-                const [sSnap, aSnap] = await Promise.all([
-                    getDocs(collection(db, 'students')),
-                    getDocs(collection(db, 'assets'))
-                ]);
-
-                const sMap = {};
+            let initialArchivedStCount = 0;
+            try {
+                const sSnap = await getDocs(collection(db, 'students'));
                 sSnap.docs.forEach(d => {
                     const sData = d.data();
+                    if (sData.active === false || sData.status === 'archived') {
+                        initialArchivedStCount++;
+                    }
                     sMap[d.id] = {
                         name: sData.name,
                         grade: sData.grade || '',
@@ -200,32 +217,40 @@ export default function ReportsPage() {
                     };
                 });
                 setStudentMap(sMap);
+            } catch (e) {
+                console.warn("Notice loading students map:", e);
+            }
 
-                const aMap = {};
+            const initialArchivedEvCount = eDocs.filter(d => d.data().status === 'archived').length;
+            setArchiveCounts({
+                students: initialArchivedStCount,
+                activities: initialArchivedEvCount
+            });
+
+            try {
+                const aSnap = await getDocs(collection(db, 'assets'));
                 aSnap.docs.forEach(d => { aMap[d.id] = d.data().name; });
                 setAssetMap(aMap);
-
-                buildHistoryMaps(eDocs, sMap, aMap);
-            } catch (error) {
-                console.error("Failed to load initial data:", error);
+            } catch (e) {
+                console.warn("Notice loading assets map:", e);
             }
+
+            buildHistoryMaps(eDocs, sMap, aMap);
         };
         loadInitialData();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     useEffect(() => {
-        if (Object.keys(studentMap).length > 0 || activeTab !== 'activities') {
-            fetchData();
-        }
+        fetchData();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [activeTab, studentMap, assetMap]); // Refetch when tab changes or map is ready
+    }, [activeTab, archiveSubTab, studentMap, assetMap]); // Refetch when tab changes or map is ready
 
     // --- 2. Filter Logic ---
     useEffect(() => {
         applyFilters();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [rawData, dateRange, pointsRange, assetStatusFilter, gradeFilter, sectionFilter, venueFilter, activeTab]);
+    }, [rawData, dateRange, pointsRange, assetStatusFilter, gradeFilter, sectionFilter, venueFilter, activeTab, archiveSubTab, archiveSearchTerm]);
 
     // --- 3. Handlers ---
     const handleEditClick = async (event) => {
@@ -280,6 +305,87 @@ export default function ReportsPage() {
         });
     };
 
+    // --- Archive Specific Handlers ---
+    const handleRestoreStudent = async (student) => {
+        const toastId = toast.loading(`جاري استعادة الطالب ${student.name}...`);
+        try {
+            await updateDoc(doc(db, 'students', student.id), {
+                active: true,
+                status: 'active'
+            });
+            toast.success(`تمت استعادة الطالب "${student.name}" بنجاح وإعادته للسجلات النشطة`, { id: toastId });
+            fetchData();
+        } catch (e) {
+            console.error(e);
+            toast.error("فشل استعادة الطالب", { id: toastId });
+        }
+    };
+
+    const handlePermanentDeleteStudent = (student) => {
+        setConfirmModal({
+            isOpen: true,
+            title: "حذف نهائي للطالب",
+            message: `تحذير: هل أنت متأكد من حذف الطالب "${student.name}" نهائياً من قاعدة البيانات؟ لا يمكن التراجع عن هذا الإجراء وسيتم مسحه تماماً.`,
+            isDestructive: true,
+            onConfirm: async () => {
+                const toastId = toast.loading("جاري الحذف النهائي للطالب...");
+                try {
+                    await deleteDoc(doc(db, 'students', student.id));
+                    toast.success(`تم حذف الطالب "${student.name}" نهائياً`, { id: toastId });
+                    setConfirmModal(prev => ({ ...prev, isOpen: false }));
+                    fetchData();
+                } catch (e) {
+                    console.error(e);
+                    toast.error("فشل حذف الطالب", { id: toastId });
+                }
+            }
+        });
+    };
+
+    const handleRestoreArchivedEvent = async (event) => {
+        const toastId = toast.loading(`جاري استعادة النشاط "${event.title}"...`);
+        try {
+            await updateDoc(doc(db, 'events', event.id), { status: 'Done' });
+            toast.success(`تم استعادة النشاط بنجاح`, { id: toastId });
+            fetchData();
+        } catch (e) {
+            console.error(e);
+            toast.error("فشل استعادة النشاط", { id: toastId });
+        }
+    };
+
+    const handlePermanentDeleteArchivedEvent = (event) => {
+        setConfirmModal({
+            isOpen: true,
+            title: "حذف نهائي للنشاط",
+            message: `تحذير: هذا إجراء نهائي!\n\nسيتم حذف النشاط "${event.title}" نهائياً من السجلات وسحب النقاط (10 نقاط) من جميع الطلاب المشاركين.\n\nهل أنت متأكد؟`,
+            isDestructive: true,
+            onConfirm: async () => {
+                const toastId = toast.loading("جاري حذف النشاط وسحب النقاط...");
+                try {
+                    await runTransaction(db, async (transaction) => {
+                        const eventRef = doc(db, 'events', event.id);
+                        const linkStudents = event.linkStudentIds || [];
+                        const eligibleStudents = (event.rawParticipatingStudents || []).filter(id => !linkStudents.includes(id));
+                        if (eligibleStudents.length > 0) {
+                            for (const studentId of eligibleStudents) {
+                                const studentRef = doc(db, 'students', studentId);
+                                transaction.update(studentRef, { totalPoints: increment(-10) });
+                            }
+                        }
+                        transaction.delete(eventRef);
+                    });
+                    toast.success("تم حذف النشاط نهائياً", { id: toastId });
+                    setConfirmModal(prev => ({ ...prev, isOpen: false }));
+                    fetchData();
+                } catch (e) {
+                    console.error(e);
+                    toast.error("فشل في حذف النشاط", { id: toastId });
+                }
+            }
+        });
+    };
+
     async function fetchData() {
         setLoading(true);
         try {
@@ -315,18 +421,22 @@ export default function ReportsPage() {
                         participantDetails: pd.participantDetails || {},
                         points: pd.points || 10 // Sortable
                     };
-                });
+                }).filter(e => e.rawStatus !== 'archived');
             } else if (activeTab === 'students') {
                 const snap = await getDocs(query(collection(db, 'students'), orderBy('totalPoints', 'desc')));
-                data = snap.docs.map(d => ({
-                    id: d.id,
-                    name: d.data().name,
-                    class: d.data().class, // Legacy
-                    grade: d.data().grade || '', // New
-                    section: d.data().section || '', // New
-                    specializations: d.data().specializations || [],
-                    points: d.data().totalPoints || 0
-                }));
+                data = snap.docs
+                    .map(d => ({
+                        id: d.id,
+                        name: d.data().name,
+                        class: d.data().class, // Legacy
+                        grade: d.data().grade || '', // New
+                        section: d.data().section || '', // New
+                        specializations: d.data().specializations || [],
+                        points: d.data().totalPoints || 0,
+                        active: d.data().active,
+                        status: d.data().status
+                    }))
+                    .filter(s => s.active !== false && s.status !== 'archived');
             } else if (activeTab === 'assets') {
                 const snap = await getDocs(collection(db, 'assets'));
                 data = snap.docs.map(d => ({
@@ -335,6 +445,73 @@ export default function ReportsPage() {
                     type: d.data().type,
                     status: d.data().status
                 }));
+            } else if (activeTab === 'archive') {
+                let archivedStList = [];
+                let archivedEvList = [];
+
+                try {
+                    const sSnap = await getDocs(collection(db, 'students'));
+                    archivedStList = sSnap.docs
+                        .map(d => ({
+                            id: d.id,
+                            name: d.data().name,
+                            class: d.data().class,
+                            grade: d.data().grade || '',
+                            section: d.data().section || '',
+                            specializations: d.data().specializations || [],
+                            points: d.data().totalPoints || 0,
+                            active: d.data().active,
+                            status: d.data().status,
+                            joinedAt: d.data().joinedAt
+                        }))
+                        .filter(s => s.active === false || s.status === 'archived');
+                } catch (err) {
+                    console.error("Error fetching archived students:", err);
+                }
+
+                try {
+                    const eSnap = await getDocs(collection(db, 'events'));
+                    archivedEvList = eSnap.docs
+                        .map(d => {
+                            const pd = d.data();
+                            const participatingStudents = pd.participatingStudents?.map(id => {
+                                const s = studentMap[id];
+                                return s ? { ...s, id } : { name: 'طالب غير معروف', grade: '', section: '' };
+                            }) || [];
+                            return {
+                                id: d.id,
+                                title: pd.title,
+                                rawDate: pd.startTime?.toDate ? pd.startTime.toDate() : new Date(pd.date),
+                                date: pd.startTime?.toDate ? format(pd.startTime.toDate(), 'yyyy-MM-dd') : pd.date,
+                                formattedDate: pd.startTime?.toDate ? format(pd.startTime.toDate(), 'EEEE d MMMM yyyy', { locale: ar }) : pd.date,
+                                time: pd.startTime?.toDate ? format(pd.startTime.toDate(), 'hh:mm a') : pd.startTime,
+                                venueId: pd.venueId,
+                                venue: getVenueLabel(pd.venueId),
+                                status: getStatusLabel(pd.status || 'archived'),
+                                rawStatus: pd.status || 'archived',
+                                rawParticipatingStudents: pd.participatingStudents || [],
+                                linkStudentIds: pd.linkStudentIds || [],
+                                studentsCount: participatingStudents.length,
+                                studentNames: participatingStudents,
+                                type: pd.typeName || 'عام',
+                                typeId: pd.typeId,
+                                assets: pd.assets?.map(id => assetMap[id] || id) || [],
+                                customData: pd.customData || {},
+                                participantDetails: pd.participantDetails || {},
+                                points: pd.points || 10
+                            };
+                        })
+                        .filter(e => e.rawStatus === 'archived');
+                } catch (err) {
+                    console.error("Error fetching archived events:", err);
+                }
+
+                setArchiveCounts({
+                    students: archivedStList.length,
+                    activities: archivedEvList.length
+                });
+
+                data = archiveSubTab === 'students' ? archivedStList : archivedEvList;
             }
             setRawData(data);
         } catch (error) {
@@ -372,14 +549,32 @@ export default function ReportsPage() {
             if (assetStatusFilter !== 'All') {
                 filtered = filtered.filter(item => item.status === assetStatusFilter);
             }
+        } else if (activeTab === 'archive') {
+            if (archiveSearchTerm) {
+                const term = archiveSearchTerm.toLowerCase().trim();
+                filtered = filtered.filter(item => {
+                    if (archiveSubTab === 'students') {
+                        return (item.name || '').toLowerCase().includes(term) ||
+                            (item.class || '').toLowerCase().includes(term) ||
+                            (item.grade || '').toLowerCase().includes(term) ||
+                            (item.section || '').toLowerCase().includes(term);
+                    } else {
+                        return (item.title || '').toLowerCase().includes(term) ||
+                            (item.venue || '').toLowerCase().includes(term) ||
+                            (item.type || '').toLowerCase().includes(term);
+                    }
+                });
+            }
         }
 
         setPreviewData(filtered);
     }
 
     // --- Excel Export ---
-    const handleExportExcel = () => {
+    const handleExportExcel = async () => {
         if (!previewData || previewData.length === 0) return toast.error("لا توجد بيانات للتصدير");
+
+        const XLSX = await import('xlsx');
 
         // 1. Format Data for Excel
         let exportData = [];
@@ -426,6 +621,28 @@ export default function ReportsPage() {
                 }
                 return row;
             });
+        } else if (activeTab === 'archive') {
+            if (archiveSubTab === 'students') {
+                exportData = previewData.map((s, i) => ({
+                    "م": i + 1,
+                    "اسم الطالب": s.name,
+                    "الصف": s.grade || '',
+                    "الشعبة": s.section || '',
+                    "الفصل": (s.grade && s.section) ? `${s.grade} - ${s.section}` : (s.class || ''),
+                    "النقاط السابقة": s.points || 0,
+                    "التخصصات": (s.specializations || []).join('، ') || '-'
+                }));
+            } else {
+                exportData = previewData.map(e => ({
+                    "النشاط": e.title,
+                    "النوع": e.type,
+                    "التاريخ": e.formattedDate || e.date,
+                    "الوقت": e.time,
+                    "المكان": e.venue,
+                    "الحالة": "مؤرشف",
+                    "عدد الطلاب": e.studentsCount
+                }));
+            }
         }
 
         // 2. Create Workbook
@@ -911,6 +1128,12 @@ export default function ReportsPage() {
             });
 
             // 4. Capture & PDF
+            const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
+                import('html2canvas'),
+                import('jspdf')
+            ]);
+            await import('jspdf-autotable');
+
             const canvas = await html2canvas(doc.body, {
                 scale: 2,
                 useCORS: true,
@@ -1228,6 +1451,12 @@ export default function ReportsPage() {
             });
 
             // 3. Capture Iframe Body
+            const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
+                import('html2canvas'),
+                import('jspdf')
+            ]);
+            await import('jspdf-autotable');
+
             const canvas = await html2canvas(doc.body, {
                 scale: 2,
                 useCORS: true,
@@ -1357,6 +1586,16 @@ export default function ReportsPage() {
                         </button>
                         <button onClick={() => activeTab !== 'assets' && setActiveTab('assets')} className={`w-full p-3 rounded-xl flex items-center transition-all ${activeTab === 'assets' ? 'bg-amber-600 text-white shadow-lg' : 'hover:bg-white/5 text-gray-400'}`}>
                             <Box size={18} className="ml-2" /> جرد الموارد
+                        </button>
+                        <button onClick={() => activeTab !== 'archive' && setActiveTab('archive')} className={`w-full p-3 rounded-xl flex items-center justify-between transition-all ${activeTab === 'archive' ? 'bg-rose-600 text-white shadow-lg shadow-rose-600/20' : 'hover:bg-white/5 text-gray-400'}`}>
+                            <span className="flex items-center">
+                                <Archive size={18} className="ml-2" /> الأرشيف العام
+                            </span>
+                            {(archiveCounts.students > 0 || archiveCounts.activities > 0) && (
+                                <span className="bg-white/20 text-white text-xs px-2 py-0.5 rounded-full font-mono font-bold">
+                                    {archiveCounts.students + archiveCounts.activities}
+                                </span>
+                            )}
                         </button>
                     </div>
 
@@ -1525,7 +1764,71 @@ export default function ReportsPage() {
                         </div>
                     )}
 
-                    {/* Actions Section */}
+                    {/* --- ARCHIVE FILTERS --- */}
+                    {activeTab === 'archive' && (
+                        <div className="space-y-4 animate-fade-in mb-8">
+                            <div>
+                                <label className="block text-gray-400 text-sm mb-2 font-bold">نوع المحتوى المؤرشف</label>
+                                <div className="grid grid-cols-2 gap-2 bg-black/40 p-1 rounded-xl border border-white/10">
+                                    <button
+                                        onClick={() => setArchiveSubTab('students')}
+                                        className={`py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                                            archiveSubTab === 'students'
+                                                ? 'bg-rose-600 text-white shadow'
+                                                : 'text-gray-400 hover:text-white'
+                                        }`}
+                                    >
+                                        <Users size={14} />
+                                        الطلاب ({archiveCounts.students})
+                                    </button>
+                                    <button
+                                        onClick={() => setArchiveSubTab('activities')}
+                                        className={`py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                                            archiveSubTab === 'activities'
+                                                ? 'bg-rose-600 text-white shadow'
+                                                : 'text-gray-400 hover:text-white'
+                                        }`}
+                                    >
+                                        <Calendar size={14} />
+                                        الأنشطة ({archiveCounts.activities})
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-gray-400 text-sm mb-1">البحث في الأرشيف</label>
+                                <div className="relative">
+                                    <input
+                                        type="text"
+                                        placeholder={archiveSubTab === 'students' ? 'ابحث باسم الطالب أو الصف...' : 'ابحث باسم النشاط أو المكان...'}
+                                        className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 pr-9 text-white text-xs outline-none focus:border-rose-500"
+                                        value={archiveSearchTerm}
+                                        onChange={e => setArchiveSearchTerm(e.target.value)}
+                                    />
+                                    <Search size={14} className="absolute right-3 top-2.5 text-gray-400" />
+                                    {archiveSearchTerm && (
+                                        <button
+                                            onClick={() => setArchiveSearchTerm('')}
+                                            className="absolute left-2.5 top-2.5 text-gray-400 hover:text-white"
+                                        >
+                                            <X size={13} />
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="pt-3 border-t border-white/10 text-xs text-gray-400 space-y-2">
+                                <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-300">
+                                    <p className="font-bold flex items-center gap-1 mb-1">
+                                        <Archive size={14} /> التحكم بالأرشيف:
+                                    </p>
+                                    <p className="text-[11px] leading-relaxed">
+                                        يمكنك استعادة أي طالب أو نشاط لإعادته فوراً للسجلات النشطة، أو حذفه نهائياً لمسح بياناته تماماً من قاعدة البيانات.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                     <div className="border-t border-white/10 pt-4 space-y-3">
                         <h4 className="text-gray-400 text-sm mb-2 font-bold">إجراءات سريعة</h4>
 
@@ -1610,7 +1913,17 @@ export default function ReportsPage() {
                         {loading && <span className="text-indigo-400 text-sm animate-pulse flex items-center gap-2">جاري التحميل...</span>}
                     </div>
 
-                    <div className="flex-1 overflow-auto custom-scrollbar bg-black/20 rounded-xl border border-white/5">
+                    {/* Mobile Horizontal Scroll Indicator (Option 3-A) */}
+                    <div className="md:hidden flex items-center justify-between px-3 py-1.5 mb-2.5 bg-indigo-500/10 border border-indigo-500/20 rounded-xl text-indigo-300 text-xs">
+                        <span className="flex items-center gap-1.5 font-medium">
+                            <span>💡 اسحب الجدول لليسار لمعاينة بقية الأعمدة</span>
+                        </span>
+                        <span className="animate-pulse font-bold text-sm">⟵</span>
+                    </div>
+
+                    <div className="flex-1 overflow-auto custom-scrollbar bg-black/20 rounded-xl border border-white/5 relative">
+                        {/* Edge fade indicator on mobile */}
+                        <div className="pointer-events-none absolute left-0 top-0 bottom-0 w-4 bg-gradient-to-r from-black/40 to-transparent z-20 md:hidden" />
                         <table className="w-full min-w-[700px] text-right text-sm">
                             <thead className="bg-[#1a1a20] text-gray-400 sticky top-0 backdrop-blur-md shadow-md z-10">
                                 <tr>
@@ -1641,17 +1954,43 @@ export default function ReportsPage() {
                                             <th className="p-4">الحالة الحالية</th>
                                         </>
                                     )}
+                                    {activeTab === 'archive' && archiveSubTab === 'students' && (
+                                        <>
+                                            <th className="p-4">#</th>
+                                            <th className="p-4">اسم الطالب</th>
+                                            <th className="p-4">الصف / الشعبة</th>
+                                            <th className="p-4">النقاط السابقة</th>
+                                            <th className="p-4">التخصصات</th>
+                                            <th className="p-4 text-center">خيارات الأرشيف</th>
+                                        </>
+                                    )}
+                                    {activeTab === 'archive' && archiveSubTab === 'activities' && (
+                                        <>
+                                            <th className="p-4">النشاط</th>
+                                            <th className="p-4">التاريخ</th>
+                                            <th className="p-4">المكان</th>
+                                            <th className="p-4 text-center">عدد الطلاب</th>
+                                            <th className="p-4 text-center">خيارات الأرشيف</th>
+                                        </>
+                                    )}
                                 </tr>
                             </thead>
                             <tbody className="text-gray-300 divide-y divide-white/5">
                                 {previewData.length === 0 ? (
-                                    <tr><td colSpan="6" className="p-12 text-center text-gray-400">لا توجد بيانات للعرض حالياً</td></tr>
+                                    <tr>
+                                        <td
+                                            colSpan={activeTab === 'archive' ? (archiveSubTab === 'students' ? 6 : 5) : 6}
+                                            className="p-12 text-center text-gray-400"
+                                        >
+                                            {activeTab === 'archive' ? 'لا توجد عناصر مؤرشفة حالياً' : 'لا توجد بيانات للعرض حالياً'}
+                                        </td>
+                                    </tr>
                                 ) : (
                                     previewData.map((row, idx) => (
                                     <Fragment key={row.id || idx}>
                                         <tr
-                                            onClick={() => activeTab === 'activities' && setSelectedEvent(row)}
-                                            className={`hover:bg-white/5 transition-colors ${activeTab === 'activities' ? 'cursor-pointer' : ''}`}
+                                            onClick={() => (activeTab === 'activities' || (activeTab === 'archive' && archiveSubTab === 'activities')) && setSelectedEvent(row)}
+                                            className={`hover:bg-white/5 transition-colors ${(activeTab === 'activities' || (activeTab === 'archive' && archiveSubTab === 'activities')) ? 'cursor-pointer' : ''}`}
                                         >
                                             {activeTab === 'activities' && (
                                                 <>
@@ -1717,6 +2056,103 @@ export default function ReportsPage() {
                                                         <span className={`px-2 py-1 rounded text-xs ${row.status === 'Available' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}`}>
                                                             {row.status}
                                                         </span>
+                                                    </td>
+                                                </>
+                                            )}
+                                            {activeTab === 'archive' && archiveSubTab === 'students' && (
+                                                <>
+                                                    <td className="p-4 text-gray-400">{idx + 1}</td>
+                                                    <td className="p-4 font-bold text-white flex items-center gap-2">
+                                                        <div className="w-8 h-8 rounded-full bg-rose-500/20 border border-rose-500/30 flex items-center justify-center text-xs font-bold text-rose-400 shrink-0">
+                                                            {row.name?.charAt(0) || 'ط'}
+                                                        </div>
+                                                        <div>
+                                                            <div>{row.name}</div>
+                                                            <div className="text-[11px] text-gray-500 font-mono">#{row.id.slice(0, 6)}</div>
+                                                        </div>
+                                                    </td>
+                                                    <td className="p-4 text-gray-300">
+                                                        {row.class || (row.grade ? `${row.grade} - ${row.section}` : '-')}
+                                                    </td>
+                                                    <td className="p-4 font-bold text-amber-400">{row.points || 0}</td>
+                                                    <td className="p-4">
+                                                        <div className="flex flex-wrap gap-1">
+                                                            {(row.specializations || []).length > 0 ? (
+                                                                row.specializations.map((sp, i) => (
+                                                                    <span key={i} className="bg-white/5 text-gray-400 text-xs px-2 py-0.5 rounded">
+                                                                        {sp === 'General' ? 'عام' : sp}
+                                                                    </span>
+                                                                ))
+                                                            ) : (
+                                                                <span className="text-gray-500 text-xs">-</span>
+                                                            )}
+                                                        </div>
+                                                    </td>
+                                                    <td className="p-4">
+                                                        <div className="flex items-center justify-center gap-2">
+                                                            <button
+                                                                onClick={(e) => { e.stopPropagation(); handleRestoreStudent(row); }}
+                                                                className="px-3 py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/30 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm"
+                                                                title="استعادة الطالب للسجلات النشطة"
+                                                            >
+                                                                <RefreshCw size={14} />
+                                                                استعادة
+                                                            </button>
+                                                            <button
+                                                                onClick={(e) => { e.stopPropagation(); handlePermanentDeleteStudent(row); }}
+                                                                className="px-3 py-1.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 border border-rose-500/30 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm"
+                                                                title="حذف نهائي من قاعدة البيانات"
+                                                            >
+                                                                <Trash2 size={14} />
+                                                                حذف نهائي
+                                                            </button>
+                                                        </div>
+                                                    </td>
+                                                </>
+                                            )}
+                                            {activeTab === 'archive' && archiveSubTab === 'activities' && (
+                                                <>
+                                                    <td className="p-4 font-bold text-white max-w-[180px] truncate flex items-center gap-2">
+                                                        <div className="w-2.5 h-2.5 rounded-full bg-rose-500 shrink-0"></div>
+                                                        <div>
+                                                            <div>{row.title}</div>
+                                                            <span className="text-[11px] text-gray-500">{row.type}</span>
+                                                        </div>
+                                                    </td>
+                                                    <td className="p-4 text-gray-400">
+                                                        <div className="text-white">{row.formattedDate || row.date}</div>
+                                                        <div className="text-xs opacity-60">{row.time}</div>
+                                                    </td>
+                                                    <td className="p-4 text-gray-300">{row.venue}</td>
+                                                    <td className="p-4 text-center">
+                                                        <span className="bg-white/10 px-2.5 py-1 rounded-md text-white font-mono text-xs">{row.studentsCount}</span>
+                                                    </td>
+                                                    <td className="p-4">
+                                                        <div className="flex items-center justify-center gap-2">
+                                                            <button
+                                                                onClick={(e) => { e.stopPropagation(); setSelectedEvent(row); }}
+                                                                className="p-1.5 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+                                                                title="معاينة التفاصيل"
+                                                            >
+                                                                <Eye size={16} />
+                                                            </button>
+                                                            <button
+                                                                onClick={(e) => { e.stopPropagation(); handleRestoreArchivedEvent(row); }}
+                                                                className="px-3 py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/30 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm"
+                                                                title="استعادة النشاط"
+                                                            >
+                                                                <RefreshCw size={14} />
+                                                                استعادة
+                                                            </button>
+                                                            <button
+                                                                onClick={(e) => { e.stopPropagation(); handlePermanentDeleteArchivedEvent(row); }}
+                                                                className="px-3 py-1.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 border border-rose-500/30 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm"
+                                                                title="حذف نهائي للنشاط وسحب النقاط"
+                                                            >
+                                                                <Trash2 size={14} />
+                                                                حذف نهائي
+                                                            </button>
+                                                        </div>
                                                     </td>
                                                 </>
                                             )}
@@ -1798,22 +2234,25 @@ export default function ReportsPage() {
                 </div>
             </div>
 
-            {/* --- Event Details Modal --- */}
+            {/* --- Event Details Modal (Bottom Sheet on Mobile - Option 2-A) --- */}
             {
                 selectedEvent && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
-                        <div className="bg-[#1a1a20] border border-white/10 rounded-2xl w-full max-w-2xl shadow-2xl flex flex-col max-h-[85vh]">
+                    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm animate-fade-in">
+                        <div className="bg-[#1a1a20] border border-white/10 rounded-t-3xl sm:rounded-2xl w-full max-w-2xl shadow-2xl flex flex-col max-h-[92vh] sm:max-h-[85vh] overflow-hidden">
+                            {/* Mobile Pull Handle */}
+                            <div className="w-12 h-1.5 bg-white/20 rounded-full mx-auto my-2.5 sm:hidden shrink-0" />
+
                             {/* Modal Header */}
-                            <div className="p-6 border-b border-white/5 flex justify-between items-center bg-black/20">
+                            <div className="p-4 sm:p-6 border-b border-white/5 flex justify-between items-center bg-black/20 shrink-0">
                                 <div>
-                                    <h2 className="text-2xl font-bold text-white">{selectedEvent.title}</h2>
+                                    <h2 className="text-xl sm:text-2xl font-bold text-white">{selectedEvent.title}</h2>
                                     <p className="text-indigo-300 text-xs mt-1">{selectedEvent.type}</p>
                                 </div>
                                 <button onClick={() => setSelectedEvent(null)} aria-label="إغلاق التفاصيل" className="text-gray-400 hover:text-white bg-white/5 p-2 rounded-full hover:bg-white/10 transition-all"><X size={20} /></button>
                             </div>
 
                             {/* VISIBLE MODAL CONTENT */}
-                            <div className="p-6 overflow-y-auto custom-scrollbar space-y-6 bg-[#1a1a20] rounded-b-2xl">
+                            <div className="p-4 sm:p-6 overflow-y-auto custom-scrollbar space-y-6 bg-[#1a1a20] flex-1">
                                 {/* Key Details Cards */}
                                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                                     <div className="bg-white/5 p-3 rounded-xl border border-white/5 text-center">
@@ -1903,26 +2342,26 @@ export default function ReportsPage() {
                                 </div>
                             </div>
 
-                            {/* Modal Footer */}
-                            <div className="p-6 border-t border-white/10 bg-black/20 flex flex-col md:flex-row justify-between items-center gap-4">
+                            {/* Modal Footer - Sticky on Mobile */}
+                            <div className="p-4 sm:p-6 border-t border-white/10 bg-[#141418] sticky bottom-0 z-20 flex flex-col sm:flex-row justify-between items-center gap-3 shrink-0">
                                 <span className="text-gray-400 text-xs hidden md:block">رقم المعرف: <span className="font-mono select-all">{selectedEvent.id}</span></span>
 
-                                <div className="flex flex-wrap justify-end gap-3 w-full md:w-auto">
+                                <div className="flex flex-wrap items-center justify-between sm:justify-end gap-2.5 w-full sm:w-auto">
 
                                     {/* ARCHIVE CONTROLS */}
                                     {selectedEvent.rawStatus === 'archived' && (
                                         <>
                                             <button
                                                 onClick={handleForceDelete}
-                                                className="px-4 py-2 bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 rounded-xl font-bold flex items-center transition-all text-sm"
+                                                className="px-3.5 py-2 bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 rounded-xl font-bold flex items-center transition-all text-xs sm:text-sm"
                                             >
-                                                <Trash2 size={16} className="ml-2" /> حذف
+                                                <Trash2 size={16} className="ml-1.5" /> حذف
                                             </button>
                                             <button
                                                 onClick={handleRestore}
-                                                className="px-4 py-2 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/30 rounded-xl font-bold flex items-center transition-all text-sm"
+                                                className="px-3.5 py-2 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/30 rounded-xl font-bold flex items-center transition-all text-xs sm:text-sm"
                                             >
-                                                <RefreshCw size={16} className="ml-2" /> استعادة
+                                                <RefreshCw size={16} className="ml-1.5" /> استعادة
                                             </button>
                                             <div className="hidden md:block w-px h-8 bg-gray-700 mx-1"></div>
                                         </>
@@ -1932,7 +2371,7 @@ export default function ReportsPage() {
 
                                     <button
                                         onClick={() => setSelectedEvent(null)}
-                                        className="px-4 py-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl text-sm transition-colors"
+                                        className="px-4 py-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl text-xs sm:text-sm transition-colors border border-white/5"
                                     >
                                         إغلاق
                                     </button>

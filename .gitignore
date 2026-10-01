@@ -27,3 +27,6 @@ dist-ssr
 
 # Temporary & AI context files
 ai_studio_code.ts
+screenshots/
+*.cjs
+audit_*.json

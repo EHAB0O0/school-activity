@@ -1,24 +1,30 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { db } from '../firebase';
 import { collection, addDoc, query, where, doc, updateDoc, orderBy, onSnapshot, writeBatch, getDocs, limit } from 'firebase/firestore';
-import { Search, Plus, Trash2, Award, User, FileText, Clock, Edit3, X, Save, ArrowUpDown, Tag, Filter, Printer } from 'lucide-react';
+import { Search, Plus, Trash2, Award, User, FileText, Clock, Edit3, X, Save, ArrowUpDown, Tag, Filter, Printer, AlertTriangle, Sparkles, BellOff, Layers } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useSettings } from '../contexts/SettingsContext';
 import MultiSelect from '../components/ui/MultiSelect';
-import jsPDF from 'jspdf';
-import html2canvas from 'html2canvas';
+
 import ConfirmModal from '../components/ui/ConfirmModal';
 import BulkActionsBar from '../components/students/BulkActionsBar';
 import BulkOperationsModal from '../components/students/BulkOperationsModal';
 import BulkPrintCertificatesModal from '../components/students/BulkPrintCertificatesModal';
+import DuplicateResolverModal from '../components/students/DuplicateResolverModal';
+import { findDuplicateGroups, enrichDuplicateGroupsWithEvents } from '../utils/studentDuplicates';
 
 export default function StudentsPage() {
     const [students, setStudents] = useState([]);
+    const [allEvents, setAllEvents] = useState([]);
     const [searchTerm, setSearchTerm] = useState('');
     const [sortBy, setSortBy] = useState('name'); // name | points
     const [gradeFilter, setGradeFilter] = useState('');
     const [sectionFilter, setSectionFilter] = useState('');
     const [specFilter, setSpecFilter] = useState('All');
+
+    // Duplicate detection state
+    const [isDuplicateAlertDismissed, setIsDuplicateAlertDismissed] = useState(false);
+    const [isDuplicateModalOpen, setIsDuplicateModalOpen] = useState(false);
 
     // Selection & Bulk Actions State
     const [selectedIds, setSelectedIds] = useState([]);
@@ -54,6 +60,23 @@ export default function StudentsPage() {
         });
         return () => unsubscribe();
     }, []);
+
+    // --- Real-time Events Listener (for activity cross-referencing) ---
+    useEffect(() => {
+        const qEvents = query(collection(db, 'events'));
+        const unsubscribeEvents = onSnapshot(qEvents, (snap) => {
+            setAllEvents(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        }, (err) => {
+            console.warn("Events sync error:", err.message);
+        });
+        return () => unsubscribeEvents();
+    }, []);
+
+    // --- Smart Duplicate Detection ---
+    const rawDuplicateGroups = useMemo(() => findDuplicateGroups(students), [students]);
+    const duplicateGroups = useMemo(() => {
+        return enrichDuplicateGroupsWithEvents(rawDuplicateGroups, allEvents);
+    }, [rawDuplicateGroups, allEvents]);
 
     // --- Add Student ---
     async function handleAdd(e) {
@@ -241,6 +264,11 @@ export default function StudentsPage() {
             `);
             doc.close();
             await new Promise(r => setTimeout(r, 200)); // Increased wait for rendering
+
+            const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
+                import('html2canvas'),
+                import('jspdf')
+            ]);
 
             // 3. Dynamic Height Capture
             const bodyHeight = doc.body.scrollHeight + 40; // Add padding
@@ -813,19 +841,72 @@ export default function StudentsPage() {
     return (
         <div className="space-y-6 font-cairo h-full flex flex-col">
             {/* Header */}
-            <div className="flex flex-col md:flex-row justify-between items-center bg-white/10 backdrop-blur-xl border border-white/10 p-6 rounded-2xl shadow-xl">
+            <div className="flex flex-col md:flex-row justify-between items-center bg-white/10 backdrop-blur-xl border border-white/10 p-6 rounded-2xl shadow-xl gap-4">
                 <div>
                     <h1 className="text-3xl font-bold text-white mb-2">إدارة الطلاب</h1>
                     <p className="text-indigo-200">سجلات، نقاط التميز، والملفات الشخصية</p>
                 </div>
-                <button
-                    onClick={() => setIsAddModalOpen(true)}
-                    className="mt-4 md:mt-0 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-white px-6 py-3 rounded-xl shadow-lg transition-all flex items-center shadow-emerald-500/20 font-bold"
-                >
-                    <Plus className="ml-2" size={20} />
-                    تسجيل طالب
-                </button>
+                <div className="flex items-center gap-3 w-full md:w-auto justify-end">
+                    {duplicateGroups.length > 0 && isDuplicateAlertDismissed && (
+                        <button
+                            onClick={() => setIsDuplicateModalOpen(true)}
+                            className="bg-amber-500/20 border border-amber-500/30 hover:bg-amber-500/30 text-amber-300 px-4 py-3 rounded-xl shadow-lg transition-all flex items-center gap-2 font-bold text-sm"
+                            title="عرض وحل حالات تكرار الطلاب"
+                        >
+                            <Sparkles size={18} />
+                            حالات التكرار ({duplicateGroups.length})
+                        </button>
+                    )}
+                    <button
+                        onClick={() => setIsAddModalOpen(true)}
+                        className="bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-white px-6 py-3 rounded-xl shadow-lg transition-all flex items-center shadow-emerald-500/20 font-bold"
+                    >
+                        <Plus className="ml-2" size={20} />
+                        تسجيل طالب
+                    </button>
+                </div>
             </div>
+
+            {/* Intelligent Duplicate Alert Banner */}
+            {duplicateGroups.length > 0 && !isDuplicateAlertDismissed && (
+                <div className="bg-gradient-to-r from-amber-500/15 via-orange-500/15 to-amber-500/10 border border-amber-500/30 rounded-2xl p-4 sm:p-5 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4 backdrop-blur-md animate-fade-in">
+                    <div className="flex items-start sm:items-center gap-3.5">
+                        <div className="w-12 h-12 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+                            <AlertTriangle size={24} className="animate-pulse" />
+                        </div>
+                        <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                                <h3 className="text-base sm:text-lg font-bold text-white">
+                                    تنبيه ذكي: تم رصد طلاب مكررين في السجلات
+                                </h3>
+                                <span className="bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs px-2.5 py-0.5 rounded-full font-bold">
+                                    {duplicateGroups.length} حالات تكرار
+                                </span>
+                            </div>
+                            <p className="text-gray-300 text-xs sm:text-sm mt-0.5">
+                                تم اكتشاف أسماء متطابقة في قاعدة البيانات. يمكنك التعامل معها وحذف السجلات غير المرتبطة أو دمج المشاركات فوراً.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div className="flex items-center gap-2.5 w-full md:w-auto justify-end shrink-0">
+                        <button
+                            onClick={() => setIsDuplicateAlertDismissed(true)}
+                            className="px-4 py-2.5 bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 transition-colors border border-white/5"
+                        >
+                            <BellOff size={16} />
+                            اطفي التنبيه
+                        </button>
+                        <button
+                            onClick={() => setIsDuplicateModalOpen(true)}
+                            className="px-5 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-bold rounded-xl text-xs sm:text-sm shadow-lg flex items-center gap-2 transition-all shadow-amber-500/20 transform hover:scale-[1.02]"
+                        >
+                            <Sparkles size={16} />
+                            التعامل
+                        </button>
+                    </div>
+                </div>
+            )}
 
             {/* Controls */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -896,8 +977,18 @@ export default function StudentsPage() {
                 </div>
             </div>
 
+            {/* Mobile Horizontal Scroll Indicator (Option 3-A) */}
+            <div className="md:hidden flex items-center justify-between px-3 py-1.5 mb-2 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-emerald-300 text-xs shrink-0">
+                <span className="flex items-center gap-1.5 font-medium">
+                    <span>💡 اسحب القائمة لليسار لعرض بقية بيانات الطلاب</span>
+                </span>
+                <span className="animate-pulse font-bold text-sm">⟵</span>
+            </div>
+
             {/* Grid */}
-            <div className="flex-1 overflow-auto custom-scrollbar min-h-0 bg-white/5 border border-white/10 rounded-2xl">
+            <div className="flex-1 overflow-auto custom-scrollbar min-h-0 bg-white/5 border border-white/10 rounded-2xl relative">
+                {/* Edge fade indicator on mobile */}
+                <div className="pointer-events-none absolute left-0 top-0 bottom-0 w-4 bg-gradient-to-r from-black/40 to-transparent z-20 md:hidden" />
                 <table className="w-full min-w-[700px] text-right bg-transparent">
                     <thead className="bg-black/20 text-gray-300 sticky top-0 backdrop-blur-md z-10">
                         <tr>
@@ -1283,6 +1374,17 @@ export default function StudentsPage() {
                 isOpen={isCertificatesModalOpen}
                 onClose={() => setIsCertificatesModalOpen(false)}
                 selectedStudents={selectedStudentsList}
+            />
+
+            {/* Smart Duplicate Resolver Modal */}
+            <DuplicateResolverModal
+                isOpen={isDuplicateModalOpen}
+                onClose={() => setIsDuplicateModalOpen(false)}
+                duplicateGroups={duplicateGroups}
+                allEvents={allEvents}
+                onResolved={() => {
+                    // onSnapshot updates students and events automatically
+                }}
             />
         </div>
     );

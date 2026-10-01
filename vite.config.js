@@ -39,4 +39,25 @@ export default defineConfig({
       }
     })
   ],
+  build: {
+    chunkSizeWarningLimit: 900,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules/jspdf') || id.includes('node_modules/html2canvas') || id.includes('node_modules/jspdf-autotable') || id.includes('node_modules/canvg') || id.includes('node_modules/dompurify')) {
+            return 'vendor-pdf';
+          }
+          if (id.includes('node_modules/xlsx')) {
+            return 'vendor-excel';
+          }
+          if (id.includes('node_modules/firebase')) {
+            return 'vendor-firebase';
+          }
+          if (id.includes('node_modules/lucide-react')) {
+            return 'vendor-icons';
+          }
+        }
+      }
+    }
+  }
 })
