@@ -136,14 +136,24 @@ export default function AssetsPage() {
     const openAssetDetails = async (asset) => {
         setEditingAsset(asset);
         try {
-            const q = query(
-                collection(db, 'events'),
-                where('assets', 'array-contains', asset.id),
-                orderBy('startTime', 'desc')
-            );
-            const snap = await getDocs(q);
-            setAssetHistory(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-        } catch {
+            const snap = await getDocs(collection(db, 'events'));
+            const matched = snap.docs
+                .map(d => ({ id: d.id, ...d.data() }))
+                .filter(ev => {
+                    if (ev.status === 'archived') return false;
+                    const assetsArr = Array.isArray(ev.assets) ? ev.assets : [];
+                    return assetsArr.includes(asset.id) || assetsArr.includes(asset.name);
+                });
+
+            matched.sort((a, b) => {
+                const timeA = a.startTime?.toMillis ? a.startTime.toMillis() : (a.date ? new Date(a.date).getTime() : 0);
+                const timeB = b.startTime?.toMillis ? b.startTime.toMillis() : (b.date ? new Date(b.date).getTime() : 0);
+                return timeB - timeA;
+            });
+
+            setAssetHistory(matched);
+        } catch (err) {
+            console.warn("Asset history fetch error:", err);
             setAssetHistory([]);
         }
     };
@@ -359,14 +369,46 @@ export default function AssetsPage() {
     const openVenueDetails = async (venue) => {
         setViewingVenue(venue);
         try {
-            const q = query(
-                collection(db, 'events'),
-                where('venueId', '==', venue.name),
-                orderBy('startTime', 'desc')
-            );
-            const snap = await getDocs(q);
-            setVenueHistory(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-        } catch {
+            const snap = await getDocs(collection(db, 'events'));
+            const venueName = (venue.name || '').trim().toLowerCase();
+            const venueId = (venue.id || '').trim();
+            const venueLabel = (VENUE_TYPES.find(v => v.val === venue.name)?.label || '').trim().toLowerCase();
+
+            const venueKeyMap = {
+                'Auditorium': 'المسرح المدرسي',
+                'Gym': 'الصالة الرياضية',
+                'Playground': 'الملعب الخارجي',
+                'Lab': 'معمل الحاسب',
+                'Library': 'المكتبة'
+            };
+
+            const matched = snap.docs
+                .map(d => ({ id: d.id, ...d.data() }))
+                .filter(ev => {
+                    if (ev.status === 'archived') return false;
+                    const evVenue = (ev.venueId || '').trim();
+                    const evVenueLower = evVenue.toLowerCase();
+                    const mappedEvVenue = (venueKeyMap[evVenue] || '').toLowerCase();
+
+                    return (
+                        evVenue === venue.name ||
+                        evVenue === venue.id ||
+                        evVenueLower === venueName ||
+                        (venueLabel && evVenueLower === venueLabel) ||
+                        (mappedEvVenue && mappedEvVenue === venueName) ||
+                        (venueKeyMap[venue.name] && venueKeyMap[venue.name] === evVenue)
+                    );
+                });
+
+            matched.sort((a, b) => {
+                const timeA = a.startTime?.toMillis ? a.startTime.toMillis() : (a.date ? new Date(a.date).getTime() : 0);
+                const timeB = b.startTime?.toMillis ? b.startTime.toMillis() : (b.date ? new Date(b.date).getTime() : 0);
+                return timeB - timeA;
+            });
+
+            setVenueHistory(matched);
+        } catch (err) {
+            console.warn("Venue history fetch error:", err);
             setVenueHistory([]);
         }
     };

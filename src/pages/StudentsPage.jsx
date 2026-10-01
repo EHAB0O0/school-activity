@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { db } from '../firebase';
 import { collection, addDoc, query, where, doc, updateDoc, orderBy, onSnapshot, writeBatch, getDocs, limit } from 'firebase/firestore';
-import { Search, Plus, Trash2, Award, User, FileText, Clock, Edit3, X, Save, ArrowUpDown, Tag, Filter, Printer, AlertTriangle, Sparkles, BellOff, Layers } from 'lucide-react';
+import { Search, Plus, Trash2, Award, User, FileText, Clock, Edit3, X, Save, ArrowUpDown, Tag, Filter, Printer, AlertTriangle, Sparkles, BellOff, Layers, TrendingUp, ArrowUpRight, ArrowDownLeft, CheckCircle2, History } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useSettings } from '../contexts/SettingsContext';
 import MultiSelect from '../components/ui/MultiSelect';
@@ -11,7 +11,8 @@ import BulkActionsBar from '../components/students/BulkActionsBar';
 import BulkOperationsModal from '../components/students/BulkOperationsModal';
 import BulkPrintCertificatesModal from '../components/students/BulkPrintCertificatesModal';
 import DuplicateResolverModal from '../components/students/DuplicateResolverModal';
-import { findDuplicateGroups, enrichDuplicateGroupsWithEvents } from '../utils/studentDuplicates';
+import { findDuplicateGroups, enrichDuplicateGroupsWithEvents, normalizeArabic } from '../utils/studentDuplicates';
+import { logPointsChange, clampPoints, sanitizeNegativePoints, fetchStudentPointsLogs } from '../utils/pointsLedger';
 
 export default function StudentsPage() {
     const [students, setStudents] = useState([]);
@@ -28,6 +29,7 @@ export default function StudentsPage() {
 
     // Selection & Bulk Actions State
     const [selectedIds, setSelectedIds] = useState([]);
+    const [lastSelectedId, setLastSelectedId] = useState(null);
     const [isOperationsModalOpen, setIsOperationsModalOpen] = useState(false);
     const [operationsInitialTab, setOperationsInitialTab] = useState('transfer');
     const [isCertificatesModalOpen, setIsCertificatesModalOpen] = useState(false);
@@ -45,7 +47,10 @@ export default function StudentsPage() {
 
     // Profile Modal State
     const [selectedStudent, setSelectedStudent] = useState(null);
-    const [profileTab, setProfileTab] = useState('info'); // info | notes | history
+    const [profileTab, setProfileTab] = useState('info'); // info | notes | history | points
+    const [studentPointsLogs, setStudentPointsLogs] = useState([]);
+    const [loadingPointsLogs, setLoadingPointsLogs] = useState(false);
+    const [includePointsInPrint, setIncludePointsInPrint] = useState(false);
 
     const [studentHistory, setStudentHistory] = useState([]);
     const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: '', message: '', onConfirm: null, isDestructive: false });
@@ -54,7 +59,10 @@ export default function StudentsPage() {
     useEffect(() => {
         const q = query(collection(db, 'students'), where('active', '==', true));
         const unsubscribe = onSnapshot(q, (snap) => {
-            setStudents(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+            const loaded = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            setStudents(loaded);
+            // Silently sanitize any negative points without creating audit noise
+            sanitizeNegativePoints(loaded);
         }, (err) => {
             console.warn("Students sync error:", err.message);
         });
@@ -115,6 +123,8 @@ export default function StudentsPage() {
     // --- Profile Logic ---
     const openProfile = (student) => {
         setStudentHistory([]);
+        setStudentPointsLogs([]);
+        setIncludePointsInPrint(false);
         setSelectedStudent(student);
         setProfileTab('info');
     };
@@ -138,26 +148,66 @@ export default function StudentsPage() {
         return () => unsubscribe();
     }, [selectedStudent]);
 
+    // Points History Fetcher
+    useEffect(() => {
+        if (!selectedStudent) return;
+        setLoadingPointsLogs(true);
+        fetchStudentPointsLogs(selectedStudent.id)
+            .then(logs => {
+                setStudentPointsLogs(logs);
+                setLoadingPointsLogs(false);
+            })
+            .catch(err => {
+                console.error("Points logs fetch error:", err);
+                setLoadingPointsLogs(false);
+            });
+    }, [selectedStudent]);
+
     const saveProfileChanges = async () => {
         if (!selectedStudent) return;
         try {
+            const originalStudent = students.find(s => s.id === selectedStudent.id);
+            const oldPoints = Number(originalStudent?.totalPoints) || 0;
+            const newPoints = Math.max(0, Number(selectedStudent.totalPoints) || 0);
+            const pointsDiff = newPoints - oldPoints;
+
             await updateDoc(doc(db, 'students', selectedStudent.id), {
                 name: selectedStudent.name,
                 class: selectedStudent.class,
                 grade: selectedStudent.grade || '',
                 section: selectedStudent.section || '',
-                totalPoints: Number(selectedStudent.totalPoints),
+                totalPoints: newPoints,
                 notes: selectedStudent.notes || '',
                 specializations: selectedStudent.specializations || []
             });
+
+            if (pointsDiff !== 0) {
+                await logPointsChange({
+                    studentId: selectedStudent.id,
+                    studentName: selectedStudent.name,
+                    grade: selectedStudent.grade,
+                    section: selectedStudent.section,
+                    class: selectedStudent.class,
+                    change: pointsDiff,
+                    previousTotalPoints: oldPoints,
+                    newTotalPoints: newPoints,
+                    actionType: pointsDiff > 0 ? 'manual_add' : 'manual_deduct',
+                    reason: pointsDiff > 0 ? 'تعديل يدوي للملف (زيادة)' : 'تعديل يدوي للملف (خصم)',
+                    performedBy: 'المشرف'
+                });
+                const updatedLogs = await fetchStudentPointsLogs(selectedStudent.id);
+                setStudentPointsLogs(updatedLogs);
+            }
+
             toast.success("تم تحديث الملف الشخصي");
-        } catch {
+        } catch (err) {
+            console.error("Save profile error:", err);
             toast.error("فشل التحديث");
         }
     };
 
     // --- Student Profile PDF ---
-    const generateStudentProfilePDF = async (student, history) => {
+    const generateStudentProfilePDF = async (student, history, includePoints = false, pointsLogs = []) => {
         const toastId = toast.loading('جاري طباعة الملف...');
         try {
             // 1. Iframe Isolation
@@ -189,6 +239,63 @@ export default function StudentsPage() {
                 `).join('')
                 : '<div class="empty">لا يوجد سجل نشاط</div>';
 
+            let pointsPageHtml = '';
+            if (includePoints) {
+                const pointsRowsHtml = pointsLogs && pointsLogs.length > 0
+                    ? pointsLogs.map((log, i) => {
+                        const isPos = (Number(log.change) || 0) > 0;
+                        const changeStr = isPos ? `+${log.change}` : `${log.change}`;
+                        const logDate = log.createdAt?.toDate ? log.createdAt.toDate().toLocaleDateString('ar-SA') : (log.date || '-');
+                        return `
+                            <div class="row">
+                                <div class="cell w-5">${i + 1}</div>
+                                <div class="cell w-20 dim">${logDate}</div>
+                                <div class="cell w-40 bold">${log.reason || log.eventTitle || 'حركة نقاط'}</div>
+                                <div class="cell w-15 center bold" style="${isPos ? 'color: #059669;' : 'color: #dc2626;'}">${changeStr}</div>
+                                <div class="cell w-20 center bold points">${log.newTotalPoints ?? '-'}</div>
+                            </div>
+                        `;
+                    }).join('')
+                    : '<div class="empty">لا توجد حركات نقاط مسجلة للطالب (الرصيد الحالي رصيد افتتاحي سابق)</div>';
+
+                pointsPageHtml = `
+                    <div style="page-break-before: always; break-before: page; margin-top: 40px; padding-top: 20px; border-top: 2px dashed #cbd5e1;">
+                        <div class="header">
+                            <div class="avatar">${student.name.charAt(0)}</div>
+                            <h1>${student.name}</h1>
+                            <p>كشف سجل حركات نقاط التميز للطالب</p>
+                        </div>
+
+                        <div class="grid">
+                            <div class="card">
+                                <label>رصيد النقاط الحالي</label>
+                                <div class="val points">${student.totalPoints} نقطة</div>
+                            </div>
+                            <div class="card">
+                                <label>إجمالي العمليات المسجلة</label>
+                                <div class="val">${pointsLogs ? pointsLogs.length : 0} حركة</div>
+                            </div>
+                            <div class="card">
+                                <label>الصف / الشعبة</label>
+                                <div class="val">${student.class || '-'}</div>
+                            </div>
+                        </div>
+
+                        <h3>سجل حركات النقاط بالتفصيل</h3>
+                        <div class="table">
+                            <div class="row head">
+                                <div class="cell w-5">#</div>
+                                <div class="cell w-20">التاريخ والوقت</div>
+                                <div class="cell w-40">سبب الحركة / النشاط</div>
+                                <div class="cell w-15 center">مقدار التغيير</div>
+                                <div class="cell w-20 center">الرصيد بعد الحركة</div>
+                            </div>
+                            ${pointsRowsHtml}
+                        </div>
+                    </div>
+                `;
+            }
+
             doc.write(`
                 <!DOCTYPE html>
                 <html dir="rtl" lang="ar">
@@ -213,7 +320,7 @@ export default function StudentsPage() {
                         .row { display: flex; border-bottom: 1px solid #e5e7eb; padding: 10px; font-size: 13px; break-inside: avoid; }
                         .row.head { background: #f9fafb; font-weight: bold; color: #374151; }
                         .cell { padding: 0 5px; }
-                        .w-5 { width: 5%; } .w-40 { width: 40%; } .w-20 { width: 20%; } .w-15 { width: 15%; }
+                        .w-5 { width: 5%; } .w-20 { width: 20%; } .w-25 { width: 25%; } .w-35 { width: 35%; } .w-40 { width: 40%; } .w-15 { width: 15%; }
                         
                         .bold { font-weight: bold; } .dim { color: #6b7280; } .center { text-align: center; }
                         .status { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: #f3f4f6; color: #4b5563; }
@@ -259,6 +366,8 @@ export default function StudentsPage() {
                         </div>
                         ${historyHtml}
                     </div>
+
+                    ${pointsPageHtml}
                 </body>
                 </html>
             `);
@@ -319,26 +428,41 @@ export default function StudentsPage() {
     };
 
     // --- Filtering & Sorting ---
-    // --- Filtering & Sorting ---
-    const displayedStudents = students
-        .filter(s => {
-            const matchesSearch = s.name.toLowerCase().includes(searchTerm.toLowerCase());
-            const matchesSpec = specFilter === 'All'
-                ? true
-                : (s.specializations && s.specializations.includes(specFilter));
+    const displayedStudents = useMemo(() => {
+        const rawTokens = searchTerm.trim().split(/\s+/).filter(Boolean);
+        const normalizedTokens = rawTokens.map(t => normalizeArabic(t));
 
-            const matchesGrade = !gradeFilter || s.grade === gradeFilter;
-            const matchesSection = !sectionFilter || s.section === sectionFilter;
+        return students
+            .filter(s => {
+                if (normalizedTokens.length > 0) {
+                    const corpus = normalizeArabic([
+                        s.name || '',
+                        s.grade || '',
+                        s.section || '',
+                        s.class || '',
+                        (s.specializations || []).join(' '),
+                        String(s.totalPoints ?? ''),
+                        s.notes || ''
+                    ].join(' '));
 
-            // Optional fallback for old data if needed, but strict filtering is safer
-            // Add legacy check if user wants to search old "class" string? No, let's migrate forward.
+                    const matchesAllTokens = normalizedTokens.every(tok => corpus.includes(tok));
+                    if (!matchesAllTokens) return false;
+                }
 
-            return matchesSearch && matchesSpec && matchesGrade && matchesSection;
-        })
-        .sort((a, b) => {
-            if (sortBy === 'points') return b.totalPoints - a.totalPoints;
-            return a.name.localeCompare(b.name);
-        });
+                const matchesSpec = specFilter === 'All'
+                    ? true
+                    : (s.specializations && s.specializations.includes(specFilter));
+
+                const matchesGrade = !gradeFilter || s.grade === gradeFilter;
+                const matchesSection = !sectionFilter || s.section === sectionFilter;
+
+                return matchesSpec && matchesGrade && matchesSection;
+            })
+            .sort((a, b) => {
+                if (sortBy === 'points') return (b.totalPoints || 0) - (a.totalPoints || 0);
+                return (a.name || '').localeCompare(b.name || '', 'ar');
+            });
+    }, [students, searchTerm, specFilter, gradeFilter, sectionFilter, sortBy]);
 
     // Selection Computed Properties
     const isAllDisplayedSelected = displayedStudents.length > 0 && displayedStudents.every(s => selectedIds.includes(s.id));
@@ -346,7 +470,20 @@ export default function StudentsPage() {
     const selectedStudentsList = students.filter(s => selectedIds.includes(s.id));
 
     // Selection Handlers
-    const toggleSelectStudent = (id) => {
+    const toggleSelectStudent = (id, event) => {
+        if (event?.shiftKey && lastSelectedId && lastSelectedId !== id) {
+            const currentIndex = displayedStudents.findIndex(s => s.id === id);
+            const lastIndex = displayedStudents.findIndex(s => s.id === lastSelectedId);
+            if (currentIndex !== -1 && lastIndex !== -1) {
+                const start = Math.min(currentIndex, lastIndex);
+                const end = Math.max(currentIndex, lastIndex);
+                const rangeIds = displayedStudents.slice(start, end + 1).map(s => s.id);
+                setSelectedIds(prev => Array.from(new Set([...prev, ...rangeIds])));
+                setLastSelectedId(id);
+                return;
+            }
+        }
+        setLastSelectedId(id);
         setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
     };
 
@@ -458,6 +595,8 @@ export default function StudentsPage() {
             }
             for (const chunk of chunks) {
                 const batch = writeBatch(db);
+                const logsToCreate = [];
+
                 chunk.forEach(id => {
                     const currentStudent = selectedMap.get(id);
                     const oldPoints = Number(currentStudent?.totalPoints) || 0;
@@ -467,8 +606,29 @@ export default function StudentsPage() {
                         payload.lastPointsNote = reason;
                     }
                     batch.update(doc(db, 'students', id), payload);
+
+                    const diff = updatedPoints - oldPoints;
+                    if (diff !== 0) {
+                        logsToCreate.push({
+                            studentId: id,
+                            studentName: currentStudent?.name || '',
+                            grade: currentStudent?.grade || '',
+                            section: currentStudent?.section || '',
+                            class: currentStudent?.class || '',
+                            change: diff,
+                            previousTotalPoints: oldPoints,
+                            newTotalPoints: updatedPoints,
+                            actionType: 'bulk_adjustment',
+                            reason: reason || (diff > 0 ? 'إضافة نقاط جماعية' : 'خصم نقاط جماعي'),
+                            performedBy: 'المشرف'
+                        });
+                    }
                 });
                 await batch.commit();
+
+                for (const logItem of logsToCreate) {
+                    await logPointsChange(logItem);
+                }
             }
             toast.success(`تم تحديث نقاط التميز بنجاح!`, { id: toastId });
             setIsOperationsModalOpen(false);
@@ -1174,8 +1334,17 @@ export default function StudentsPage() {
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-2">
+                                    <label className="flex items-center gap-1.5 bg-white/5 hover:bg-white/10 px-2.5 py-1.5 rounded-lg cursor-pointer border border-white/10 text-xs text-indigo-200 transition-colors select-none" title="تضمين كشف سجل النقاط مع الملف المطبوع">
+                                        <input
+                                            type="checkbox"
+                                            checked={includePointsInPrint}
+                                            onChange={e => setIncludePointsInPrint(e.target.checked)}
+                                            className="w-3.5 h-3.5 rounded bg-black/40 border-white/30 text-indigo-600 focus:ring-0 cursor-pointer"
+                                        />
+                                        <span>تضمين سجل النقاط</span>
+                                    </label>
                                     <button
-                                        onClick={() => generateStudentProfilePDF(selectedStudent, studentHistory)}
+                                        onClick={() => generateStudentProfilePDF(selectedStudent, studentHistory, includePointsInPrint, studentPointsLogs)}
                                         aria-label="طباعة الملف"
                                         className="bg-white/10 hover:bg-white/20 text-white p-2 rounded-lg flex items-center transition-all border border-white/5 shadow-sm"
                                         title="طباعة الملف"
@@ -1187,16 +1356,17 @@ export default function StudentsPage() {
                             </div>
 
                             {/* Tabs */}
-                            <div className="flex border-b border-white/10 px-6 bg-black/20">
+                            <div className="flex border-b border-white/10 px-6 bg-black/20 overflow-x-auto">
                                 {[
                                     { id: 'info', label: 'البيانات الأساسية', icon: User },
                                     { id: 'notes', label: 'ملاحظات المعلم', icon: FileText },
                                     { id: 'history', label: 'سجل النشاط', icon: Clock },
+                                    { id: 'points', label: 'سجل النقاط', icon: TrendingUp },
                                 ].map(tab => (
                                     <button
                                         key={tab.id}
                                         onClick={() => setProfileTab(tab.id)}
-                                        className={`px-4 py-4 flex items-center space-x-2 space-x-reverse border-b-2 transition-all ${profileTab === tab.id ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-gray-400 hover:text-white'}`}
+                                        className={`px-4 py-4 flex items-center space-x-2 space-x-reverse border-b-2 transition-all whitespace-nowrap ${profileTab === tab.id ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-gray-400 hover:text-white'}`}
                                     >
                                         <tab.icon size={18} /> <span>{tab.label}</span>
                                     </button>
@@ -1318,6 +1488,107 @@ export default function StudentsPage() {
                                             <div className="text-center py-20 opacity-50">
                                                 <Clock size={48} className="mx-auto mb-4" />
                                                 <p>لا يوجد سجل أنشطة لهذا الطالب حتى الآن</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                {profileTab === 'points' && (
+                                    <div className="space-y-4">
+                                        {/* KPI Mini-cards */}
+                                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                                            <div className="bg-white/5 p-3 rounded-xl border border-white/10 text-center">
+                                                <div className="text-gray-400 text-xs mb-1">الرصيد الحالي</div>
+                                                <div className="text-amber-400 font-bold text-lg font-mono">{selectedStudent.totalPoints} ن</div>
+                                            </div>
+                                            <div className="bg-emerald-500/10 p-3 rounded-xl border border-emerald-500/20 text-center">
+                                                <div className="text-emerald-300 text-xs mb-1">إجمالي المكتسب</div>
+                                                <div className="text-emerald-400 font-bold text-lg font-mono">
+                                                    +{studentPointsLogs.filter(l => (Number(l.change) || 0) > 0).reduce((sum, l) => sum + Number(l.change), 0)} ن
+                                                </div>
+                                            </div>
+                                            <div className="bg-rose-500/10 p-3 rounded-xl border border-rose-500/20 text-center">
+                                                <div className="text-rose-300 text-xs mb-1">إجمالي المخصوم</div>
+                                                <div className="text-rose-400 font-bold text-lg font-mono">
+                                                    -{studentPointsLogs.filter(l => (Number(l.change) || 0) < 0).reduce((sum, l) => sum + Math.abs(Number(l.change)), 0)} ن
+                                                </div>
+                                            </div>
+                                            <div className="bg-indigo-500/10 p-3 rounded-xl border border-indigo-500/20 text-center">
+                                                <div className="text-indigo-300 text-xs mb-1">عدد العمليات</div>
+                                                <div className="text-indigo-400 font-bold text-lg font-mono">{studentPointsLogs.length}</div>
+                                            </div>
+                                        </div>
+
+                                        {/* Section Header */}
+                                        <div className="flex justify-between items-center bg-white/5 p-3 rounded-xl border border-white/5">
+                                            <div className="flex items-center gap-2">
+                                                <TrendingUp size={16} className="text-amber-400" />
+                                                <h3 className="text-white font-bold m-0 text-sm">سجل حركات نقاط التميز ({studentPointsLogs.length})</h3>
+                                            </div>
+                                            <button
+                                                onClick={() => generateStudentProfilePDF(selectedStudent, studentHistory, true, studentPointsLogs)}
+                                                className="text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-lg flex items-center transition-all"
+                                            >
+                                                <Printer size={14} className="ml-1" /> طباعة سجل النقاط
+                                            </button>
+                                        </div>
+
+                                        {/* Points Transaction List */}
+                                        {loadingPointsLogs ? (
+                                            <div className="text-center py-12 text-indigo-400 text-sm animate-pulse">
+                                                جاري تحميل سجل النقاط...
+                                            </div>
+                                        ) : studentPointsLogs.length > 0 ? (
+                                            <div className="space-y-2">
+                                                {studentPointsLogs.map((log) => {
+                                                    const isPositive = (Number(log.change) || 0) > 0;
+                                                    const logDate = log.createdAt?.toDate ? log.createdAt.toDate().toLocaleDateString('ar-SA') : (log.date || '-');
+                                                    const logTime = log.createdAt?.toDate ? log.createdAt.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+
+                                                    return (
+                                                        <div key={log.id} className="bg-white/5 p-3.5 rounded-xl border border-white/5 flex items-center justify-between hover:bg-white/10 transition-colors">
+                                                            <div className="flex items-center gap-3">
+                                                                <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${isPositive ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'}`}>
+                                                                    {isPositive ? <ArrowUpRight size={18} /> : <ArrowDownLeft size={18} />}
+                                                                </div>
+                                                                <div>
+                                                                    <div className="font-bold text-white text-sm flex items-center gap-2">
+                                                                        <span>{log.reason || log.eventTitle || 'حركة نقاط'}</span>
+                                                                        {log.eventType && (
+                                                                            <span className="text-[10px] px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-normal">
+                                                                                {log.eventType}
+                                                                            </span>
+                                                                        )}
+                                                                    </div>
+                                                                    <div className="text-gray-400 text-xs mt-0.5 flex items-center gap-2">
+                                                                        <span>{logDate} {logTime && `• ${logTime}`}</span>
+                                                                        {log.performedBy && (
+                                                                            <span className="text-gray-500 text-[11px]">(بواسطة: {log.performedBy})</span>
+                                                                        )}
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                            <div className="text-left shrink-0">
+                                                                <div className={`font-bold font-mono text-base ${isPositive ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                                                    {isPositive ? `+${log.change}` : log.change} ن
+                                                                </div>
+                                                                <div className="text-[11px] text-gray-400 mt-0.5 font-mono">
+                                                                    الرصيد: {log.newTotalPoints ?? '-'}
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        ) : (
+                                            <div className="bg-amber-500/10 border border-amber-500/20 rounded-2xl p-6 text-center space-y-3">
+                                                <div className="w-12 h-12 rounded-full bg-amber-500/20 text-amber-300 flex items-center justify-center mx-auto">
+                                                    <Sparkles size={24} />
+                                                </div>
+                                                <h4 className="text-white font-bold text-base">رصيد افتتاحي سابق</h4>
+                                                <p className="text-gray-300 text-xs sm:text-sm max-w-md mx-auto leading-relaxed">
+                                                    الرصيد الحالي لهذا الطالب ({selectedStudent.totalPoints} نقطة) معتمد كنقطة انطلاق. وسيتم رصد وتفصيل أي زيادة أو خصم قادم تلقائياً في هذا السجل مع التاريخ والسبب.
+                                                </p>
                                             </div>
                                         )}
                                     </div>

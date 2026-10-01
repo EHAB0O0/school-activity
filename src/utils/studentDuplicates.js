@@ -1,5 +1,6 @@
 import { db } from '../firebase';
 import { doc, getDocs, collection, writeBatch, deleteDoc, updateDoc } from 'firebase/firestore';
+import { logPointsChange } from './pointsLedger';
 
 /**
  * Normalizes Arabic names to detect spelling variations
@@ -182,6 +183,21 @@ export const mergeStudentRecords = async ({ primaryStudent, secondaryStudent, al
     batch.delete(secondaryRef);
 
     await batch.commit();
+
+    if ((secondaryStudent.totalPoints || 0) > 0) {
+        logPointsChange({
+            studentId: primaryStudent.id,
+            studentName: primaryStudent.name,
+            grade: primaryUpdate.grade,
+            section: primaryUpdate.section,
+            class: primaryUpdate.class,
+            change: secondaryStudent.totalPoints,
+            previousTotalPoints: primaryStudent.totalPoints || 0,
+            newTotalPoints: mergedPoints,
+            reason: `دمج نقاط من حساب مكرر (${secondaryStudent.name})`,
+            actionType: 'duplicate_merge'
+        }).catch(console.warn);
+    }
 };
 
 /**

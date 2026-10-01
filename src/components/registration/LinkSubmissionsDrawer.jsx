@@ -10,6 +10,7 @@ import {
 } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import { useSettings } from '../../contexts/SettingsContext';
+import { logPointsChange } from '../../utils/pointsLedger';
 
 export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpdated, onEditLink }) {
     const { schoolInfo } = useSettings();
@@ -19,6 +20,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
     const [searchTerm, setSearchTerm] = useState('');
     const [statusFilter, setStatusFilter] = useState('all'); // all | pending | approved | rejected | waitlist
     const [selectedIds, setSelectedIds] = useState([]);
+    const [lastSelectedId, setLastSelectedId] = useState(null);
     const [editingSubmission, setEditingSubmission] = useState(null);
     const [showCreateStudentModal, setShowCreateStudentModal] = useState(null); // submission object to approve with modal
     const [showBulkCreateModal, setShowBulkCreateModal] = useState(null); // { unregCount, totalCount, unregisteredSubs, registeredSubs }
@@ -166,6 +168,26 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
         }
     };
 
+    const handleToggleSelectSubmission = (id, event) => {
+        if (event?.shiftKey && lastSelectedId && lastSelectedId !== id) {
+            const lastIdx = filteredSubmissions.findIndex(s => s.id === lastSelectedId);
+            const currIdx = filteredSubmissions.findIndex(s => s.id === id);
+            if (lastIdx !== -1 && currIdx !== -1) {
+                const start = Math.min(lastIdx, currIdx);
+                const end = Math.max(lastIdx, currIdx);
+                const rangeIds = filteredSubmissions.slice(start, end + 1).map(s => s.id);
+                setSelectedIds(prev => Array.from(new Set([...prev, ...rangeIds])));
+                setLastSelectedId(id);
+                return;
+            }
+        }
+
+        setLastSelectedId(id);
+        setSelectedIds(prev =>
+            prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
+        );
+    };
+
     // Approve a submission
     const handleApprove = async (sub, createProfile = false) => {
         if (sub.status === 'approved') return;
@@ -199,6 +221,25 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                 await updateDoc(doc(db, 'students', studentId), {
                     totalPoints: increment(points)
                 });
+            }
+
+            if (studentId && points > 0) {
+                const prevPts = Math.max(0, Number(dupInfo?.matchedStudent?.totalPoints) || 0);
+                const nextPts = createProfile && !dupInfo?.matchedStudent ? points : prevPts + points;
+                logPointsChange({
+                    studentId,
+                    studentName: sub.studentName,
+                    grade: sub.grade || '',
+                    section: sub.section || '',
+                    class: `${sub.grade || ''} / ${sub.section || ''}`.trim(),
+                    change: points,
+                    previousTotalPoints: createProfile && !dupInfo?.matchedStudent ? 0 : prevPts,
+                    newTotalPoints: nextPts,
+                    reason: `اعتماد تسجيل عبر رابط: ${link.title}`,
+                    actionType: 'link_registration',
+                    eventId: link.eventId || null,
+                    eventTitle: link.eventTitle || link.title
+                }).catch(console.warn);
             }
 
             // If event is linked, attach student to event's participating list and mark as link student with details
@@ -439,6 +480,25 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
             }
 
             await batch.commit();
+
+            if (points > 0) {
+                subsToApprove.forEach(({ sub, studentId }) => {
+                    if (!studentId) return;
+                    logPointsChange({
+                        studentId,
+                        studentName: sub.studentName,
+                        grade: sub.grade || '',
+                        section: sub.section || '',
+                        class: `${sub.grade || ''} / ${sub.section || ''}`.trim(),
+                        change: points,
+                        reason: `اعتماد مشاركة عبر رابط: ${link.title}`,
+                        actionType: 'link_registration',
+                        eventId: link.eventId || null,
+                        eventTitle: link.eventTitle || link.title
+                    }).catch(console.warn);
+                });
+            }
+
             setSelectedIds([]);
             toast.success(`تم الاعتماد الجماعي لـ (${subsToApprove.length}) طالب بنجاح`, { id: toastId });
         } catch (err) {
@@ -885,13 +945,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                             {/* Checkbox & Student Details */}
                                             <div className="flex items-start gap-3 flex-1">
                                                 <button
-                                                    onClick={() => {
-                                                        setSelectedIds(prev =>
-                                                            prev.includes(sub.id)
-                                                                ? prev.filter(i => i !== sub.id)
-                                                                : [...prev, sub.id]
-                                                        );
-                                                    }}
+                                                    onClick={(e) => handleToggleSelectSubmission(sub.id, e)}
                                                     className="mt-1 text-slate-400 hover:text-indigo-400"
                                                 >
                                                     {isSelected ? <CheckSquare size={18} className="text-indigo-400" /> : <Square size={18} />}

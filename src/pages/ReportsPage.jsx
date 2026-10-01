@@ -3,7 +3,7 @@ import { useLocation } from 'react-router-dom';
 import { db } from '../firebase';
 import { collection, query, orderBy, getDocs, doc, getDoc, updateDoc, deleteDoc, runTransaction, increment } from 'firebase/firestore';
 
-import { FileText, Download, Calendar, Users, Box, Filter, Printer, Search, X, Eye, Trash2, RefreshCw, Pen, Hash, Table, Archive, RotateCcw } from 'lucide-react';
+import { FileText, Download, Calendar, Users, Box, Filter, Printer, Search, X, Eye, Trash2, RefreshCw, Pen, Hash, Table, Archive, RotateCcw, TrendingUp, ArrowUpRight, ArrowDownLeft, Layers, Sparkles } from 'lucide-react';
 import { Menu, Transition } from '@headlessui/react';
 import { Fragment } from 'react';
 import EventModal from '../components/EventModal';
@@ -14,6 +14,7 @@ import { format } from 'date-fns';
 import { ar } from 'date-fns/locale';
 import { Tag, CheckSquare, Square } from 'lucide-react';
 import MultiSelect from '../components/ui/MultiSelect';
+import { normalizeArabic } from '../utils/studentDuplicates';
 
 // --- Helper: Arabic Status ---
 const getStatusLabel = (status) => {
@@ -113,6 +114,39 @@ export default function ReportsPage() {
 
     // Venue Filter
     const [venueFilter, setVenueFilter] = useState('All');
+
+    // --- Points Ledger Filters State ---
+    const [pointsSearchTerm, setPointsSearchTerm] = useState('');
+    const [pointsDateRange, setPointsDateRange] = useState({ start: '', end: '' });
+    const [pointsChangeType, setPointsChangeType] = useState('all'); // all | positive | negative
+    const [pointsActionTypes, setPointsActionTypes] = useState([]); // Array of actionType strings
+    const [pointsSelectedGrades, setPointsSelectedGrades] = useState([]); // Array of grade strings
+    const [pointsSelectedSections, setPointsSelectedSections] = useState([]); // Array of section strings
+    const [pointsSelectedEventTypes, setPointsSelectedEventTypes] = useState([]); // Array of eventType strings
+    const [pointsSortBy, setPointsSortBy] = useState('date_desc'); // date_desc | date_asc | change_desc | change_asc | student_name
+
+    const handleClearPointsFilters = () => {
+        setPointsSearchTerm('');
+        setPointsDateRange({ start: '', end: '' });
+        setPointsChangeType('all');
+        setPointsActionTypes([]);
+        setPointsSelectedGrades([]);
+        setPointsSelectedSections([]);
+        setPointsSelectedEventTypes([]);
+        setPointsSortBy('date_desc');
+    };
+
+    const isAnyPointsFilterActive = Boolean(
+        pointsSearchTerm ||
+        pointsDateRange.start ||
+        pointsDateRange.end ||
+        pointsChangeType !== 'all' ||
+        pointsActionTypes.length > 0 ||
+        pointsSelectedGrades.length > 0 ||
+        pointsSelectedSections.length > 0 ||
+        pointsSelectedEventTypes.length > 0 ||
+        pointsSortBy !== 'date_desc'
+    );
 
     // --- Report Options (Toggles) ---
     const [reportOptions, setReportOptions] = useState({
@@ -250,7 +284,7 @@ export default function ReportsPage() {
     useEffect(() => {
         applyFilters();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [rawData, dateRange, pointsRange, assetStatusFilter, gradeFilter, sectionFilter, venueFilter, activeTab, archiveSubTab, archiveSearchTerm]);
+    }, [rawData, dateRange, pointsRange, assetStatusFilter, gradeFilter, sectionFilter, venueFilter, activeTab, archiveSubTab, archiveSearchTerm, pointsSearchTerm, pointsDateRange, pointsChangeType, pointsActionTypes, pointsSelectedGrades, pointsSelectedSections, pointsSelectedEventTypes, pointsSortBy]);
 
     // --- 3. Handlers ---
     const handleEditClick = async (event) => {
@@ -358,24 +392,13 @@ export default function ReportsPage() {
         setConfirmModal({
             isOpen: true,
             title: "حذف نهائي للنشاط",
-            message: `تحذير: هذا إجراء نهائي!\n\nسيتم حذف النشاط "${event.title}" نهائياً من السجلات وسحب النقاط (10 نقاط) من جميع الطلاب المشاركين.\n\nهل أنت متأكد؟`,
+            message: `تحذير: هذا إجراء نهائي!\n\nسيتم حذف النشاط "${event.title}" نهائياً من السجلات والأرشيف دون المساس بنقاط الطلاب المشاركين.\n\nهل أنت متأكد؟`,
             isDestructive: true,
             onConfirm: async () => {
-                const toastId = toast.loading("جاري حذف النشاط وسحب النقاط...");
+                const toastId = toast.loading("جاري حذف النشاط نهائياً من الأرشيف...");
                 try {
-                    await runTransaction(db, async (transaction) => {
-                        const eventRef = doc(db, 'events', event.id);
-                        const linkStudents = event.linkStudentIds || [];
-                        const eligibleStudents = (event.rawParticipatingStudents || []).filter(id => !linkStudents.includes(id));
-                        if (eligibleStudents.length > 0) {
-                            for (const studentId of eligibleStudents) {
-                                const studentRef = doc(db, 'students', studentId);
-                                transaction.update(studentRef, { totalPoints: increment(-10) });
-                            }
-                        }
-                        transaction.delete(eventRef);
-                    });
-                    toast.success("تم حذف النشاط نهائياً", { id: toastId });
+                    await deleteDoc(doc(db, 'events', event.id));
+                    toast.success("تم حذف النشاط نهائياً من الأرشيف", { id: toastId });
                     setConfirmModal(prev => ({ ...prev, isOpen: false }));
                     fetchData();
                 } catch (e) {
@@ -512,6 +535,69 @@ export default function ReportsPage() {
                 });
 
                 data = archiveSubTab === 'students' ? archivedStList : archivedEvList;
+            } else if (activeTab === 'points') {
+                try {
+                    const snap = await getDocs(query(collection(db, 'points_logs'), orderBy('createdAt', 'desc')));
+                    data = snap.docs.map(d => {
+                        const pd = d.data();
+                        const createdDate = pd.createdAt?.toDate ? pd.createdAt.toDate() : (pd.createdAt ? new Date(pd.createdAt) : new Date());
+                        return {
+                            id: d.id,
+                            studentId: pd.studentId,
+                            studentName: pd.studentName || 'طالب',
+                            grade: pd.grade || '',
+                            section: pd.section || '',
+                            class: pd.class || ((pd.grade && pd.section) ? `${pd.grade} - ${pd.section}` : ''),
+                            change: Number(pd.change) || 0,
+                            previousTotalPoints: Number(pd.previousTotalPoints) || 0,
+                            newTotalPoints: Number(pd.newTotalPoints) || 0,
+                            reason: pd.reason || 'تعديل نقاط',
+                            actionType: pd.actionType || 'manual_edit',
+                            eventId: pd.eventId || null,
+                            eventTitle: pd.eventTitle || null,
+                            eventType: pd.eventType || null,
+                            performedBy: pd.performedBy || 'النظام',
+                            rawDate: createdDate,
+                            date: format(createdDate, 'yyyy-MM-dd'),
+                            formattedDate: format(createdDate, 'd MMMM yyyy - hh:mm a', { locale: ar }),
+                            time: format(createdDate, 'hh:mm a')
+                        };
+                    });
+                } catch (pointsErr) {
+                    console.warn("Could not load points_logs with orderBy, attempting unsorted:", pointsErr);
+                    try {
+                        const snap = await getDocs(collection(db, 'points_logs'));
+                        data = snap.docs.map(d => {
+                            const pd = d.data();
+                            const createdDate = pd.createdAt?.toDate ? pd.createdAt.toDate() : (pd.createdAt ? new Date(pd.createdAt) : new Date());
+                            return {
+                                id: d.id,
+                                studentId: pd.studentId,
+                                studentName: pd.studentName || 'طالب',
+                                grade: pd.grade || '',
+                                section: pd.section || '',
+                                class: pd.class || ((pd.grade && pd.section) ? `${pd.grade} - ${pd.section}` : ''),
+                                change: Number(pd.change) || 0,
+                                previousTotalPoints: Number(pd.previousTotalPoints) || 0,
+                                newTotalPoints: Number(pd.newTotalPoints) || 0,
+                                reason: pd.reason || 'تعديل نقاط',
+                                actionType: pd.actionType || 'manual_edit',
+                                eventId: pd.eventId || null,
+                                eventTitle: pd.eventTitle || null,
+                                eventType: pd.eventType || null,
+                                performedBy: pd.performedBy || 'النظام',
+                                rawDate: createdDate,
+                                date: format(createdDate, 'yyyy-MM-dd'),
+                                formattedDate: format(createdDate, 'd MMMM yyyy - hh:mm a', { locale: ar }),
+                                time: format(createdDate, 'hh:mm a')
+                            };
+                        });
+                        data.sort((a, b) => b.rawDate - a.rawDate);
+                    } catch (fallbackErr) {
+                        console.warn("Points logs collection empty or inaccessible:", fallbackErr);
+                        data = [];
+                    }
+                }
             }
             setRawData(data);
         } catch (error) {
@@ -534,7 +620,6 @@ export default function ReportsPage() {
         } else if (activeTab === 'students') {
             if (pointsRange.min > 0) filtered = filtered.filter(item => item.points >= pointsRange.min);
             if (pointsRange.max < 2000) filtered = filtered.filter(item => item.points <= pointsRange.max);
-
 
             if (gradeFilter) filtered = filtered.filter(item => item.grade === gradeFilter);
             if (sectionFilter) filtered = filtered.filter(item => item.section === sectionFilter);
@@ -565,6 +650,71 @@ export default function ReportsPage() {
                     }
                 });
             }
+        } else if (activeTab === 'points') {
+            // 1. Smart multi-term search with Arabic normalization
+            if (pointsSearchTerm) {
+                const rawTokens = pointsSearchTerm.trim().split(/\s+/).filter(Boolean);
+                const tokens = rawTokens.map(t => normalizeArabic(t));
+                filtered = filtered.filter(item => {
+                    const corpus = normalizeArabic([
+                        item.studentName || '',
+                        item.grade || '',
+                        item.section || '',
+                        item.class || '',
+                        item.reason || '',
+                        item.eventTitle || '',
+                        item.eventType || '',
+                        item.performedBy || '',
+                        String(item.change || ''),
+                        String(item.newTotalPoints || '')
+                    ].join(' '));
+                    return tokens.every(tok => corpus.includes(tok));
+                });
+            }
+
+            // 2. Date Range
+            if (pointsDateRange.start) {
+                filtered = filtered.filter(item => item.date >= pointsDateRange.start);
+            }
+            if (pointsDateRange.end) {
+                filtered = filtered.filter(item => item.date <= pointsDateRange.end);
+            }
+
+            // 3. Change Type (+ / -)
+            if (pointsChangeType === 'positive') {
+                filtered = filtered.filter(item => item.change > 0);
+            } else if (pointsChangeType === 'negative') {
+                filtered = filtered.filter(item => item.change < 0);
+            }
+
+            // 4. Action Types
+            if (pointsActionTypes.length > 0) {
+                filtered = filtered.filter(item => pointsActionTypes.includes(item.actionType));
+            }
+
+            // 5. Grades
+            if (pointsSelectedGrades.length > 0) {
+                filtered = filtered.filter(item => pointsSelectedGrades.includes(item.grade));
+            }
+
+            // 6. Sections
+            if (pointsSelectedSections.length > 0) {
+                filtered = filtered.filter(item => pointsSelectedSections.includes(item.section));
+            }
+
+            // 7. Event Types
+            if (pointsSelectedEventTypes.length > 0) {
+                filtered = filtered.filter(item => pointsSelectedEventTypes.includes(item.eventType));
+            }
+
+            // 8. Sorting
+            filtered.sort((a, b) => {
+                if (pointsSortBy === 'date_asc') return (a.rawDate?.getTime?.() || 0) - (b.rawDate?.getTime?.() || 0);
+                if (pointsSortBy === 'change_desc') return b.change - a.change;
+                if (pointsSortBy === 'change_asc') return a.change - b.change;
+                if (pointsSortBy === 'student_name') return (a.studentName || '').localeCompare(b.studentName || '', 'ar');
+                return (b.rawDate?.getTime?.() || 0) - (a.rawDate?.getTime?.() || 0);
+            });
         }
 
         setPreviewData(filtered);
@@ -643,6 +793,23 @@ export default function ReportsPage() {
                     "عدد الطلاب": e.studentsCount
                 }));
             }
+        } else if (activeTab === 'points') {
+            exportData = previewData.map((p, i) => ({
+                "م": i + 1,
+                "اسم الطالب": p.studentName,
+                "الصف": p.grade || '',
+                "الشعبة": p.section || '',
+                "الفصل": (p.grade && p.section) ? `${p.grade} - ${p.section}` : (p.class || ''),
+                "نوع الحركة": p.change > 0 ? `+${p.change} (إضافة)` : `${p.change} (خصم)`,
+                "التغيير": p.change,
+                "الرصيد السابق": p.previousTotalPoints,
+                "الرصيد الجديد": p.newTotalPoints,
+                "سبب الحركة": p.reason,
+                "النشاط المرتبط": p.eventTitle || '-',
+                "نوع النشاط": p.eventType || '-',
+                "المنفّذ": p.performedBy || 'النظام',
+                "التاريخ والوقت": p.formattedDate || p.date
+            }));
         }
 
         // 2. Create Workbook
@@ -682,7 +849,8 @@ export default function ReportsPage() {
             const titleMap = {
                 'activities': 'سجل الأنشطة المدرسي',
                 'students': 'قائمة الطلاب المتميزين',
-                'assets': 'جرد الموارد والمعدات'
+                'assets': 'جرد الموارد والمعدات',
+                'points': 'سجل حركات نقاط التميز للطلاب'
             };
             let pageTitle = titleMap[activeTab] || 'تقرير شامل';
 
@@ -931,6 +1099,34 @@ export default function ReportsPage() {
                     }
 
                     return mainRow + detailsRow;
+                }).join('');
+            } else if (activeTab === 'points') {
+                tableHeader = `
+                    <tr>
+                        <th style="width: 5%">#</th>
+                        <th style="width: 25%">اسم الطالب</th>
+                        <th style="width: 15%">الصف والشعبة</th>
+                        <th style="width: 25%">سبب الحركة / النشاط</th>
+                        <th style="width: 10%">مقدار التغيير</th>
+                        <th style="width: 10%">الرصيد بعد</th>
+                        <th style="width: 10%">التاريخ</th>
+                    </tr>
+                `;
+                tableRowsHtml = previewData.map((item, i) => {
+                    const isPos = (Number(item.change) || 0) > 0;
+                    const changeStr = isPos ? `+${item.change}` : `${item.change}`;
+                    const className = (item.grade && item.section) ? `${item.grade} - ${item.section}` : (item.class || '-');
+                    return `
+                    <tr>
+                        <td class="center dim">${i + 1}</td>
+                        <td class="bold">${item.studentName}</td>
+                        <td class="center">${className}</td>
+                        <td>${item.reason || item.eventTitle || '-'}</td>
+                        <td class="center bold" style="${isPos ? 'color: #059669;' : 'color: #dc2626;'}">${changeStr}</td>
+                        <td class="center bold success-text">${item.newTotalPoints}</td>
+                        <td class="center dim" style="font-size: 11px;">${item.date}</td>
+                    </tr>
+                    `;
                 }).join('');
             }
 
@@ -1587,6 +1783,9 @@ export default function ReportsPage() {
                         <button onClick={() => activeTab !== 'assets' && setActiveTab('assets')} className={`w-full p-3 rounded-xl flex items-center transition-all ${activeTab === 'assets' ? 'bg-amber-600 text-white shadow-lg' : 'hover:bg-white/5 text-gray-400'}`}>
                             <Box size={18} className="ml-2" /> جرد الموارد
                         </button>
+                        <button onClick={() => activeTab !== 'points' && setActiveTab('points')} className={`w-full p-3 rounded-xl flex items-center transition-all ${activeTab === 'points' ? 'bg-amber-600 text-white shadow-lg shadow-amber-600/20 font-bold' : 'hover:bg-white/5 text-gray-400'}`}>
+                            <TrendingUp size={18} className="ml-2" /> سجلات النقاط
+                        </button>
                         <button onClick={() => activeTab !== 'archive' && setActiveTab('archive')} className={`w-full p-3 rounded-xl flex items-center justify-between transition-all ${activeTab === 'archive' ? 'bg-rose-600 text-white shadow-lg shadow-rose-600/20' : 'hover:bg-white/5 text-gray-400'}`}>
                             <span className="flex items-center">
                                 <Archive size={18} className="ml-2" /> الأرشيف العام
@@ -1829,6 +2028,166 @@ export default function ReportsPage() {
                             </div>
                         </div>
                     )}
+
+                    {/* --- POINTS FILTERS --- */}
+                    {activeTab === 'points' && (
+                        <div className="space-y-4 animate-fade-in mb-8">
+                            {/* Clear All Filters Button */}
+                            {isAnyPointsFilterActive && (
+                                <button
+                                    onClick={handleClearPointsFilters}
+                                    className="w-full py-2 px-3 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm"
+                                >
+                                    <X size={14} /> إلغاء جميع الفلاتر
+                                </button>
+                            )}
+
+                            {/* Smart Search */}
+                            <div>
+                                <label className="block text-gray-400 text-sm mb-1 font-bold">بحث ذكي في سجلات النقاط</label>
+                                <div className="relative">
+                                    <input
+                                        type="text"
+                                        placeholder="ابحث بالاسم، السبب، النشاط..."
+                                        className="w-full bg-black/40 border border-white/10 rounded-xl py-2.5 pr-10 pl-3 text-white text-xs placeholder-gray-500 outline-none focus:border-amber-500 transition-colors"
+                                        value={pointsSearchTerm}
+                                        onChange={e => setPointsSearchTerm(e.target.value)}
+                                    />
+                                    <Search size={16} className="absolute right-3 top-3 text-gray-400" />
+                                    {pointsSearchTerm && (
+                                        <button
+                                            onClick={() => setPointsSearchTerm('')}
+                                            className="absolute left-3 top-2.5 text-gray-400 hover:text-white"
+                                        >
+                                            <X size={14} />
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Date Range */}
+                            <div>
+                                <label className="block text-gray-400 text-sm mb-1 font-bold">النطاق الزمني</label>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <div>
+                                        <span className="text-[11px] text-gray-500 block mb-1">من:</span>
+                                        <input
+                                            type="date"
+                                            className="w-full bg-black/40 border border-white/10 rounded-xl px-2 py-2 text-white text-xs outline-none focus:border-amber-500"
+                                            value={pointsDateRange.start}
+                                            onChange={e => setPointsDateRange({ ...pointsDateRange, start: e.target.value })}
+                                        />
+                                    </div>
+                                    <div>
+                                        <span className="text-[11px] text-gray-500 block mb-1">إلى:</span>
+                                        <input
+                                            type="date"
+                                            className="w-full bg-black/40 border border-white/10 rounded-xl px-2 py-2 text-white text-xs outline-none focus:border-amber-500"
+                                            value={pointsDateRange.end}
+                                            onChange={e => setPointsDateRange({ ...pointsDateRange, end: e.target.value })}
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Change Type: All / Positive / Negative */}
+                            <div>
+                                <label className="block text-gray-400 text-sm mb-1.5 font-bold">نوع الحركة (زيادة / خصم)</label>
+                                <div className="grid grid-cols-3 gap-1.5 bg-black/40 p-1 rounded-xl border border-white/10 text-xs font-bold">
+                                    <button
+                                        onClick={() => setPointsChangeType('all')}
+                                        className={`py-1.5 rounded-lg transition-all ${pointsChangeType === 'all' ? 'bg-amber-600 text-white' : 'text-gray-400 hover:text-white'}`}
+                                    >
+                                        الكل
+                                    </button>
+                                    <button
+                                        onClick={() => setPointsChangeType('positive')}
+                                        className={`py-1.5 rounded-lg transition-all ${pointsChangeType === 'positive' ? 'bg-emerald-600 text-white' : 'text-emerald-400/70 hover:text-emerald-300'}`}
+                                    >
+                                        + زيادة
+                                    </button>
+                                    <button
+                                        onClick={() => setPointsChangeType('negative')}
+                                        className={`py-1.5 rounded-lg transition-all ${pointsChangeType === 'negative' ? 'bg-rose-600 text-white' : 'text-rose-400/70 hover:text-rose-300'}`}
+                                    >
+                                        - خصم
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Action Types / Reason Categories (MultiSelect) */}
+                            <div>
+                                <MultiSelect
+                                    label="تصنيف العملية والسبب"
+                                    placeholder="اختر التصنيفات..."
+                                    options={[
+                                        { value: 'activity_award', label: 'نقاط اعتماد نشاط' },
+                                        { value: 'activity_deduct', label: 'خصم إلغاء نشاط' },
+                                        { value: 'manual_add', label: 'تعديل يدوي (زيادة)' },
+                                        { value: 'manual_deduct', label: 'تعديل يدوي (خصم)' },
+                                        { value: 'bulk_adjustment', label: 'تعديل جماعي للطلاب' },
+                                        { value: 'link_registration', label: 'مكافأة رابط تسجيل' },
+                                        { value: 'duplicate_merge', label: 'دمج سجلات مكررة' },
+                                    ]}
+                                    selectedValues={pointsActionTypes}
+                                    onChange={setPointsActionTypes}
+                                    icon={Tag}
+                                />
+                            </div>
+
+                            {/* Grade Filter (MultiSelect) */}
+                            <div>
+                                <MultiSelect
+                                    label="الصفوف الدراسية"
+                                    placeholder="اختر الصفوف..."
+                                    options={(grades || []).map(g => ({ value: g.name, label: g.name }))}
+                                    selectedValues={pointsSelectedGrades}
+                                    onChange={setPointsSelectedGrades}
+                                    icon={Users}
+                                />
+                            </div>
+
+                            {/* Section Filter (MultiSelect) */}
+                            <div>
+                                <MultiSelect
+                                    label="الشعب"
+                                    placeholder="اختر الشعب..."
+                                    options={Array.from(new Set((grades || []).flatMap(g => (g.sections || []).map(s => s.name)))).map(s => ({ value: s, label: `شعبة ${s}` }))}
+                                    selectedValues={pointsSelectedSections}
+                                    onChange={setPointsSelectedSections}
+                                    icon={Layers}
+                                />
+                            </div>
+
+                            {/* Event Types Filter (MultiSelect) */}
+                            <div>
+                                <MultiSelect
+                                    label="نوع النشاط المرتبط"
+                                    placeholder="اختر أنواع الأنشطة..."
+                                    options={(eventTypes || []).map(t => ({ value: t.name, label: t.name }))}
+                                    selectedValues={pointsSelectedEventTypes}
+                                    onChange={setPointsSelectedEventTypes}
+                                    icon={Filter}
+                                />
+                            </div>
+
+                            {/* Sorting */}
+                            <div>
+                                <label className="block text-gray-400 text-sm mb-1 font-bold">طريقة الترتيب</label>
+                                <select
+                                    className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-white text-xs outline-none focus:border-amber-500"
+                                    value={pointsSortBy}
+                                    onChange={e => setPointsSortBy(e.target.value)}
+                                >
+                                    <option value="date_desc">الأحدث أولاً (تاريخ الحركة)</option>
+                                    <option value="date_asc">الأقدم أولاً</option>
+                                    <option value="change_desc">الأكبر زيادة (+ النقاط)</option>
+                                    <option value="change_asc">الأكبر خصماً (- النقاط)</option>
+                                    <option value="student_name">اسم الطالب أبجدياً</option>
+                                </select>
+                            </div>
+                        </div>
+                    )}
                     <div className="border-t border-white/10 pt-4 space-y-3">
                         <h4 className="text-gray-400 text-sm mb-2 font-bold">إجراءات سريعة</h4>
 
@@ -1913,6 +2272,35 @@ export default function ReportsPage() {
                         {loading && <span className="text-indigo-400 text-sm animate-pulse flex items-center gap-2">جاري التحميل...</span>}
                     </div>
 
+                    {/* Points Ledger KPI Summary Bar */}
+                    {activeTab === 'points' && (
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 shrink-0">
+                            <div className="bg-white/5 border border-white/10 rounded-xl p-3 text-center">
+                                <div className="text-gray-400 text-xs mb-1">إجمالي الحركات المفحوصة</div>
+                                <div className="text-white font-bold font-mono text-xl">{previewData.length}</div>
+                            </div>
+                            <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3 text-center">
+                                <div className="text-emerald-300 text-xs mb-1">إجمالي النقاط الممنوحة</div>
+                                <div className="text-emerald-400 font-bold font-mono text-xl">
+                                    +{previewData.filter(p => (Number(p.change) || 0) > 0).reduce((sum, p) => sum + Number(p.change), 0)} ن
+                                </div>
+                            </div>
+                            <div className="bg-rose-500/10 border border-rose-500/20 rounded-xl p-3 text-center">
+                                <div className="text-rose-300 text-xs mb-1">إجمالي النقاط المخصومة</div>
+                                <div className="text-rose-400 font-bold font-mono text-xl">
+                                    -{previewData.filter(p => (Number(p.change) || 0) < 0).reduce((sum, p) => sum + Math.abs(Number(p.change)), 0)} ن
+                                </div>
+                            </div>
+                            <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-3 text-center">
+                                <div className="text-amber-300 text-xs mb-1">صافي حركة النقاط</div>
+                                <div className="text-amber-400 font-bold font-mono text-xl">
+                                    {previewData.reduce((sum, p) => sum + (Number(p.change) || 0), 0) > 0 ? '+' : ''}
+                                    {previewData.reduce((sum, p) => sum + (Number(p.change) || 0), 0)} ن
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     {/* Mobile Horizontal Scroll Indicator (Option 3-A) */}
                     <div className="md:hidden flex items-center justify-between px-3 py-1.5 mb-2.5 bg-indigo-500/10 border border-indigo-500/20 rounded-xl text-indigo-300 text-xs">
                         <span className="flex items-center gap-1.5 font-medium">
@@ -1954,6 +2342,19 @@ export default function ReportsPage() {
                                             <th className="p-4">الحالة الحالية</th>
                                         </>
                                     )}
+                                    {activeTab === 'points' && (
+                                        <>
+                                            <th className="p-4">#</th>
+                                            <th className="p-4">الطالب</th>
+                                            <th className="p-4">الصف / الشعبة</th>
+                                            <th className="p-4">سبب الحركة / النشاط</th>
+                                            <th className="p-4 text-center">التصنيف</th>
+                                            <th className="p-4 text-center">التغيير</th>
+                                            <th className="p-4 text-center">الرصيد بعد</th>
+                                            <th className="p-4">المنفّذ</th>
+                                            <th className="p-4">التاريخ والوقت</th>
+                                        </>
+                                    )}
                                     {activeTab === 'archive' && archiveSubTab === 'students' && (
                                         <>
                                             <th className="p-4">#</th>
@@ -1979,7 +2380,7 @@ export default function ReportsPage() {
                                 {previewData.length === 0 ? (
                                     <tr>
                                         <td
-                                            colSpan={activeTab === 'archive' ? (archiveSubTab === 'students' ? 6 : 5) : 6}
+                                            colSpan={activeTab === 'points' ? 9 : (activeTab === 'archive' ? (archiveSubTab === 'students' ? 6 : 5) : 6)}
                                             className="p-12 text-center text-gray-400"
                                         >
                                             {activeTab === 'archive' ? 'لا توجد عناصر مؤرشفة حالياً' : 'لا توجد بيانات للعرض حالياً'}
@@ -2056,6 +2457,66 @@ export default function ReportsPage() {
                                                         <span className={`px-2 py-1 rounded text-xs ${row.status === 'Available' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}`}>
                                                             {row.status}
                                                         </span>
+                                                    </td>
+                                                </>
+                                            )}
+                                            {activeTab === 'points' && (
+                                                <>
+                                                    <td className="p-4 text-gray-400 font-mono text-xs">{idx + 1}</td>
+                                                    <td className="p-4 font-bold text-white">
+                                                        <div className="flex items-center gap-2">
+                                                            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-amber-600 to-orange-600 flex items-center justify-center text-xs font-bold text-white shrink-0 shadow">
+                                                                {row.studentName?.charAt(0) || 'ط'}
+                                                            </div>
+                                                            <div>
+                                                                <div>{row.studentName}</div>
+                                                            </div>
+                                                        </div>
+                                                    </td>
+                                                    <td className="p-4 text-gray-300 text-xs">
+                                                        {row.class || (row.grade ? `${row.grade} - ${row.section}` : '-')}
+                                                    </td>
+                                                    <td className="p-4 text-gray-200">
+                                                        <div className="font-medium">{row.reason}</div>
+                                                        {row.eventTitle && (
+                                                            <div className="text-xs text-amber-300/80 mt-0.5 flex items-center gap-1">
+                                                                <span>📌 {row.eventTitle}</span>
+                                                                {row.eventType && <span className="text-[10px] text-gray-400">({row.eventType})</span>}
+                                                            </div>
+                                                        )}
+                                                    </td>
+                                                    <td className="p-4 text-center">
+                                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                                                            row.actionType === 'activity_award' ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20' :
+                                                            row.actionType === 'activity_deduct' ? 'bg-rose-500/10 text-rose-300 border-rose-500/20' :
+                                                            row.actionType === 'bulk_adjustment' ? 'bg-purple-500/10 text-purple-300 border-purple-500/20' :
+                                                            row.actionType === 'link_registration' ? 'bg-blue-500/10 text-blue-300 border-blue-500/20' :
+                                                            'bg-white/5 text-gray-300 border-white/10'
+                                                        }`}>
+                                                            {row.actionType === 'activity_award' ? 'اعتماد نشاط' :
+                                                             row.actionType === 'activity_deduct' ? 'إلغاء نشاط' :
+                                                             row.actionType === 'bulk_adjustment' ? 'تعديل جماعي' :
+                                                             row.actionType === 'link_registration' ? 'رابط تسجيل' :
+                                                             row.actionType === 'duplicate_merge' ? 'دمج مكرر' : 'تعديل يدوي'}
+                                                        </span>
+                                                    </td>
+                                                    <td className="p-4 text-center font-bold font-mono">
+                                                        <span className={`inline-flex items-center gap-0.5 px-2.5 py-1 rounded-full text-xs ${
+                                                            row.change > 0 ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
+                                                        }`}>
+                                                            {row.change > 0 ? <ArrowUpRight size={13} /> : <ArrowDownLeft size={13} />}
+                                                            {row.change > 0 ? `+${row.change}` : row.change} ن
+                                                        </span>
+                                                    </td>
+                                                    <td className="p-4 text-center font-bold font-mono text-amber-400">
+                                                        {row.newTotalPoints}
+                                                    </td>
+                                                    <td className="p-4 text-gray-400 text-xs">
+                                                        {row.performedBy || 'النظام'}
+                                                    </td>
+                                                    <td className="p-4 text-gray-400 text-xs">
+                                                        <div className="text-white">{row.date}</div>
+                                                        <div className="text-[11px] opacity-60">{row.time}</div>
                                                     </td>
                                                 </>
                                             )}

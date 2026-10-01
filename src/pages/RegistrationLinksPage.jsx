@@ -10,6 +10,7 @@ import {
     increment, where, getDocs, writeBatch
 } from 'firebase/firestore';
 import toast from 'react-hot-toast';
+import { logPointsChange } from '../utils/pointsLedger';
 import CreateLinkModal from '../components/registration/CreateLinkModal';
 import LinkQRCodeModal from '../components/registration/LinkQRCodeModal';
 import LinkSubmissionsDrawer from '../components/registration/LinkSubmissionsDrawer';
@@ -167,6 +168,17 @@ export default function RegistrationLinksPage() {
             await updateDoc(doc(db, 'registration_links', link.id), {
                 delegatePointsAwarded: true
             });
+
+            logPointsChange({
+                studentId: link.delegateStudentId,
+                studentName: link.delegateName || 'طالب مفوض',
+                change: pts,
+                reason: `مكافأة طالب مفوض لإدارة رابط: ${link.title}`,
+                actionType: 'link_registration',
+                eventId: link.eventId || null,
+                eventTitle: link.eventTitle || link.title
+            }).catch(console.warn);
+
             toast.success(`تم منح ${pts} نقطة للطالب المفوض (${link.delegateName})`);
         } catch (err) {
             toast.error("فشل في منح النقاط: " + err.message);

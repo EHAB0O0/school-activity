@@ -9,6 +9,7 @@ import toast from 'react-hot-toast';
 import ConfirmModal from './ui/ConfirmModal';
 import DeleteEventModal from './ui/DeleteEventModal';
 import PrintOptionsModal from './ui/PrintOptionsModal';
+import { logPointsChange } from '../utils/pointsLedger';
 
 
 // --- Internal Component: MultiSelect moved to ui/MultiSelect.jsx ---
@@ -170,6 +171,7 @@ export default function Scheduler() {
 
     const handleMarkEventDone = async (eventData) => {
         const loadingToast = toast.loading("جاري رصد النقاط...");
+        const loggedChanges = [];
         try {
             await runTransaction(db, async (transaction) => {
                 const eventRef = doc(db, 'events', eventData.id);
@@ -184,12 +186,38 @@ export default function Scheduler() {
                 if (eligibleStudents.length > 0) {
                     for (const studentId of eligibleStudents) {
                         const studentRef = doc(db, 'students', studentId);
-                        transaction.update(studentRef, {
-                            totalPoints: increment(pointsToAward)
+                        const sSnap = await transaction.get(studentRef);
+                        if (!sSnap.exists()) continue;
+
+                        const sData = sSnap.data();
+                        const prev = Math.max(0, Number(sData.totalPoints) || 0);
+                        const next = prev + pointsToAward;
+
+                        transaction.update(studentRef, { totalPoints: next });
+
+                        loggedChanges.push({
+                            studentId,
+                            studentName: sData.name || 'طالب',
+                            grade: sData.grade || '',
+                            section: sData.section || '',
+                            class: sData.class || '',
+                            change: pointsToAward,
+                            previousTotalPoints: prev,
+                            newTotalPoints: next,
+                            reason: `مشاركة في نشاط: ${eventData.title || ''}`,
+                            actionType: 'activity_award',
+                            eventId: eventData.id,
+                            eventTitle: eventData.title || '',
+                            eventType: eventData.typeName || ''
                         });
                     }
                 }
             });
+
+            if (loggedChanges.length > 0) {
+                Promise.allSettled(loggedChanges.map(c => logPointsChange(c))).catch(console.warn);
+            }
+
             toast.success("تم تنفيذ النشاط ورصد النقاط للطلاب!");
             setIsModalOpen(false);
             fetchEvents();
@@ -248,6 +276,7 @@ export default function Scheduler() {
         setDeleteOptsModal({ ...deleteOptsModal, isOpen: false });
         setIsModalOpen(false); // Close parent
         const loadingToast = toast.loading("جاري معالجة الطلب...");
+        const loggedChanges = [];
 
         try {
             await runTransaction(db, async (transaction) => {
@@ -257,11 +286,37 @@ export default function Scheduler() {
                 const linkStudents = eventData.linkStudentIds || [];
                 const eligibleStudents = (eventData.participatingStudents || []).filter(id => !linkStudents.includes(id));
                 if (reversePoints && eligibleStudents.length > 0) {
-                    const pointsToDeduct = -(Number(eventData.points) || 10);
+                    const pointsToDeduct = Number(eventData.points) || 10;
 
                     for (const studentId of eligibleStudents) {
                         const studentRef = doc(db, 'students', studentId);
-                        transaction.update(studentRef, { totalPoints: increment(pointsToDeduct) });
+                        const sSnap = await transaction.get(studentRef);
+                        if (!sSnap.exists()) continue;
+
+                        const sData = sSnap.data();
+                        const prev = Math.max(0, Number(sData.totalPoints) || 0);
+                        const next = Math.max(0, prev - pointsToDeduct); // Guaranteed non-negative
+                        const actualDiff = -(prev - next);
+
+                        transaction.update(studentRef, { totalPoints: next });
+
+                        if (actualDiff !== 0) {
+                            loggedChanges.push({
+                                studentId,
+                                studentName: sData.name || 'طالب',
+                                grade: sData.grade || '',
+                                section: sData.section || '',
+                                class: sData.class || '',
+                                change: actualDiff,
+                                previousTotalPoints: prev,
+                                newTotalPoints: next,
+                                reason: `خصم بسبب حذف نشاط معتمد: ${eventData.title || ''}`,
+                                actionType: 'activity_deduct',
+                                eventId: eventData.id,
+                                eventTitle: eventData.title || '',
+                                eventType: eventData.typeName || ''
+                            });
+                        }
                     }
                 }
 
@@ -272,6 +327,10 @@ export default function Scheduler() {
                     transaction.delete(eventRef);
                 }
             });
+
+            if (loggedChanges.length > 0) {
+                Promise.allSettled(loggedChanges.map(c => logPointsChange(c))).catch(console.warn);
+            }
 
             toast.dismiss(loadingToast);
             toast.success(reversePoints ? "تم الحذف وخصم النقاط بنجاح" : "تم الحذف بنجاح");

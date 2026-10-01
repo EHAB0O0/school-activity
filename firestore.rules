@@ -81,6 +81,11 @@ service cloud.firestore {
                     || true;
     }
 
+    // Points Logs Collection: Complete audit trail of student point modifications
+    match /points_logs/{logId} {
+      allow read, write: if isAuthenticated();
+    }
+
     // Default deny all other collections
     match /{document=**} {
       allow read, write: if false;

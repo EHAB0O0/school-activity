@@ -12,7 +12,24 @@ const MultiSelect = ({ label, options = [], selectedValues, value, onChange, pla
         (opt?.label || '').toLowerCase().includes(search.toLowerCase())
     );
 
-    const toggleSelection = (val) => {
+    const [lastSelectedVal, setLastSelectedVal] = useState(null);
+
+    const toggleSelection = (val, event) => {
+        if (event?.shiftKey && lastSelectedVal && lastSelectedVal !== val) {
+            const lastIdx = filteredOptions.findIndex(o => o.value === lastSelectedVal);
+            const currIdx = filteredOptions.findIndex(o => o.value === val);
+            if (lastIdx !== -1 && currIdx !== -1) {
+                const start = Math.min(lastIdx, currIdx);
+                const end = Math.max(lastIdx, currIdx);
+                const rangeVals = filteredOptions.slice(start, end + 1).map(o => o.value);
+                const combined = Array.from(new Set([...currentValues, ...rangeVals]));
+                onChange(combined);
+                setLastSelectedVal(val);
+                return;
+            }
+        }
+
+        setLastSelectedVal(val);
         const newSelection = currentValues.includes(val)
             ? currentValues.filter(v => v !== val)
             : [...currentValues, val];
@@ -62,7 +79,7 @@ const MultiSelect = ({ label, options = [], selectedValues, value, onChange, pla
                         {filteredOptions.map(opt => (
                             <div
                                 key={opt.value}
-                                onClick={() => toggleSelection(opt.value)}
+                                onClick={(e) => toggleSelection(opt.value, e)}
                                 className={`flex items-center p-2 rounded-lg cursor-pointer transition-colors ${currentValues.includes(opt.value) ? 'bg-indigo-600/20 text-indigo-300' : 'hover:bg-white/5 text-gray-300'}`}
                             >
                                 <div className={`w-4 h-4 rounded border flex items-center justify-center ml-3 ${currentValues.includes(opt.value) ? 'bg-indigo-500 border-indigo-500' : 'border-gray-600'}`}>
