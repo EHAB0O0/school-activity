@@ -267,9 +267,10 @@ export default function PublicRegistrationPage() {
             return;
         }
 
-        // Validate multiple custom fields
+        // Validate multiple custom fields (skip required validation if field has fixed value)
         for (const field of customFields) {
-            if (field.required && !singleForm.customValues?.[field.id]?.trim()) {
+            const hasFixed = field.isFixed && field.fixedValue;
+            if (field.required && !hasFixed && !singleForm.customValues?.[field.id]?.trim()) {
                 toast.error(`يرجى تحديد ${field.label}`);
                 return;
             }
@@ -289,7 +290,12 @@ export default function PublicRegistrationPage() {
                 ? (canWaitlist ? 'waitlist' : 'rejected')
                 : (linkData.approvalMode === 'immediate' ? 'approved' : 'pending');
 
-            const customValues = singleForm.customValues || {};
+            const customValues = { ...(singleForm.customValues || {}) };
+            customFields.forEach(f => {
+                if (f.isFixed && f.fixedValue) {
+                    customValues[f.id] = f.fixedValue;
+                }
+            });
             const customFieldValue = Object.values(customValues).filter(Boolean).join(' | ');
 
             const payload = {
@@ -351,9 +357,10 @@ export default function PublicRegistrationPage() {
             return;
         }
 
-        // Validate multiple custom fields in rapid mode
+        // Validate multiple custom fields in rapid mode (skip if fixed)
         for (const field of customFields) {
-            if (field.required) {
+            const hasFixed = field.isFixed && field.fixedValue;
+            if (field.required && !hasFixed) {
                 const missingCustom = validRows.some(r => !r.customValues?.[field.id]?.trim());
                 if (missingCustom) {
                     toast.error(`يرجى تحديد "${field.label}" لجميع الطلاب المدخلين`);
@@ -378,7 +385,12 @@ export default function PublicRegistrationPage() {
                     seatsLeft--;
                 }
 
-                const customValues = row.customValues || {};
+                const customValues = { ...(row.customValues || {}) };
+                customFields.forEach(f => {
+                    if (f.isFixed && f.fixedValue) {
+                        customValues[f.id] = f.fixedValue;
+                    }
+                });
                 const customFieldValue = Object.values(customValues).filter(Boolean).join(' | ');
 
                 await addDoc(collection(db, 'link_submissions'), {
@@ -712,22 +724,38 @@ export default function PublicRegistrationPage() {
                                 {customFields.length > 0 && (
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                         {customFields.map((field) => (
-                                            <div key={field.id}>
-                                                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                                                    {field.label} {field.required ? <span className="text-rose-400 mr-1">*</span> : <span className="text-slate-500 font-normal mr-1">(اختياري)</span>}
-                                                </label>
-                                                <input
-                                                    type="text"
-                                                    required={field.required}
-                                                    placeholder={`أدخل ${field.label}...`}
-                                                    value={singleForm.customValues?.[field.id] || ''}
-                                                    onChange={(e) => setSingleForm({
-                                                        ...singleForm,
-                                                        customValues: { ...(singleForm.customValues || {}), [field.id]: e.target.value }
-                                                    })}
-                                                    className="w-full px-4 py-3 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500 transition-colors"
-                                                />
-                                            </div>
+                                            field.isFixed && field.fixedValue ? (
+                                                <div key={field.id} className="bg-amber-950/20 border border-amber-500/30 rounded-xl p-3 flex flex-col justify-center">
+                                                    <div className="flex items-center justify-between mb-1">
+                                                        <label className="text-xs font-semibold text-amber-300">
+                                                            {field.label}
+                                                        </label>
+                                                        <span className="text-[10px] bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded-full border border-amber-500/30 font-bold">
+                                                            قيمة موحدة مسبقاً
+                                                        </span>
+                                                    </div>
+                                                    <p className="text-sm font-bold text-white">
+                                                        {field.fixedValue}
+                                                    </p>
+                                                </div>
+                                            ) : (
+                                                <div key={field.id}>
+                                                    <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                                                        {field.label} {field.required ? <span className="text-rose-400 mr-1">*</span> : <span className="text-slate-500 font-normal mr-1">(اختياري)</span>}
+                                                    </label>
+                                                    <input
+                                                        type="text"
+                                                        required={field.required}
+                                                        placeholder={`أدخل ${field.label}...`}
+                                                        value={singleForm.customValues?.[field.id] || ''}
+                                                        onChange={(e) => setSingleForm({
+                                                            ...singleForm,
+                                                            customValues: { ...(singleForm.customValues || {}), [field.id]: e.target.value }
+                                                        })}
+                                                        className="w-full px-4 py-3 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500 transition-colors"
+                                                    />
+                                                </div>
+                                            )
                                         ))}
                                     </div>
                                 )}
@@ -828,21 +856,31 @@ export default function PublicRegistrationPage() {
                                             </select>
 
                                             {customFields.map((field) => (
-                                                <input
-                                                    key={field.id}
-                                                    type="text"
-                                                    placeholder={`${field.label}${field.required ? ' *' : ''}`}
-                                                    value={row.customValues?.[field.id] || ''}
-                                                    onChange={(e) => {
-                                                        const updated = [...rapidRows];
-                                                        updated[idx].customValues = {
-                                                            ...(updated[idx].customValues || {}),
-                                                            [field.id]: e.target.value
-                                                        };
-                                                        setRapidRows(updated);
-                                                    }}
-                                                    className="flex-1 min-w-[110px] px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white"
-                                                />
+                                                field.isFixed && field.fixedValue ? (
+                                                    <div
+                                                        key={field.id}
+                                                        className="flex items-center px-3 py-2 bg-amber-950/20 border border-amber-500/30 rounded-xl text-xs text-amber-300 min-w-[110px]"
+                                                        title={`${field.label}: ${field.fixedValue} (قيمة موحدة مسبقاً)`}
+                                                    >
+                                                        <span className="truncate font-semibold">{field.fixedValue}</span>
+                                                    </div>
+                                                ) : (
+                                                    <input
+                                                        key={field.id}
+                                                        type="text"
+                                                        placeholder={`${field.label}${field.required ? ' *' : ''}`}
+                                                        value={row.customValues?.[field.id] || ''}
+                                                        onChange={(e) => {
+                                                            const updated = [...rapidRows];
+                                                            updated[idx].customValues = {
+                                                                ...(updated[idx].customValues || {}),
+                                                                [field.id]: e.target.value
+                                                            };
+                                                            setRapidRows(updated);
+                                                        }}
+                                                        className="flex-1 min-w-[110px] px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white"
+                                                    />
+                                                )
                                             ))}
 
                                             {rapidRows.length > 1 && (

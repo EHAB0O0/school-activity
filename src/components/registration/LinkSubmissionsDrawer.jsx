@@ -23,6 +23,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
     const [selectedIds, setSelectedIds] = useState([]);
     const [editingSubmission, setEditingSubmission] = useState(null);
     const [showCreateStudentModal, setShowCreateStudentModal] = useState(null); // submission object to approve with modal
+    const [showBulkCreateModal, setShowBulkCreateModal] = useState(null); // { unregCount, totalCount, unregisteredSubs, registeredSubs }
 
     // Real-time Submissions Listener
     useEffect(() => {
@@ -292,23 +293,86 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
         }
     };
 
-    // Bulk Approve (fixed to prevent duplicate document writes in batch)
-    const handleBulkApprove = async () => {
+    // Bulk Approve Click Handler
+    const handleBulkApproveClick = () => {
         if (selectedIds.length === 0) return;
-        const confirmMsg = `هل أنت متأكد من اعتماد ${selectedIds.length} طالب دفعة واحدة؟`;
-        if (!window.confirm(confirmMsg)) return;
 
+        const subsToProcess = selectedIds
+            .map(id => submissions.find(s => s.id === id))
+            .filter(s => s && s.status !== 'approved');
+
+        if (subsToProcess.length === 0) {
+            toast.error("جميع الطلاب المحددين معتمدون مسبقاً");
+            return;
+        }
+
+        const unregisteredSubs = subsToProcess.filter(sub => !duplicateMap[sub.id]?.matchedStudent);
+        const registeredSubs = subsToProcess.filter(sub => !!duplicateMap[sub.id]?.matchedStudent);
+
+        // If at least one student is not registered in the school database, ask with choice modal
+        if (unregisteredSubs.length > 0) {
+            setShowBulkCreateModal({
+                unregCount: unregisteredSubs.length,
+                totalCount: subsToProcess.length,
+                unregisteredSubs,
+                registeredSubs
+            });
+        } else {
+            // All are already registered, confirm and approve directly
+            const confirmMsg = `هل أنت متأكد من اعتماد ${subsToProcess.length} طالب دفعة واحدة؟`;
+            if (window.confirm(confirmMsg)) {
+                executeBulkApprove(false, { unregisteredSubs, registeredSubs });
+            }
+        }
+    };
+
+    // Execute Bulk Approve
+    const executeBulkApprove = async (createProfilesForUnregistered, explicitData = null) => {
+        const data = explicitData || showBulkCreateModal;
+        if (!data) return;
+
+        setShowBulkCreateModal(null);
         const toastId = toast.loading("جاري الاعتماد الجماعي...");
+
         try {
             const points = Number(link.pointsPerStudent) || 0;
             const pointsPerStudent = {};
             const studentIdsToAddToEvent = new Set();
             const subsToApprove = [];
+            const batch = writeBatch(db);
 
-            for (const id of selectedIds) {
-                const sub = submissions.find(s => s.id === id);
-                if (!sub || sub.status === 'approved') continue;
+            // 1. Process unregistered submissions
+            for (const sub of data.unregisteredSubs) {
+                let studentId = null;
+                if (createProfilesForUnregistered) {
+                    const specializationsList = (Array.isArray(link.specializations) && link.specializations.length > 0)
+                        ? link.specializations
+                        : (link.specialization ? [link.specialization] : ['عام / جوكر']);
 
+                    const newStudentRef = doc(collection(db, 'students'));
+                    batch.set(newStudentRef, {
+                        name: sub.studentName,
+                        grade: sub.grade || '',
+                        section: sub.section || '',
+                        class: `${sub.grade || ''} / ${sub.section || ''}`.trim(),
+                        phone: sub.phone || '',
+                        specializations: specializationsList,
+                        totalPoints: points,
+                        active: true,
+                        joinedAt: serverTimestamp(),
+                        notes: `مسجل عبر رابط: ${link.title}`
+                    });
+                    studentId = newStudentRef.id;
+
+                    if (link.eventId) {
+                        studentIdsToAddToEvent.add(studentId);
+                    }
+                }
+                subsToApprove.push({ sub, studentId });
+            }
+
+            // 2. Process already registered submissions
+            for (const sub of data.registeredSubs) {
                 const dupInfo = duplicateMap[sub.id];
                 const studentId = dupInfo?.matchedStudent?.id;
 
@@ -320,27 +384,19 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                     studentIdsToAddToEvent.add(studentId);
                 }
 
-                subsToApprove.push({ subId: sub.id, studentId: studentId || null });
+                subsToApprove.push({ sub, studentId });
             }
 
-            if (subsToApprove.length === 0) {
-                toast.dismiss(toastId);
-                toast.error("جميع الطلاب المحددين معتمدون مسبقاً");
-                return;
-            }
-
-            const batch = writeBatch(db);
-
-            // 1. Update submissions
-            subsToApprove.forEach(({ subId, studentId }) => {
-                batch.update(doc(db, 'link_submissions', subId), {
+            // 3. Update submissions
+            subsToApprove.forEach(({ sub, studentId }) => {
+                batch.update(doc(db, 'link_submissions', sub.id), {
                     status: 'approved',
-                    matchedStudentId: studentId,
+                    matchedStudentId: studentId || null,
                     approvedAt: serverTimestamp()
                 });
             });
 
-            // 2. Update points once per unique student
+            // 4. Update points for existing registered students
             Object.entries(pointsPerStudent).forEach(([stuId, pts]) => {
                 if (pts > 0) {
                     batch.update(doc(db, 'students', stuId), {
@@ -349,7 +405,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                 }
             });
 
-            // 3. Update event participants once if eventId exists
+            // 5. Update event participants and participantDetails if eventId exists
             if (link.eventId && studentIdsToAddToEvent.size > 0) {
                 const idsToAdd = Array.from(studentIdsToAddToEvent);
                 const eventUpdates = {
@@ -358,10 +414,8 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                 };
 
                 const customFieldsList = link.customFields || [];
-                subsToApprove.forEach(({ subId, studentId }) => {
+                subsToApprove.forEach(({ sub, studentId }) => {
                     if (!studentId) return;
-                    const sub = submissions.find(s => s.id === subId);
-                    if (!sub) return;
 
                     const detailsForStudent = {};
                     if (sub.customValues && typeof sub.customValues === 'object') {
@@ -388,7 +442,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
 
             await batch.commit();
             setSelectedIds([]);
-            toast.success("تم الاعتماد الجماعي بنجاح", { id: toastId });
+            toast.success(`تم الاعتماد الجماعي لـ (${subsToApprove.length}) طالب بنجاح`, { id: toastId });
         } catch (err) {
             console.error("Bulk approve error:", err);
             toast.error("حدث خطأ أثناء الاعتماد الجماعي: " + err.message, { id: toastId });
@@ -757,7 +811,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                         </span>
                         <div className="flex items-center gap-2">
                             <button
-                                onClick={handleBulkApprove}
+                                onClick={handleBulkApproveClick}
                                 className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1"
                             >
                                 <CheckCircle size={14} /> اعتماد المحدد
@@ -1085,7 +1139,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                     </div>
                 )}
 
-                {/* Student Profile Creation Choice Modal */}
+                {/* Student Profile Creation Choice Modal (Single) */}
                 {showCreateStudentModal && (
                     <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/75 p-4">
                         <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md p-6 text-right space-y-4" dir="rtl">
@@ -1116,6 +1170,60 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                 <button
                                     onClick={() => setShowCreateStudentModal(null)}
                                     className="text-xs text-slate-400 hover:text-white"
+                                >
+                                    إلغاء
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Bulk Student Profile Creation Choice Modal */}
+                {showBulkCreateModal && (
+                    <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-in fade-in">
+                        <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md p-6 text-right space-y-4 shadow-2xl" dir="rtl">
+                            <div className="flex items-center gap-3 text-indigo-400">
+                                <div className="p-2.5 rounded-xl bg-indigo-500/10 border border-indigo-500/30">
+                                    <ShieldAlert size={24} />
+                                </div>
+                                <div>
+                                    <h3 className="font-bold text-white text-base">اعتماد جماعي - طلاب غير مقيدين</h3>
+                                    <p className="text-xs text-slate-400">
+                                        يوجد {showBulkCreateModal.unregCount} طالب من أصل {showBulkCreateModal.totalCount} غير مقيدين بقاعدة بيانات المدرسة
+                                    </p>
+                                </div>
+                            </div>
+
+                            <p className="text-xs text-slate-300 leading-relaxed">
+                                كيف ترغب في معالجة الطلاب غير المسجلين أثناء الاعتماد الجماعي؟
+                            </p>
+
+                            <div className="space-y-2.5 pt-1">
+                                <button
+                                    onClick={() => executeBulkApprove(true)}
+                                    className="w-full p-3.5 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/40 text-right text-xs text-white flex flex-col gap-1 transition-all"
+                                >
+                                    <span className="font-bold text-indigo-300">١. اعتماد الجميع وإنشاء ملفات للطلاب غير المسجلين فقط</span>
+                                    <span className="text-[11px] text-slate-400 leading-normal">
+                                        سيتم إنشاء ملفات جديدة لـ ({showBulkCreateModal.unregCount}) طلاب في سجل المدرسة ومنحهم النقاط وإضافتهم للفعالية.
+                                    </span>
+                                </button>
+
+                                <button
+                                    onClick={() => executeBulkApprove(false)}
+                                    className="w-full p-3.5 rounded-xl bg-slate-800 hover:bg-slate-750 border border-slate-700 text-right text-xs text-white flex flex-col gap-1 transition-all"
+                                >
+                                    <span className="font-bold text-slate-200">٢. اعتماد للمناسبة الحالية فقط (دون إنشاء ملفات جديدة)</span>
+                                    <span className="text-[11px] text-slate-400 leading-normal">
+                                        اعتماد مشاركتهم في هذا الكشف فقط. الطلاب المسجلون مسبقاً تُمنح لهم النقاط وتُربط الفعالية بسجلاتهم، ولن يتم إنشاء ملفات جديدة لمن ليس لديه ملف.
+                                    </span>
+                                </button>
+                            </div>
+
+                            <div className="flex justify-end pt-2 border-t border-slate-800">
+                                <button
+                                    onClick={() => setShowBulkCreateModal(null)}
+                                    className="px-4 py-2 rounded-lg text-xs text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
                                 >
                                     إلغاء
                                 </button>

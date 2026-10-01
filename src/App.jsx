@@ -14,6 +14,7 @@ import PublicRegistrationPage from './pages/PublicRegistrationPage';
 
 import NotificationManager from './components/NotificationManager';
 import LoadingScreen from './components/ui/LoadingScreen';
+import NetworkStatusAlert from './components/ui/NetworkStatusAlert';
 
 function PrivateRoute({ children }) {
   const { currentUser, loading } = useAuth();
@@ -24,6 +25,7 @@ function PrivateRoute({ children }) {
 function App() {
   return (
     <Router>
+      <NetworkStatusAlert />
       <Routes>
         <Route path="/view" element={<PublicView />} />
         <Route path="/login" element={<Login />} />

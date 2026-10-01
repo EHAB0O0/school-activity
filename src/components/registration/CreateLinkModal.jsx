@@ -123,12 +123,18 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
             // Parse custom fields
             let initialCustomFields = [];
             if (Array.isArray(linkToEdit.customFields)) {
-                initialCustomFields = linkToEdit.customFields;
+                initialCustomFields = linkToEdit.customFields.map(f => ({
+                    ...f,
+                    isFixed: !!f.isFixed,
+                    fixedValue: f.fixedValue || ''
+                }));
             } else if (linkToEdit.customFieldLabel) {
                 initialCustomFields = [{
                     id: 'f_1',
                     label: linkToEdit.customFieldLabel,
-                    required: !!linkToEdit.customFieldRequired
+                    required: !!linkToEdit.customFieldRequired,
+                    isFixed: false,
+                    fixedValue: ''
                 }];
             }
 
@@ -505,7 +511,12 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
             .map(f => ({
                 id: f.id,
                 label: f.label.trim(),
-                required: !!f.required
+                required: !!f.required,
+                isFixed: !!f.isFixed,
+                fixedValue: f.isFixed ? (f.fixedValue || '').trim() : '',
+                ...(f.type ? { type: f.type } : {}),
+                ...(f.options ? { options: f.options } : {}),
+                ...(f.source ? { source: f.source } : {})
             }));
 
         setIsSubmitting(true);
@@ -1265,40 +1276,67 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
                                 {formData.customFields.map((field, index) => (
                                     <div
                                         key={field.id}
-                                        className="bg-slate-800/60 p-3 rounded-xl border border-slate-700/80 flex flex-col sm:flex-row items-stretch sm:items-center gap-3"
+                                        className="bg-slate-800/60 p-3.5 rounded-xl border border-slate-700/80 space-y-3"
                                     >
-                                        <div className="flex-1">
-                                            <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                                                تسمية الحقل #{index + 1}
-                                            </label>
-                                            <input
-                                                type="text"
-                                                placeholder="مثال: نوع الطبق / الصنف، الدور المطلوب، الملاحظات..."
-                                                value={field.label}
-                                                onChange={(e) => handleCustomFieldChange(field.id, 'label', e.target.value)}
-                                                className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs focus:outline-none focus:border-indigo-500"
-                                            />
+                                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                                            <div className="flex-1">
+                                                <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                                                    تسمية الحقل #{index + 1}
+                                                </label>
+                                                <input
+                                                    type="text"
+                                                    placeholder="مثال: نوع الطبق / الصنف، الدور المطلوب، فقرته في الإذاعة..."
+                                                    value={field.label}
+                                                    onChange={(e) => handleCustomFieldChange(field.id, 'label', e.target.value)}
+                                                    className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs focus:outline-none focus:border-indigo-500"
+                                                />
+                                            </div>
+
+                                            <div className="flex items-center justify-between sm:justify-start gap-4 pt-1 sm:pt-4">
+                                                <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={field.required}
+                                                        onChange={(e) => handleCustomFieldChange(field.id, 'required', e.target.checked)}
+                                                        className="w-4 h-4 rounded text-indigo-600 focus:ring-0 cursor-pointer"
+                                                    />
+                                                    <span>حقل إلزامي</span>
+                                                </label>
+
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleRemoveCustomField(field.id)}
+                                                    className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded-lg transition-colors"
+                                                    title="حذف هذا الحقل"
+                                                >
+                                                    <Trash2 size={16} />
+                                                </button>
+                                            </div>
                                         </div>
 
-                                        <div className="flex items-center justify-between sm:justify-start gap-4 pt-1 sm:pt-4">
-                                            <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                                        {/* Fixed / Unified Value Option */}
+                                        <div className="pt-2 border-t border-slate-700/50 flex flex-col sm:flex-row sm:items-center gap-2.5">
+                                            <label className="flex items-center gap-2 text-xs text-amber-300 font-semibold cursor-pointer shrink-0">
                                                 <input
                                                     type="checkbox"
-                                                    checked={field.required}
-                                                    onChange={(e) => handleCustomFieldChange(field.id, 'required', e.target.checked)}
-                                                    className="w-4 h-4 rounded text-indigo-600 focus:ring-0 cursor-pointer"
+                                                    checked={!!field.isFixed}
+                                                    onChange={(e) => handleCustomFieldChange(field.id, 'isFixed', e.target.checked)}
+                                                    className="w-4 h-4 rounded text-amber-500 focus:ring-0 cursor-pointer"
                                                 />
-                                                <span>حقل إلزامي</span>
+                                                <span>تثبيت قيمة موحدة لجميع المسجلين</span>
                                             </label>
 
-                                            <button
-                                                type="button"
-                                                onClick={() => handleRemoveCustomField(field.id)}
-                                                className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded-lg transition-colors"
-                                                title="حذف هذا الحقل"
-                                            >
-                                                <Trash2 size={16} />
-                                            </button>
+                                            {field.isFixed && (
+                                                <div className="flex-1 animate-in fade-in">
+                                                    <input
+                                                        type="text"
+                                                        placeholder="اكتب القيمة الثابتة (مثال: شارك في إحضار الأكلات)"
+                                                        value={field.fixedValue || ''}
+                                                        onChange={(e) => handleCustomFieldChange(field.id, 'fixedValue', e.target.value)}
+                                                        className="w-full px-3 py-1.5 bg-amber-950/20 border border-amber-500/40 rounded-lg text-amber-200 text-xs focus:outline-none focus:border-amber-400 placeholder:text-amber-500/40"
+                                                    />
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 ))}

@@ -7,7 +7,7 @@ import { updatePassword, EmailAuthProvider, reauthenticateWithCredential, create
 import {
     Save, Shield, Key, AlertTriangle, RefreshCw, Clock,
     Settings, Plus, Trash2, List, Calendar, School, Edit3, CheckCircle, Box, X, Bell,
-    Users, Check
+    Users, Check, GripVertical, ChevronUp, ChevronDown
 } from 'lucide-react';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import CriticalActionModal from '../components/ui/CriticalActionModal';
@@ -264,6 +264,36 @@ export default function SettingsPage() {
         const newSlots = [...editingProfile.slots];
         newSlots.splice(index, 1);
         setEditingProfile({ ...editingProfile, slots: newSlots });
+    };
+
+    const [draggedSlotIndex, setDraggedSlotIndex] = useState(null);
+
+    const handleSlotMove = (fromIndex, toIndex) => {
+        if (!editingProfile?.slots || toIndex < 0 || toIndex >= editingProfile.slots.length) return;
+        const newSlots = [...editingProfile.slots];
+        const [moved] = newSlots.splice(fromIndex, 1);
+        newSlots.splice(toIndex, 0, moved);
+        setEditingProfile({ ...editingProfile, slots: newSlots });
+    };
+
+    const handleSlotDragStart = (e, index) => {
+        setDraggedSlotIndex(index);
+        e.dataTransfer.effectAllowed = 'move';
+    };
+
+    const handleSlotDragOver = (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+    };
+
+    const handleSlotDrop = (e, targetIndex) => {
+        e.preventDefault();
+        if (draggedSlotIndex === null || draggedSlotIndex === targetIndex) {
+            setDraggedSlotIndex(null);
+            return;
+        }
+        handleSlotMove(draggedSlotIndex, targetIndex);
+        setDraggedSlotIndex(null);
     };
 
     const handleSaveProfile = async () => {
@@ -978,29 +1008,95 @@ export default function SettingsPage() {
                                 </div>
 
                                 <div className="border-t border-white/10 pt-4">
-                                    <div className="flex justify-between items-center mb-2">
+                                    <div className="flex justify-between items-center mb-1">
                                         <h4 className="text-white font-bold">الحصص والفترات</h4>
                                         <button onClick={handleAddSlot} className="text-emerald-400 hover:text-emerald-300 text-sm flex items-center"><Plus size={14} className="ml-1" /> إضافة فترة</button>
                                     </div>
+                                    <p className="text-xs text-gray-400 mb-3">يمكنك سحب وإفلات أي فترة لتغيير ترتيبها، أو استخدام أسهم الترتيب.</p>
 
                                     <div className="space-y-2">
                                         {editingProfile.slots.map((slot, idx) => (
-                                            <div key={idx} className="grid grid-cols-12 gap-2 items-center bg-black/20 p-2 rounded-lg border border-white/5">
-                                                <div className="col-span-4">
-                                                    <input className="w-full bg-transparent text-white text-sm px-2 focus:bg-black/40 rounded transition-colors"
-                                                        value={slot.label} onChange={e => handleSlotChange(idx, 'label', e.target.value)} placeholder="الاسم" />
+                                            <div
+                                                key={idx}
+                                                draggable
+                                                onDragStart={(e) => handleSlotDragStart(e, idx)}
+                                                onDragOver={handleSlotDragOver}
+                                                onDrop={(e) => handleSlotDrop(e, idx)}
+                                                className={`flex items-center gap-2 bg-black/20 p-2 rounded-xl border transition-all ${
+                                                    draggedSlotIndex === idx
+                                                        ? 'opacity-40 border-purple-500 border-dashed bg-purple-950/20'
+                                                        : 'border-white/5 hover:border-white/20'
+                                                }`}
+                                            >
+                                                {/* Drag handle & order buttons */}
+                                                <div className="flex items-center gap-0.5 text-gray-400">
+                                                    <div
+                                                        className="cursor-grab active:cursor-grabbing p-1 text-gray-500 hover:text-white"
+                                                        title="اسحب لإعادة الترتيب"
+                                                    >
+                                                        <GripVertical size={16} />
+                                                    </div>
+                                                    <div className="flex flex-col">
+                                                        <button
+                                                            type="button"
+                                                            disabled={idx === 0}
+                                                            onClick={() => handleSlotMove(idx, idx - 1)}
+                                                            className="text-gray-400 hover:text-white disabled:opacity-20 disabled:hover:text-gray-400 p-0.5"
+                                                            title="تحريك لأعلى"
+                                                        >
+                                                            <ChevronUp size={12} />
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            disabled={idx === editingProfile.slots.length - 1}
+                                                            onClick={() => handleSlotMove(idx, idx + 1)}
+                                                            className="text-gray-400 hover:text-white disabled:opacity-20 disabled:hover:text-gray-400 p-0.5"
+                                                            title="تحريك لأسفل"
+                                                        >
+                                                            <ChevronDown size={12} />
+                                                        </button>
+                                                    </div>
                                                 </div>
-                                                <div className="col-span-3">
-                                                    <input type="time" className="w-full bg-transparent text-gray-300 text-sm px-1 focus:text-white"
-                                                        value={slot.start} onChange={e => handleSlotChange(idx, 'start', e.target.value)} />
+
+                                                {/* Label input */}
+                                                <div className="flex-1 min-w-[100px]">
+                                                    <input
+                                                        className="w-full bg-black/30 border border-white/10 rounded-lg text-white text-sm px-2.5 py-1.5 focus:border-purple-500 outline-none transition-colors"
+                                                        value={slot.label}
+                                                        onChange={e => handleSlotChange(idx, 'label', e.target.value)}
+                                                        placeholder="اسم الحصة / الفترة"
+                                                    />
                                                 </div>
-                                                <div className="col-span-3">
-                                                    <input type="time" className="w-full bg-transparent text-gray-300 text-sm px-1 focus:text-white"
-                                                        value={slot.end} onChange={e => handleSlotChange(idx, 'end', e.target.value)} />
+
+                                                {/* Start time */}
+                                                <div className="w-24 sm:w-28">
+                                                    <input
+                                                        type="time"
+                                                        className="w-full bg-black/30 border border-white/10 rounded-lg text-gray-200 text-xs sm:text-sm px-2 py-1.5 focus:border-purple-500 outline-none"
+                                                        value={slot.start}
+                                                        onChange={e => handleSlotChange(idx, 'start', e.target.value)}
+                                                    />
                                                 </div>
-                                                <div className="col-span-2 flex justify-end">
-                                                    <button onClick={() => handleRemoveSlot(idx)} className="text-red-400 hover:text-red-300 p-1"><Trash2 size={16} /></button>
+
+                                                {/* End time */}
+                                                <div className="w-24 sm:w-28">
+                                                    <input
+                                                        type="time"
+                                                        className="w-full bg-black/30 border border-white/10 rounded-lg text-gray-200 text-xs sm:text-sm px-2 py-1.5 focus:border-purple-500 outline-none"
+                                                        value={slot.end}
+                                                        onChange={e => handleSlotChange(idx, 'end', e.target.value)}
+                                                    />
                                                 </div>
+
+                                                {/* Remove button */}
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleRemoveSlot(idx)}
+                                                    className="text-red-400 hover:text-red-300 p-1.5 rounded-lg hover:bg-red-500/10 transition-colors"
+                                                    title="حذف الفترة"
+                                                >
+                                                    <Trash2 size={16} />
+                                                </button>
                                             </div>
                                         ))}
                                         {editingProfile.slots.length === 0 && <p className="text-center text-gray-500 py-4">لا يوجد فترات مضافة</p>}
