@@ -6,7 +6,8 @@ import { doc, setDoc, writeBatch, collection, getDocs, getDoc } from 'firebase/f
 import { updatePassword, EmailAuthProvider, reauthenticateWithCredential, createUserWithEmailAndPassword } from 'firebase/auth';
 import {
     Save, Shield, Key, AlertTriangle, RefreshCw, Clock,
-    Settings, Plus, Trash2, List, Calendar, School, Edit3, CheckCircle, Box, X, Bell
+    Settings, Plus, Trash2, List, Calendar, School, Edit3, CheckCircle, Box, X, Bell,
+    Users, Check
 } from 'lucide-react';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import CriticalActionModal from '../components/ui/CriticalActionModal';
@@ -296,6 +297,12 @@ export default function SettingsPage() {
             ...editingType,
             fields: [...(editingType.fields || []), { label: 'حقل جديد', type: 'text' }]
         });
+    };
+
+    const handleFieldChange = (index, key, value) => {
+        const newFields = [...(editingType.fields || [])];
+        newFields[index] = { ...newFields[index], [key]: value };
+        setEditingType({ ...editingType, fields: newFields });
     };
 
     const handleAddParticipantField = () => {
