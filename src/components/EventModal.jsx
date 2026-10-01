@@ -38,6 +38,7 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
         customFields: {},
         studentIds: [],
         linkStudentIds: initialData?.linkStudentIds || [],
+        participantDetails: initialData?.participantDetails || {},
         assetIds: [],
         reminders: initialData?.reminders || []
     });
@@ -149,6 +150,7 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                 endTime: et,
                 studentIds: initialData.participatingStudents || [],
                 linkStudentIds: initialData.linkStudentIds || [],
+                participantDetails: initialData.participantDetails || {},
                 assetIds: initialData.assets || [],
                 customFields: initialData.customData || initialData.customFields || {}
             }));
@@ -318,6 +320,15 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                 venueId: formData.venueId,
                 participatingStudents: formData.studentIds,
                 linkStudentIds: (formData.linkStudentIds || []).filter(id => formData.studentIds.includes(id)),
+                participantDetails: (() => {
+                    const details = {};
+                    (formData.studentIds || []).forEach(sid => {
+                        if (formData.participantDetails?.[sid]) {
+                            details[sid] = formData.participantDetails[sid];
+                        }
+                    });
+                    return details;
+                })(),
                 assets: formData.assetIds,
                 startTime: Timestamp.fromDate(start),
                 endTime: Timestamp.fromDate(end),
@@ -822,6 +833,103 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                                 onChange={(vals) => handleChange('studentIds', vals)}
                                 icon={Users}
                             />
+
+                            {/* Participant-Specific Custom Fields (e.g. فقرته في الإذاعة، دوره) */}
+                            {activeType?.participantFields && activeType.participantFields.length > 0 && formData.studentIds.length > 0 && (
+                                <div className="mt-4 bg-emerald-950/20 border border-emerald-500/30 rounded-2xl p-4 space-y-3 animate-fade-in">
+                                    <div className="flex items-center justify-between border-b border-emerald-500/20 pb-2">
+                                        <div className="flex items-center gap-2">
+                                            <Users size={16} className="text-emerald-400" />
+                                            <span className="text-xs font-bold text-emerald-300">
+                                                بيانات الطلاب الخاصة بـ ({activeType.name})
+                                            </span>
+                                        </div>
+                                        <span className="text-[11px] text-emerald-400/70">
+                                            اختياري - مخصصة لكل طالب مشارك
+                                        </span>
+                                    </div>
+
+                                    <div className="max-h-72 overflow-y-auto custom-scrollbar space-y-3 pr-1">
+                                        {formData.studentIds.map((studentId) => {
+                                            const stuObj = studentsList.find(s => s.id === studentId || s.value === studentId);
+                                            const studentName = stuObj?.name || stuObj?.label || 'طالب مشارك';
+                                            const currentStudentDetails = formData.participantDetails?.[studentId] || {};
+
+                                            return (
+                                                <div key={studentId} className="bg-black/40 border border-white/5 rounded-xl p-3 space-y-2">
+                                                    <div className="flex items-center justify-between text-xs">
+                                                        <span className="font-bold text-white flex items-center gap-1.5">
+                                                            <div className="w-1.5 h-1.5 rounded-full bg-emerald-400"></div>
+                                                            {studentName}
+                                                        </span>
+                                                        {(stuObj?.class || stuObj?.grade) && (
+                                                            <span className="text-[10px] text-gray-400 bg-white/5 px-2 py-0.5 rounded">
+                                                                {stuObj.class || `${stuObj.grade} / ${stuObj.section}`}
+                                                            </span>
+                                                        )}
+                                                    </div>
+
+                                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                                                        {activeType.participantFields.map((field, fIdx) => (
+                                                            <div key={fIdx}>
+                                                                <label className="text-[11px] text-emerald-300/80 block mb-1">
+                                                                    {field.label}
+                                                                </label>
+                                                                {field.type === 'select' ? (
+                                                                    <select
+                                                                        disabled={isReadOnly}
+                                                                        value={currentStudentDetails[field.label] || ''}
+                                                                        onChange={(e) => {
+                                                                            const val = e.target.value;
+                                                                            setFormData(prev => ({
+                                                                                ...prev,
+                                                                                participantDetails: {
+                                                                                    ...prev.participantDetails,
+                                                                                    [studentId]: {
+                                                                                        ...(prev.participantDetails?.[studentId] || {}),
+                                                                                        [field.label]: val
+                                                                                    }
+                                                                                }
+                                                                            }));
+                                                                        }}
+                                                                        className="w-full bg-black/50 border border-emerald-500/30 rounded-lg px-2.5 py-1.5 text-xs text-white outline-none focus:border-emerald-400"
+                                                                    >
+                                                                        <option value="">اختر...</option>
+                                                                        {(field.options || []).map((opt, oIdx) => (
+                                                                            <option key={oIdx} value={opt}>{opt}</option>
+                                                                        ))}
+                                                                    </select>
+                                                                ) : (
+                                                                    <input
+                                                                        type="text"
+                                                                        disabled={isReadOnly}
+                                                                        placeholder={`أدخل ${field.label}...`}
+                                                                        value={currentStudentDetails[field.label] || ''}
+                                                                        onChange={(e) => {
+                                                                            const val = e.target.value;
+                                                                            setFormData(prev => ({
+                                                                                ...prev,
+                                                                                participantDetails: {
+                                                                                    ...prev.participantDetails,
+                                                                                    [studentId]: {
+                                                                                        ...(prev.participantDetails?.[studentId] || {}),
+                                                                                        [field.label]: val
+                                                                                    }
+                                                                                }
+                                                                            }));
+                                                                        }}
+                                                                        className="w-full bg-black/50 border border-emerald-500/30 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-gray-500 outline-none focus:border-emerald-400"
+                                                                    />
+                                                                )}
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
                             <MultiSelect
                                 label="الموارد والعهد (Mutaah Only)"
                                 placeholder="اختر الموارد المتاحة..."

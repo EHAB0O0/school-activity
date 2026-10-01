@@ -271,12 +271,34 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
                 const newSpecs = ev.type && !prev.specializations.includes(ev.type)
                     ? [...prev.specializations.filter(s => s !== 'عام / جوكر'), ev.type]
                     : prev.specializations;
+
+                // Check if the event's type has participantFields in eventTypes
+                const evType = (eventTypes || []).find(t => String(t.id) === String(ev.typeId) || t.name === ev.typeName || t.name === ev.type);
+                let newCustomFields = prev.customFields;
+
+                // If event type has participant fields and currently no custom fields (or user wants them)
+                if (evType?.participantFields && evType.participantFields.length > 0) {
+                    const imported = evType.participantFields.map((pf, idx) => ({
+                        id: `pf_${Date.now()}_${idx}`,
+                        label: pf.label,
+                        required: false,
+                        options: pf.options || [],
+                        type: pf.type || 'text',
+                        source: 'event'
+                    }));
+                    // If current fields are empty or default, populate with imported
+                    if (!prev.customFields || prev.customFields.length === 0) {
+                        newCustomFields = imported;
+                    }
+                }
+
                 return {
                     ...prev,
                     eventId: ev.id,
                     eventTitle: ev.title,
                     title: prev.title ? prev.title : ev.title,
-                    specializations: newSpecs.length ? newSpecs : ['عام / جوكر']
+                    specializations: newSpecs.length ? newSpecs : ['عام / جوكر'],
+                    customFields: newCustomFields
                 };
             });
         } else {
@@ -290,6 +312,32 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
         setFormData(prev => ({ ...prev, eventId: '', eventTitle: '' }));
         setIsEventDropdownOpen(false);
         setEventSearchTerm('');
+    };
+
+    // Helper to import/sync fields directly from the currently selected event type
+    const handleImportEventParticipantFields = () => {
+        if (!formData.eventId) return;
+        const ev = eventsList.find(e => e.id === formData.eventId);
+        const evType = (eventTypes || []).find(t => String(t.id) === String(ev?.typeId) || t.name === ev?.typeName || t.name === ev?.type);
+        if (!evType?.participantFields || evType.participantFields.length === 0) {
+            toast("لا توجد حقول مشارك معرفة في إعدادات هذا النوع من الأنشطة");
+            return;
+        }
+
+        const imported = evType.participantFields.map((pf, idx) => ({
+            id: `pf_${Date.now()}_${idx}`,
+            label: pf.label,
+            required: false,
+            options: pf.options || [],
+            type: pf.type || 'text',
+            source: 'event'
+        }));
+
+        setFormData(prev => ({
+            ...prev,
+            customFields: imported
+        }));
+        toast.success(`تم استيراد ${imported.length} حقول من نوع النشاط بنجاح`);
     };
 
     // Custom Fields Management
@@ -373,12 +421,42 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
             }
         }
 
-        // Attach to target event
+        // Attach to target event with participantDetails
         if (targetEventId && studentIdsToSync.length > 0) {
-            await updateDoc(doc(db, 'events', targetEventId), {
+            const updates = {
                 participatingStudents: arrayUnion(...studentIdsToSync),
                 linkStudentIds: arrayUnion(...studentIdsToSync)
-            }).catch(console.warn);
+            };
+
+            // Map customValues to participantDetails by field label
+            const customFieldsList = linkPayload.customFields || [];
+            approvedSubs.forEach(sub => {
+                const sId = sub.matchedStudentId;
+                if (!sId) return;
+
+                const detailsForStudent = {};
+                // Check customValues (keyed by field id)
+                if (sub.customValues && typeof sub.customValues === 'object') {
+                    Object.entries(sub.customValues).forEach(([fId, val]) => {
+                        const matchedField = customFieldsList.find(f => f.id === fId);
+                        const label = matchedField?.label || fId;
+                        if (val !== undefined && val !== null && String(val).trim()) {
+                            detailsForStudent[label] = val;
+                        }
+                    });
+                }
+                // Fallback if legacy customFieldValue exists
+                if (Object.keys(detailsForStudent).length === 0 && sub.customFieldValue) {
+                    const fallbackLabel = customFieldsList[0]?.label || 'ملاحظات / الدور';
+                    detailsForStudent[fallbackLabel] = sub.customFieldValue;
+                }
+
+                if (Object.keys(detailsForStudent).length > 0) {
+                    updates[`participantDetails.${sId}`] = detailsForStudent;
+                }
+            });
+
+            await updateDoc(doc(db, 'events', targetEventId), updates).catch(console.warn);
         }
 
         // Remove from old event if requested
@@ -1135,11 +1213,27 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
 
                     {/* Section 3: Multiple Custom Fields & Instructions */}
                     <div className="space-y-4">
-                        <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                            <h3 className="text-sm font-bold text-indigo-300 flex items-center gap-2">
-                                <Award size={16} /> الحقول المخصصة الإضافية
-                            </h3>
-                            <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2">
+                            <div>
+                                <h3 className="text-sm font-bold text-indigo-300 flex items-center gap-2">
+                                    <Award size={16} /> الحقول المخصصة الإضافية
+                                </h3>
+                                <p className="text-[11px] text-slate-400">
+                                    تظهر للطالب أو المدخل في استمارة التسجيل لتحديد دوره أو فقرته أو تفاصيل مشاركته.
+                                </p>
+                            </div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                                {formData.eventId && (
+                                    <button
+                                        type="button"
+                                        onClick={handleImportEventParticipantFields}
+                                        className="px-2.5 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 text-emerald-300 text-xs font-semibold flex items-center gap-1 transition-colors"
+                                        title="استيراد الحقول المحددة في نوع النشاط المربوط"
+                                    >
+                                        <Calendar size={13} />
+                                        <span>استيراد حقول الفعالية المربوطة</span>
+                                    </button>
+                                )}
                                 {formData.customFields.length > 0 && (
                                     <button
                                         type="button"
@@ -1147,7 +1241,7 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
                                         className="text-[11px] text-rose-400 hover:text-rose-300 flex items-center gap-1 transition-colors"
                                     >
                                         <Trash2 size={12} />
-                                        <span>حذف جميع الحقول</span>
+                                        <span>حذف الكل</span>
                                     </button>
                                 )}
                                 <button

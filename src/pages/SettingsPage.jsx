@@ -294,21 +294,37 @@ export default function SettingsPage() {
     const handleAddField = () => {
         setEditingType({
             ...editingType,
-            fields: [...editingType.fields, { label: 'New Field', type: 'text' }]
+            fields: [...(editingType.fields || []), { label: 'حقل جديد', type: 'text' }]
         });
     };
 
-    const handleFieldChange = (index, key, value) => {
-        const newFields = [...editingType.fields];
+    const handleAddParticipantField = () => {
+        setEditingType({
+            ...editingType,
+            participantFields: [...(editingType.participantFields || []), { label: 'فقرته في الإذاعة', type: 'text' }]
+        });
+    };
+
+    const handleParticipantFieldChange = (index, key, value) => {
+        const newFields = [...(editingType.participantFields || [])];
         newFields[index][key] = value;
-        setEditingType({ ...editingType, fields: newFields });
+        setEditingType({ ...editingType, participantFields: newFields });
     };
 
     const handleSaveSchema = async () => {
         // Sanitize fields: Convert options string to array if needed
         const sanitizedType = {
             ...editingType,
-            fields: editingType.fields.map(f => {
+            fields: (editingType.fields || []).map(f => {
+                if (f.type === 'select' && typeof f.options === 'string') {
+                    return {
+                        ...f,
+                        options: f.options.split('\n').map(s => s.trim()).filter(Boolean)
+                    };
+                }
+                return f;
+            }),
+            participantFields: (editingType.participantFields || []).map(f => {
                 if (f.type === 'select' && typeof f.options === 'string') {
                     return {
                         ...f,
@@ -1081,6 +1097,81 @@ export default function SettingsPage() {
                                             </div>
                                         ))}
                                         {editingType.fields.length === 0 && <p className="text-center text-gray-500 py-4">لا يوجد حقول مخصصة</p>}
+                                    </div>
+                                </div>
+
+                                {/* PARTICIPANT FIELDS (Per-Student Custom Fields) */}
+                                <div className="border-t border-white/10 pt-4">
+                                    <div className="flex justify-between items-center mb-2">
+                                        <div>
+                                            <h4 className="text-emerald-400 font-bold flex items-center gap-1.5">
+                                                <Users size={16} /> حقول بيانات الطالب المشارك (Participant Fields)
+                                            </h4>
+                                            <p className="text-gray-400 text-xs mt-0.5">
+                                                مربعات نصية تظهر لكل طالب على حدة في هذا النشاط وفي روابط التسجيل المرتبطة به (مثل: فقرته في الإذاعة، دوره، مساهمته).
+                                            </p>
+                                        </div>
+                                        <button onClick={handleAddParticipantField} className="bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center transition-colors">
+                                            <Plus size={14} className="ml-1" /> إضافة حقل للطالب
+                                        </button>
+                                    </div>
+
+                                    <div className="space-y-3 mt-3">
+                                        {(editingType.participantFields || []).map((field, idx) => (
+                                            <div key={idx} className="bg-emerald-950/20 p-3 rounded-xl border border-emerald-500/20 mb-2">
+                                                <div className="flex space-x-3 space-x-reverse items-end">
+                                                    <div className="flex-1">
+                                                        <label className="text-xs text-emerald-300 block mb-1">اسم الحقل عند الطالب (مثال: فقرته في الإذاعة)</label>
+                                                        <input
+                                                            className="w-full bg-black/40 border border-emerald-500/30 rounded-lg px-2 py-2 text-white text-sm focus:border-emerald-400 outline-none"
+                                                            placeholder="مثال: فقرته في الإذاعة"
+                                                            value={field.label}
+                                                            onChange={e => handleParticipantFieldChange(idx, 'label', e.target.value)}
+                                                        />
+                                                    </div>
+                                                    <div className="w-32">
+                                                        <label className="text-xs text-emerald-300 block mb-1">نوع البيانات</label>
+                                                        <select
+                                                            className="w-full bg-black/40 border border-emerald-500/30 rounded-lg px-2 py-2 text-white text-sm focus:border-emerald-400 outline-none"
+                                                            value={field.type}
+                                                            onChange={e => handleParticipantFieldChange(idx, 'type', e.target.value)}
+                                                        >
+                                                            <option value="text">نص</option>
+                                                            <option value="select">قائمة خيارات</option>
+                                                        </select>
+                                                    </div>
+                                                    <div>
+                                                        <button
+                                                            onClick={() => {
+                                                                const newF = [...(editingType.participantFields || [])];
+                                                                newF.splice(idx, 1);
+                                                                setEditingType({ ...editingType, participantFields: newF });
+                                                            }}
+                                                            className="text-red-400 hover:text-red-300 p-2"
+                                                            title="حذف الحقل"
+                                                        >
+                                                            <Trash2 size={18} />
+                                                        </button>
+                                                    </div>
+                                                </div>
+
+                                                {field.type === 'select' && (
+                                                    <div className="mt-3 animate-fade-in">
+                                                        <label className="text-xs text-emerald-300 block mb-1 font-bold">خيارات القائمة (كل خيار في سطر منفصل)</label>
+                                                        <textarea
+                                                            dir="auto"
+                                                            className="w-full bg-black/40 border border-emerald-500/30 rounded-lg px-3 py-2 text-white text-sm min-h-[80px] focus:border-emerald-400 outline-none resize-y placeholder-gray-600"
+                                                            placeholder={"مثال:\nمقدم\nقارئ القرآن\nكلمة الصباح\nهل تعلم"}
+                                                            value={Array.isArray(field.options) ? field.options.join('\n') : (field.options || '')}
+                                                            onChange={e => handleParticipantFieldChange(idx, 'options', e.target.value)}
+                                                        />
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))}
+                                        {(!editingType.participantFields || editingType.participantFields.length === 0) && (
+                                            <p className="text-center text-gray-500 py-3 text-xs">لا يوجد حقول خاصة بالطلاب المشاركين لهذا النوع (اختياري)</p>
+                                        )}
                                     </div>
                                 </div>
                             </div>

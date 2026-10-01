@@ -202,12 +202,35 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                 });
             }
 
-            // If event is linked, attach student to event's participating list and mark as link student
+            // If event is linked, attach student to event's participating list and mark as link student with details
             if (link.eventId && studentId) {
-                await updateDoc(doc(db, 'events', link.eventId), {
+                const eventUpdates = {
                     participatingStudents: arrayUnion(studentId),
                     linkStudentIds: arrayUnion(studentId)
-                }).catch(console.warn);
+                };
+
+                // Map customValues to participantDetails
+                const customFieldsList = link.customFields || [];
+                const detailsForStudent = {};
+                if (sub.customValues && typeof sub.customValues === 'object') {
+                    Object.entries(sub.customValues).forEach(([fId, val]) => {
+                        const matchedField = customFieldsList.find(f => f.id === fId);
+                        const label = matchedField?.label || fId;
+                        if (val !== undefined && val !== null && String(val).trim()) {
+                            detailsForStudent[label] = val;
+                        }
+                    });
+                }
+                if (Object.keys(detailsForStudent).length === 0 && sub.customFieldValue) {
+                    const fallbackLabel = customFieldsList[0]?.label || 'ملاحظات / الدور';
+                    detailsForStudent[fallbackLabel] = sub.customFieldValue;
+                }
+
+                if (Object.keys(detailsForStudent).length > 0) {
+                    eventUpdates[`participantDetails.${studentId}`] = detailsForStudent;
+                }
+
+                await updateDoc(doc(db, 'events', link.eventId), eventUpdates).catch(console.warn);
             }
 
             // Update submission doc
@@ -329,10 +352,38 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
             // 3. Update event participants once if eventId exists
             if (link.eventId && studentIdsToAddToEvent.size > 0) {
                 const idsToAdd = Array.from(studentIdsToAddToEvent);
-                batch.update(doc(db, 'events', link.eventId), {
+                const eventUpdates = {
                     participatingStudents: arrayUnion(...idsToAdd),
                     linkStudentIds: arrayUnion(...idsToAdd)
+                };
+
+                const customFieldsList = link.customFields || [];
+                subsToApprove.forEach(({ subId, studentId }) => {
+                    if (!studentId) return;
+                    const sub = submissions.find(s => s.id === subId);
+                    if (!sub) return;
+
+                    const detailsForStudent = {};
+                    if (sub.customValues && typeof sub.customValues === 'object') {
+                        Object.entries(sub.customValues).forEach(([fId, val]) => {
+                            const matchedField = customFieldsList.find(f => f.id === fId);
+                            const label = matchedField?.label || fId;
+                            if (val !== undefined && val !== null && String(val).trim()) {
+                                detailsForStudent[label] = val;
+                            }
+                        });
+                    }
+                    if (Object.keys(detailsForStudent).length === 0 && sub.customFieldValue) {
+                        const fallbackLabel = customFieldsList[0]?.label || 'ملاحظات / الدور';
+                        detailsForStudent[fallbackLabel] = sub.customFieldValue;
+                    }
+
+                    if (Object.keys(detailsForStudent).length > 0) {
+                        eventUpdates[`participantDetails.${studentId}`] = detailsForStudent;
+                    }
                 });
+
+                batch.update(doc(db, 'events', link.eventId), eventUpdates);
             }
 
             await batch.commit();

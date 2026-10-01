@@ -309,8 +309,10 @@ export default function ReportsPage() {
                         studentsCount: participatingStudents.length,
                         studentNames: participatingStudents, // Now Array of Objects {name, grade, section}
                         type: pd.typeName || 'عام',
+                        typeId: pd.typeId,
                         assets: pd.assets?.map(id => assetMap[id] || id) || [], // Map ID to Name
                         customData: pd.customData || {},
+                        participantDetails: pd.participantDetails || {},
                         points: pd.points || 10 // Sortable
                     };
                 });
@@ -516,16 +518,23 @@ export default function ReportsPage() {
                         const studentsByClass = item.studentNames.reduce((acc, s) => {
                             const className = (s.grade && s.section) ? `${s.grade} - ${s.section}` : (s.grade || 'أخرى');
                             if (!acc[className]) acc[className] = [];
-                            acc[className].push(s.name);
+                            acc[className].push(s);
                             return acc;
                         }, {});
 
                         let groupsHtml = '';
-                        Object.entries(studentsByClass).forEach(([cls, names]) => {
-                            const tags = names.map(n => `<span class="student-tag">${n}</span>`).join('');
+                        Object.entries(studentsByClass).forEach(([cls, studentsInClass]) => {
+                            const tags = studentsInClass.map(s => {
+                                const pDetails = item.participantDetails?.[s.id] || {};
+                                const detailEntries = Object.entries(pDetails);
+                                const detailsBadge = detailEntries.length > 0
+                                    ? `<span style="margin-right: 5px; color: #059669; font-weight: bold; font-size: 10px;">(${detailEntries.map(([k, v]) => `${k}: ${v}`).join(' | ')})</span>`
+                                    : '';
+                                return `<span class="student-tag">${s.name}${detailsBadge}</span>`;
+                            }).join('');
                             groupsHtml += `
                                 <div class="class-group">
-                                    <div class="class-header">${cls} (${names.length})</div>
+                                    <div class="class-header">${cls} (${studentsInClass.length})</div>
                                     <div class="tags-container">${tags}</div>
                                 </div>
                              `;
@@ -995,16 +1004,65 @@ export default function ReportsPage() {
             const doc = iframe.contentWindow.document;
             doc.open();
 
-            const studentsListHtml = event.studentNames.length > 0
-                ? event.studentNames.map((s, i) =>
-                    `<div class="item">
-                        <span class="idx">${i + 1}</span>
-                        <div style="display: flex; flex-direction: column;">
-                            <span>${s.name}</span>
-                            ${(s.grade || s.section) ? `<span style="font-size: 10px; color: ${theme === 'light' ? '#6b7280' : '#9ca3af'}">${s.grade} - ${s.section}</span>` : ''}
-                        </div>
-                     </div>`).join('')
-                : '<div class="empty">لا يوجد طلاب</div>';
+            // Extract all participant field labels present in this event
+            const customFieldLabels = new Set();
+            if (event.participantDetails && typeof event.participantDetails === 'object') {
+                Object.values(event.participantDetails).forEach(pMap => {
+                    if (pMap && typeof pMap === 'object') {
+                        Object.keys(pMap).forEach(k => customFieldLabels.add(k));
+                    }
+                });
+            }
+            const activeCustomCols = Array.from(customFieldLabels);
+
+            let studentsListHtml = '';
+            if (event.studentNames.length > 0) {
+                if (activeCustomCols.length > 0) {
+                    // Render as a clean tabular view with columns for custom fields
+                    const theadThs = activeCustomCols.map(col => `<th style="padding: 8px 12px; text-align: right; font-size: 11px; border-bottom: 2px solid ${t.itemBorder}; color: ${t.textSec};">${col}</th>`).join('');
+                    const tbodyTrs = event.studentNames.map((s, i) => {
+                        const pDetails = event.participantDetails?.[s.id] || {};
+                        const colTds = activeCustomCols.map(col => {
+                            const val = pDetails[col] || '-';
+                            return `<td style="padding: 8px 12px; font-size: 11px; border-bottom: 1px solid ${t.itemBorder}; color: ${theme === 'light' ? '#1f2937' : '#e5e7eb'}; font-weight: 500;">${val}</td>`;
+                        }).join('');
+
+                        return `<tr>
+                            <td style="padding: 8px 12px; font-size: 11px; border-bottom: 1px solid ${t.itemBorder}; color: ${t.textSec}; width: 30px; text-align: center;">${i + 1}</td>
+                            <td style="padding: 8px 12px; font-size: 12px; border-bottom: 1px solid ${t.itemBorder}; font-weight: bold; color: ${t.text};">${s.name}</td>
+                            <td style="padding: 8px 12px; font-size: 11px; border-bottom: 1px solid ${t.itemBorder}; color: ${t.textSec};">${(s.grade || s.section) ? `${s.grade} - ${s.section}` : '-'}</td>
+                            ${colTds}
+                        </tr>`;
+                    }).join('');
+
+                    studentsListHtml = `
+                        <table style="width: 100%; border-collapse: collapse; text-align: right;">
+                            <thead>
+                                <tr style="background: ${t.cardBg};">
+                                    <th style="padding: 8px 12px; text-align: center; width: 30px; font-size: 11px; border-bottom: 2px solid ${t.itemBorder}; color: ${t.textSec};">#</th>
+                                    <th style="padding: 8px 12px; text-align: right; font-size: 11px; border-bottom: 2px solid ${t.itemBorder}; color: ${t.textSec};">اسم الطالب</th>
+                                    <th style="padding: 8px 12px; text-align: right; font-size: 11px; border-bottom: 2px solid ${t.itemBorder}; color: ${t.textSec};">الصف والشعبة</th>
+                                    ${theadThs}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${tbodyTrs}
+                            </tbody>
+                        </table>
+                    `;
+                } else {
+                    studentsListHtml = event.studentNames.map((s, i) =>
+                        `<div class="item">
+                            <span class="idx">${i + 1}</span>
+                            <div style="display: flex; flex-direction: column;">
+                                <span style="font-weight: bold;">${s.name}</span>
+                                ${(s.grade || s.section) ? `<span style="font-size: 10px; color: ${theme === 'light' ? '#6b7280' : '#9ca3af'}">${s.grade} - ${s.section}</span>` : ''}
+                            </div>
+                         </div>`).join('');
+                }
+            } else {
+                studentsListHtml = '<div class="empty">لا يوجد طلاب</div>';
+            }
 
             const assetsListHtml = (event.assets && event.assets.length > 0)
                 ? event.assets.map(a => {
@@ -1786,16 +1844,31 @@ export default function ReportsPage() {
                                         {selectedEvent.studentNames.length > 0 ? (
                                             <div className="max-h-[300px] overflow-y-auto custom-scrollbar divide-y divide-white/5">
                                                 {selectedEvent.studentNames.map((s, idx) => (
-                                                    <div key={idx} className="p-3 text-sm text-gray-300 flex items-center justify-between hover:bg-white/5">
+                                                    <div key={idx} className="p-3 text-sm text-gray-300 flex flex-col sm:flex-row sm:items-center justify-between hover:bg-white/5 gap-2">
                                                         <div className="flex items-center gap-3">
                                                             <span className="w-6 text-center text-gray-400 text-xs">{idx + 1}</span>
-                                                            <span className="text-white">{s.name}</span>
+                                                            <span className="text-white font-medium">{s.name}</span>
+                                                            {(s.grade || s.section) && (
+                                                                <span className="text-[10px] bg-white/10 px-2 py-0.5 rounded text-gray-400">
+                                                                    {s.grade} - {s.section}
+                                                                </span>
+                                                            )}
                                                         </div>
-                                                        {(s.grade || s.section) && (
-                                                            <span className="text-[10px] bg-white/10 px-2 py-0.5 rounded text-gray-400">
-                                                                {s.grade} - {s.section}
-                                                            </span>
-                                                        )}
+                                                        {(() => {
+                                                            const pDetails = selectedEvent.participantDetails?.[s.id] || {};
+                                                            const detailEntries = Object.entries(pDetails);
+                                                            if (detailEntries.length === 0) return null;
+                                                            return (
+                                                                <div className="flex flex-wrap gap-1.5 mr-9 sm:mr-0">
+                                                                    {detailEntries.map(([k, v], dIdx) => (
+                                                                        <span key={dIdx} className="text-[11px] bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 px-2 py-0.5 rounded flex items-center gap-1">
+                                                                            <span className="opacity-70 font-semibold">{k}:</span>
+                                                                            <span className="font-bold">{v}</span>
+                                                                        </span>
+                                                                    ))}
+                                                                </div>
+                                                            );
+                                                        })()}
                                                     </div>
                                                 ))}
                                             </div>
