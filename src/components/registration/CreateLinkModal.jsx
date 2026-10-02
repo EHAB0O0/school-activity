@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import {
     X, Save, Shield, Calendar, Award, Users, AlertCircle,
-    Link2, CheckCircle2, Plus, Trash2, Search, Check, ChevronDown, Loader2
+    Link2, CheckCircle2, Plus, Trash2, Search, Check, ChevronDown, Loader2,
+    Clock, CheckCircle, Sparkles
 } from 'lucide-react';
 import { db } from '../../firebase';
 import { collection, addDoc, updateDoc, doc, serverTimestamp, query, where, getDocs, arrayUnion, arrayRemove } from 'firebase/firestore';
@@ -64,6 +65,9 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
         ],
         instructions: '',
         pointsPerStudent: 5,
+        pointsTiming: 'immediate', // 'immediate' | 'on_event_done'
+        pointsPolicy: 'event_points', // 'event_points' | 'custom_link' | 'combine_both'
+        linkBonusPoints: 2,
         allowWaitlist: true,
         status: 'active'
     });
@@ -155,6 +159,9 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
                 customFields: initialCustomFields,
                 instructions: linkToEdit.instructions || '',
                 pointsPerStudent: linkToEdit.pointsPerStudent ?? 5,
+                pointsTiming: linkToEdit.pointsTiming || 'immediate',
+                pointsPolicy: linkToEdit.pointsPolicy || (linkToEdit.eventId ? 'event_points' : 'custom_link'),
+                linkBonusPoints: linkToEdit.linkBonusPoints ?? 2,
                 allowWaitlist: linkToEdit.allowWaitlist ?? true,
                 status: linkToEdit.status || 'active'
             });
@@ -190,6 +197,9 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
                 ],
                 instructions: 'يرجى كتابة الاسم الثلاثي واختيار الصف والشعبة بدقة. التنسيق يتم عبر رائد النشاط.',
                 pointsPerStudent: 5,
+                pointsTiming: 'immediate',
+                pointsPolicy: 'event_points',
+                linkBonusPoints: 2,
                 allowWaitlist: true,
                 status: 'active'
             });
@@ -298,24 +308,27 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
                     }
                 }
 
+                const evPoints = Number(ev.points) || 10;
                 return {
                     ...prev,
                     eventId: ev.id,
                     eventTitle: ev.title,
                     title: prev.title ? prev.title : ev.title,
                     specializations: newSpecs.length ? newSpecs : ['عام / جوكر'],
-                    customFields: newCustomFields
+                    customFields: newCustomFields,
+                    pointsPolicy: prev.pointsPolicy || 'event_points',
+                    pointsPerStudent: prev.pointsPolicy === 'custom_link' ? prev.pointsPerStudent : evPoints
                 };
             });
         } else {
-            setFormData(prev => ({ ...prev, eventId: '', eventTitle: '' }));
+            setFormData(prev => ({ ...prev, eventId: '', eventTitle: '', pointsTiming: 'immediate', pointsPolicy: 'custom_link' }));
         }
         setIsEventDropdownOpen(false);
         setEventSearchTerm('');
     };
 
     const handleClearEvent = () => {
-        setFormData(prev => ({ ...prev, eventId: '', eventTitle: '' }));
+        setFormData(prev => ({ ...prev, eventId: '', eventTitle: '', pointsTiming: 'immediate', pointsPolicy: 'custom_link' }));
         setIsEventDropdownOpen(false);
         setEventSearchTerm('');
     };
@@ -538,6 +551,9 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
                 customFieldLabel: cleanedCustomFields[0]?.label || '', // backward compatibility
                 customFieldRequired: !!cleanedCustomFields[0]?.required, // backward compatibility
                 pointsPerStudent: Number(formData.pointsPerStudent) || 0,
+                pointsTiming: formData.eventId ? (formData.pointsTiming || 'immediate') : 'immediate',
+                pointsPolicy: formData.eventId ? (formData.pointsPolicy || 'event_points') : 'custom_link',
+                linkBonusPoints: Number(formData.linkBonusPoints) || 0,
                 delegateRewardPoints: Number(formData.delegateRewardPoints) || 0,
                 updatedAt: serverTimestamp()
             };
@@ -1080,18 +1096,183 @@ export default function CreateLinkModal({ isOpen, onClose, linkToEdit = null, on
                                 )}
                             </div>
 
-                            <div>
-                                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                                    نقاط التميز لكل طالب مسجل
-                                </label>
-                                <input
-                                    type="number"
-                                    min="0"
-                                    value={formData.pointsPerStudent}
-                                    onChange={(e) => setFormData({ ...formData, pointsPerStudent: e.target.value })}
-                                    className="w-full px-3.5 py-2.5 bg-slate-800/80 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500 transition-colors"
-                                />
-                            </div>
+                            {formData.eventId ? (
+                                <div className="md:col-span-2 bg-slate-900/90 border border-indigo-500/30 rounded-2xl p-4.5 space-y-4">
+                                    <div className="flex items-center justify-between border-b border-slate-800 pb-2.5 flex-wrap gap-2">
+                                        <div className="flex items-center gap-2 text-indigo-400">
+                                            <Award size={18} />
+                                            <h4 className="text-xs font-bold text-white">إعدادات رصد النقاط والتزامن مع الفعالية المربوطة</h4>
+                                        </div>
+                                        <span className="text-[11px] px-2.5 py-0.5 rounded-full bg-indigo-500/10 text-indigo-300 border border-indigo-500/30 font-semibold">
+                                            نقاط الفعالية المقررة بالجدول: {eventsList.find(e => e.id === formData.eventId)?.points || 10} نقطة
+                                        </span>
+                                    </div>
+
+                                    {/* 1. Points Timing */}
+                                    <div>
+                                        <label className="block text-xs font-semibold text-slate-300 mb-2">
+                                            توقيت منح النقاط للطلاب المسجلين عبر الرابط
+                                        </label>
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                            <button
+                                                type="button"
+                                                onClick={() => setFormData({ ...formData, pointsTiming: 'immediate' })}
+                                                className={`p-3 rounded-xl border text-right transition-all flex flex-col gap-1 ${
+                                                    formData.pointsTiming === 'immediate'
+                                                        ? 'bg-indigo-600/20 border-indigo-500 text-white shadow-sm'
+                                                        : 'bg-slate-800/60 hover:bg-slate-800 border-slate-700 text-slate-300'
+                                                }`}
+                                            >
+                                                <div className="flex items-center justify-between">
+                                                    <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                                                        <CheckCircle size={14} className={formData.pointsTiming === 'immediate' ? 'text-indigo-400' : 'text-slate-500'} />
+                                                        <span>فوري عند اعتماد المسجل بالرابط</span>
+                                                    </span>
+                                                    {formData.pointsTiming === 'immediate' && (
+                                                        <span className="text-[10px] bg-indigo-500/30 text-indigo-200 px-1.5 py-0.5 rounded font-mono">مباشر</span>
+                                                    )}
+                                                </div>
+                                                <span className="text-[11px] text-slate-400 leading-normal pr-5">
+                                                    تُمنح النقاط للطالب فور اعتماده في كشف المسجلين دون انتظار انتهاء الفعالية.
+                                                </span>
+                                            </button>
+
+                                            <button
+                                                type="button"
+                                                onClick={() => setFormData({ ...formData, pointsTiming: 'on_event_done' })}
+                                                className={`p-3 rounded-xl border text-right transition-all flex flex-col gap-1 ${
+                                                    formData.pointsTiming === 'on_event_done'
+                                                        ? 'bg-indigo-600/20 border-indigo-500 text-white shadow-sm'
+                                                        : 'bg-slate-800/60 hover:bg-slate-800 border-slate-700 text-slate-300'
+                                                }`}
+                                            >
+                                                <div className="flex items-center justify-between">
+                                                    <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                                                        <Clock size={14} className={formData.pointsTiming === 'on_event_done' ? 'text-indigo-400' : 'text-slate-500'} />
+                                                        <span>موحد عند إنجاز الفعالية بالجدول</span>
+                                                    </span>
+                                                    {formData.pointsTiming === 'on_event_done' && (
+                                                        <span className="text-[10px] bg-indigo-500/30 text-indigo-200 px-1.5 py-0.5 rounded font-mono">تأجيل للإنجاز</span>
+                                                    )}
+                                                </div>
+                                                <span className="text-[11px] text-slate-400 leading-normal pr-5">
+                                                    تُمنح النقاط لجميع المشاركين (مسجلو الرابط والحضور العادي) معاً في نفس اللحظة عند تحويل النشاط إلى «منجز» في الجدول.
+                                                </span>
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {/* 2. Points Policy */}
+                                    <div>
+                                        <label className="block text-xs font-semibold text-slate-300 mb-2">
+                                            آلية احتساب النقاط
+                                        </label>
+                                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    const evPts = Number(eventsList.find(e => e.id === formData.eventId)?.points) || 10;
+                                                    setFormData({ ...formData, pointsPolicy: 'event_points', pointsPerStudent: evPts });
+                                                }}
+                                                className={`p-3 rounded-xl border text-right transition-all flex flex-col gap-1 ${
+                                                    formData.pointsPolicy === 'event_points'
+                                                        ? 'bg-indigo-600/20 border-indigo-500 text-white shadow-sm'
+                                                        : 'bg-slate-800/60 hover:bg-slate-800 border-slate-700 text-slate-300'
+                                                }`}
+                                            >
+                                                <span className="text-xs font-bold text-white">١. نقاط الفعالية فقط</span>
+                                                <span className="text-[11px] text-slate-400 leading-normal">
+                                                    مطابقة لنقاط الفعالية ({eventsList.find(e => e.id === formData.eventId)?.points || 10} ن).
+                                                </span>
+                                            </button>
+
+                                            <button
+                                                type="button"
+                                                onClick={() => setFormData({ ...formData, pointsPolicy: 'custom_link' })}
+                                                className={`p-3 rounded-xl border text-right transition-all flex flex-col gap-1 ${
+                                                    formData.pointsPolicy === 'custom_link'
+                                                        ? 'bg-indigo-600/20 border-indigo-500 text-white shadow-sm'
+                                                        : 'bg-slate-800/60 hover:bg-slate-800 border-slate-700 text-slate-300'
+                                                }`}
+                                            >
+                                                <span className="text-xs font-bold text-white">٢. نقاط خاصة بالرابط</span>
+                                                <span className="text-[11px] text-slate-400 leading-normal">
+                                                    تحديد نقاط مستقلة خاصة بمسجلي الرابط.
+                                                </span>
+                                            </button>
+
+                                            <button
+                                                type="button"
+                                                onClick={() => setFormData({ ...formData, pointsPolicy: 'combine_both' })}
+                                                className={`p-3 rounded-xl border text-right transition-all flex flex-col gap-1 ${
+                                                    formData.pointsPolicy === 'combine_both'
+                                                        ? 'bg-indigo-600/20 border-indigo-500 text-white shadow-sm'
+                                                        : 'bg-slate-800/60 hover:bg-slate-800 border-slate-700 text-slate-300'
+                                                }`}
+                                            >
+                                                <span className="text-xs font-bold text-white">٣. جمع النقاط معاً</span>
+                                                <span className="text-[11px] text-slate-400 leading-normal">
+                                                    نقاط الرابط كحافز + نقاط الفعالية عند إنجازها.
+                                                </span>
+                                            </button>
+                                        </div>
+
+                                        {/* Input for custom points if custom_link is selected */}
+                                        {formData.pointsPolicy === 'custom_link' && (
+                                            <div className="mt-3 p-3 rounded-xl bg-slate-950/70 border border-slate-800 flex items-center justify-between">
+                                                <div>
+                                                    <label className="block text-xs font-semibold text-slate-300">النقاط المستحقة لمسجلي الرابط:</label>
+                                                    <span className="text-[11px] text-slate-400">ستُمنح هذه النقاط لمسجلي الرابط فقط بدلاً من نقاط الفعالية.</span>
+                                                </div>
+                                                <div className="w-28">
+                                                    <input
+                                                        type="number"
+                                                        min="0"
+                                                        value={formData.pointsPerStudent}
+                                                        onChange={(e) => setFormData({ ...formData, pointsPerStudent: e.target.value })}
+                                                        className="w-full px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-white text-center font-bold text-sm focus:outline-none focus:border-indigo-500"
+                                                    />
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* Inputs for combine_both */}
+                                        {formData.pointsPolicy === 'combine_both' && (
+                                            <div className="mt-3 p-3 rounded-xl bg-slate-950/70 border border-slate-800 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                <div>
+                                                    <label className="block text-xs font-semibold text-indigo-300 mb-1">نقاط حافز التسجيل بالرابط:</label>
+                                                    <input
+                                                        type="number"
+                                                        min="0"
+                                                        value={formData.linkBonusPoints ?? 2}
+                                                        onChange={(e) => setFormData({ ...formData, linkBonusPoints: e.target.value })}
+                                                        className="w-full px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-white font-bold text-sm focus:outline-none focus:border-indigo-500 text-center"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-semibold text-emerald-300 mb-1">نقاط الفعالية المقررة:</label>
+                                                    <div className="px-3 py-1.5 bg-slate-800/80 border border-slate-700 rounded-lg text-white font-bold text-sm text-center">
+                                                        {eventsList.find(e => e.id === formData.eventId)?.points || 10} نقطة
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            ) : (
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                                        نقاط التميز لكل طالب مسجل
+                                    </label>
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        value={formData.pointsPerStudent}
+                                        onChange={(e) => setFormData({ ...formData, pointsPerStudent: e.target.value })}
+                                        className="w-full px-3.5 py-2.5 bg-slate-800/80 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500 transition-colors"
+                                    />
+                                </div>
+                            )}
 
                             <div>
                                 <label className="block text-xs font-semibold text-slate-300 mb-1.5">

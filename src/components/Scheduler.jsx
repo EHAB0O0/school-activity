@@ -147,10 +147,11 @@ export default function Scheduler() {
                 // 1. Update Event
                 transaction.update(eventRef, eventData);
 
-                // 2. Adjust Students (excluding link-registered students)
+                // 2. Adjust Students (excluding link-registered students unless combined policy)
                 const diff = newPoints - oldPoints;
                 const linkStudents = eventData.linkStudentIds || [];
-                const eligibleStudents = (eventData.participatingStudents || []).filter(id => !linkStudents.includes(id));
+                const combineLinkStudents = eventData.combineLinkStudents || {};
+                const eligibleStudents = (eventData.participatingStudents || []).filter(id => !linkStudents.includes(id) || combineLinkStudents[id]);
                 if (eligibleStudents.length > 0) {
                     for (const studentId of eligibleStudents) {
                         const studentRef = doc(db, 'students', studentId);
@@ -178,47 +179,101 @@ export default function Scheduler() {
                 const pointsToAward = Number(eventData.points) || 10;
 
                 // 1. Update Event Status
-                transaction.update(eventRef, { status: 'Done', points: pointsToAward });
+                transaction.update(eventRef, {
+                    status: 'Done',
+                    points: pointsToAward,
+                    deferredPointsAwarded: true
+                });
 
-                // 2. Award Points to Students (excluding link-registered students)
+                // 2. Award Points to Students
                 const linkStudents = eventData.linkStudentIds || [];
-                const eligibleStudents = (eventData.participatingStudents || []).filter(id => !linkStudents.includes(id));
-                if (eligibleStudents.length > 0) {
-                    for (const studentId of eligibleStudents) {
-                        const studentRef = doc(db, 'students', studentId);
-                        const sSnap = await transaction.get(studentRef);
-                        if (!sSnap.exists()) continue;
+                const deferredLinkStudents = eventData.deferredLinkStudents || {};
+                const combineLinkStudents = eventData.combineLinkStudents || {};
 
-                        const sData = sSnap.data();
-                        const prev = Math.max(0, Number(sData.totalPoints) || 0);
-                        const next = prev + pointsToAward;
+                // Map of studentId -> { points, isLink }
+                const awardMap = new Map();
 
-                        transaction.update(studentRef, { totalPoints: next });
-
-                        loggedChanges.push({
-                            studentId,
-                            studentName: sData.name || 'طالب',
-                            grade: sData.grade || '',
-                            section: sData.section || '',
-                            class: sData.class || '',
-                            change: pointsToAward,
-                            previousTotalPoints: prev,
-                            newTotalPoints: next,
-                            reason: `مشاركة في نشاط: ${eventData.title || ''}`,
-                            actionType: 'activity_award',
-                            eventId: eventData.id,
-                            eventTitle: eventData.title || '',
-                            eventType: eventData.typeName || ''
-                        });
+                // Non-link manual participants
+                (eventData.participatingStudents || []).forEach(id => {
+                    if (!linkStudents.includes(id)) {
+                        awardMap.set(id, { points: pointsToAward, isLink: false });
                     }
+                });
+
+                // Deferred link participants get their scheduled points
+                Object.entries(deferredLinkStudents).forEach(([id, pts]) => {
+                    awardMap.set(id, { points: Number(pts) || pointsToAward, isLink: true });
+                });
+
+                // Combined link participants get the event completion points
+                Object.keys(combineLinkStudents).forEach(id => {
+                    awardMap.set(id, { points: pointsToAward, isLink: true });
+                });
+
+                for (const [studentId, { points: pts, isLink }] of awardMap.entries()) {
+                    if (pts <= 0) continue;
+                    const studentRef = doc(db, 'students', studentId);
+                    const sSnap = await transaction.get(studentRef);
+                    if (!sSnap.exists()) continue;
+
+                    const sData = sSnap.data();
+                    const prev = Math.max(0, Number(sData.totalPoints) || 0);
+                    const next = prev + pts;
+
+                    transaction.update(studentRef, { totalPoints: next });
+
+                    loggedChanges.push({
+                        studentId,
+                        studentName: sData.name || 'طالب',
+                        grade: sData.grade || '',
+                        section: sData.section || '',
+                        class: sData.class || '',
+                        change: pts,
+                        previousTotalPoints: prev,
+                        newTotalPoints: next,
+                        reason: isLink
+                            ? `إنجاز نشاط مسجل عبر رابط: ${eventData.title || ''}`
+                            : `مشاركة في نشاط: ${eventData.title || ''}`,
+                        actionType: 'activity_award',
+                        eventId: eventData.id,
+                        eventTitle: eventData.title || '',
+                        eventType: eventData.typeName || ''
+                    });
                 }
             });
+
+            // Update any link submissions marked as deferred for this event
+            try {
+                const subSnap = await getDocs(query(
+                    collection(db, 'link_submissions'),
+                    where('eventId', '==', eventData.id)
+                ));
+                if (!subSnap.empty) {
+                    const subBatch = writeBatch(db);
+                    let hasDeferred = false;
+                    subSnap.docs.forEach(docSnap => {
+                        const d = docSnap.data();
+                        if (d.deferredPoints) {
+                            hasDeferred = true;
+                            subBatch.update(docSnap.ref, {
+                                deferredPoints: false,
+                                pointsAwarded: d.pendingPoints || eventData.points || 0,
+                                pendingPoints: 0,
+                                awardedAtEventDone: true
+                            });
+                        }
+                    });
+                    if (hasDeferred) await subBatch.commit();
+                }
+            } catch (subErr) {
+                console.warn("Could not batch update link_submissions on event done:", subErr);
+            }
 
             if (loggedChanges.length > 0) {
                 Promise.allSettled(loggedChanges.map(c => logPointsChange(c))).catch(console.warn);
             }
 
-            toast.success("تم تنفيذ النشاط ورصد النقاط للطلاب!");
+            toast.success("تم تنفيذ النشاط ورصد النقاط لجميع المشاركين!");
             setIsModalOpen(false);
             fetchEvents();
         } catch (e) {
@@ -282,20 +337,43 @@ export default function Scheduler() {
             await runTransaction(db, async (transaction) => {
                 const eventRef = doc(db, 'events', eventData.id);
 
-                // 1. Reverse Points (if requested, excluding link-registered students)
-                const linkStudents = eventData.linkStudentIds || [];
-                const eligibleStudents = (eventData.participatingStudents || []).filter(id => !linkStudents.includes(id));
-                if (reversePoints && eligibleStudents.length > 0) {
+                // 1. Reverse Points (if requested)
+                if (reversePoints) {
                     const pointsToDeduct = Number(eventData.points) || 10;
+                    const linkStudents = eventData.linkStudentIds || [];
+                    const deferredLinkStudents = eventData.deferredLinkStudents || {};
+                    const combineLinkStudents = eventData.combineLinkStudents || {};
+                    const wasDone = eventData.status === 'Done' || eventData.deferredPointsAwarded;
 
-                    for (const studentId of eligibleStudents) {
+                    // Deduct map: studentId -> pointsToDeduct
+                    const deductMap = new Map();
+
+                    // Non-link participants
+                    (eventData.participatingStudents || []).forEach(id => {
+                        if (!linkStudents.includes(id)) {
+                            deductMap.set(id, pointsToDeduct);
+                        }
+                    });
+
+                    // If event was marked Done, deferred points were awarded, so they should be reversed
+                    if (wasDone) {
+                        Object.entries(deferredLinkStudents).forEach(([id, pts]) => {
+                            deductMap.set(id, Number(pts) || pointsToDeduct);
+                        });
+                        Object.keys(combineLinkStudents).forEach(id => {
+                            deductMap.set(id, pointsToDeduct);
+                        });
+                    }
+
+                    for (const [studentId, pts] of deductMap.entries()) {
+                        if (pts <= 0) continue;
                         const studentRef = doc(db, 'students', studentId);
                         const sSnap = await transaction.get(studentRef);
                         if (!sSnap.exists()) continue;
 
                         const sData = sSnap.data();
                         const prev = Math.max(0, Number(sData.totalPoints) || 0);
-                        const next = Math.max(0, prev - pointsToDeduct); // Guaranteed non-negative
+                        const next = Math.max(0, prev - pts); // Guaranteed non-negative
                         const actualDiff = -(prev - next);
 
                         transaction.update(studentRef, { totalPoints: next });

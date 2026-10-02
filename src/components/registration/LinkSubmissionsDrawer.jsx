@@ -4,7 +4,8 @@ import {
     AlertTriangle, UserCheck, Trash2, Edit2, ShieldAlert,
     Clock, CheckSquare, Square, RefreshCw, Calendar, Link2,
     UserPlus, ArrowRightLeft, Sparkles, Filter, ChevronDown, Check,
-    Phone, GraduationCap, AlertCircle, Award, UserX, ExternalLink, HelpCircle
+    Phone, GraduationCap, AlertCircle, Award, UserX, ExternalLink, HelpCircle,
+    Zap, Users
 } from 'lucide-react';
 import { db } from '../../firebase';
 import {
@@ -28,7 +29,11 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
     const [editingSubmission, setEditingSubmission] = useState(null);
     const [showCreateStudentModal, setShowCreateStudentModal] = useState(null); // fallback single choice modal
     const [showBulkCreateModal, setShowBulkCreateModal] = useState(null); // { unregCount, totalCount, unregisteredSubs, registeredSubs }
+    const [bulkPoints, setBulkPoints] = useState(0);
+    const [bulkTiming, setBulkTiming] = useState('immediate');
     const [studentActionSub, setStudentActionSub] = useState(null); // Active submission in dealing modal
+    const [actionPointsOverride, setActionPointsOverride] = useState(null); // Custom points override in modal
+    const [actionTimingOverride, setActionTimingOverride] = useState(null); // 'immediate' | 'on_event_done' override in modal
     const [chosenStudentOverride, setChosenStudentOverride] = useState(null); // Manually picked student
     const [reassignSearchQuery, setReassignSearchQuery] = useState('');
     const [showManualReassign, setShowManualReassign] = useState(false);
@@ -354,10 +359,16 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
         targetStudent = null,
         updateProfile = false,
         createProfile = false,
-        eventOnly = false
+        eventOnly = false,
+        customPoints = null,
+        timingOverride = null
     }) => {
         try {
-            const points = eventOnly ? 0 : (Number(link.pointsPerStudent) || 0);
+            const rawPoints = customPoints !== null ? Number(customPoints) : (Number(link.pointsPerStudent) || 0);
+            const effectiveTiming = timingOverride || link.pointsTiming || 'immediate';
+            const isDeferred = !eventOnly && effectiveTiming === 'on_event_done' && Boolean(link.eventId);
+            const pointsToAwardNow = (isDeferred || eventOnly) ? 0 : rawPoints;
+
             let studentId = targetStudent?.id || null;
             let finalStudentName = sub.studentName;
             let finalGrade = sub.grade || '';
@@ -375,7 +386,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                     class: `${sub.grade || ''} / ${sub.section || ''}`.trim(),
                     phone: sub.phone || '',
                     specializations: specializationsList,
-                    totalPoints: points,
+                    totalPoints: pointsToAwardNow,
                     active: true,
                     joinedAt: serverTimestamp(),
                     notes: `مسجل عبر رابط: ${link.title}`
@@ -389,7 +400,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                     section: sub.section || '',
                     class: `${sub.grade || ''} / ${sub.section || ''}`.trim(),
                     phone: sub.phone || '',
-                    totalPoints: points,
+                    totalPoints: pointsToAwardNow,
                     active: true
                 }]);
             } else if (targetStudent && updateProfile) {
@@ -400,7 +411,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                     updatedAt: serverTimestamp()
                 };
                 if (sub.phone) updates.phone = sub.phone;
-                if (points > 0) updates.totalPoints = increment(points);
+                if (pointsToAwardNow > 0) updates.totalPoints = increment(pointsToAwardNow);
 
                 await updateDoc(doc(db, 'students', targetStudent.id), updates);
 
@@ -411,11 +422,11 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                 setStudents(prev => prev.map(s => s.id === targetStudent.id ? {
                     ...s,
                     ...updates,
-                    totalPoints: (Number(s.totalPoints) || 0) + points
+                    totalPoints: (Number(s.totalPoints) || 0) + pointsToAwardNow
                 } : s));
-            } else if (targetStudent && points > 0) {
+            } else if (targetStudent && pointsToAwardNow > 0) {
                 await updateDoc(doc(db, 'students', targetStudent.id), {
-                    totalPoints: increment(points)
+                    totalPoints: increment(pointsToAwardNow)
                 });
 
                 finalStudentName = targetStudent.name;
@@ -424,20 +435,20 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
 
                 setStudents(prev => prev.map(s => s.id === targetStudent.id ? {
                     ...s,
-                    totalPoints: (Number(s.totalPoints) || 0) + points
+                    totalPoints: (Number(s.totalPoints) || 0) + pointsToAwardNow
                 } : s));
             }
 
-            if (studentId && points > 0) {
+            if (studentId && pointsToAwardNow > 0) {
                 const prevPts = createProfile ? 0 : Math.max(0, Number(targetStudent?.totalPoints) || 0);
-                const nextPts = prevPts + points;
+                const nextPts = prevPts + pointsToAwardNow;
                 logPointsChange({
                     studentId,
                     studentName: finalStudentName,
                     grade: finalGrade,
                     section: finalSection,
                     class: `${finalGrade} / ${finalSection}`.trim(),
-                    change: points,
+                    change: pointsToAwardNow,
                     previousTotalPoints: prevPts,
                     newTotalPoints: nextPts,
                     reason: `اعتماد تسجيل عبر رابط: ${link.title}`,
@@ -452,6 +463,12 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                     participatingStudents: arrayUnion(studentId),
                     linkStudentIds: arrayUnion(studentId)
                 };
+
+                if (isDeferred) {
+                    eventUpdates[`deferredLinkStudents.${studentId}`] = rawPoints;
+                } else if (link.pointsPolicy === 'combine_both') {
+                    eventUpdates[`combineLinkStudents.${studentId}`] = true;
+                }
 
                 const customFieldsList = link.customFields || [];
                 const detailsForStudent = {};
@@ -480,15 +497,25 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                 status: 'approved',
                 matchedStudentId: studentId || null,
                 approvedAt: serverTimestamp(),
-                approvalMode: eventOnly ? 'event_only' : createProfile ? 'new_profile' : updateProfile ? 'profile_updated' : 'linked'
+                approvalMode: eventOnly ? 'event_only' : createProfile ? 'new_profile' : updateProfile ? 'profile_updated' : 'linked',
+                deferredPoints: isDeferred,
+                pendingPoints: isDeferred ? rawPoints : 0,
+                pointsAwarded: pointsToAwardNow
             });
 
-            toast.success(`تم اعتماد الطالب: ${sub.studentName}`);
+            if (isDeferred) {
+                toast.success(`تم اعتماد الطالب: ${sub.studentName} (سيتم رصد ${rawPoints} نقطة عند إنجاز الفعالية)`);
+            } else {
+                toast.success(`تم اعتماد الطالب: ${sub.studentName}${pointsToAwardNow > 0 ? ` ورصد ${pointsToAwardNow} نقطة` : ''}`);
+            }
+
             setStudentActionSub(null);
             setShowCreateStudentModal(null);
             setChosenStudentOverride(null);
             setShowManualReassign(false);
             setReassignSearchQuery('');
+            setActionPointsOverride(null);
+            setActionTimingOverride(null);
         } catch (err) {
             console.error("Approve error:", err);
             toast.error("فشل في اعتماد الطالب: " + err.message);
@@ -568,21 +595,16 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
         const unregisteredSubs = subsToProcess.filter(sub => !duplicateMap[sub.id]?.matchedStudent);
         const registeredSubs = subsToProcess.filter(sub => !!duplicateMap[sub.id]?.matchedStudent);
 
-        // If at least one student is not registered in the school database, ask with choice modal
-        if (unregisteredSubs.length > 0) {
-            setShowBulkCreateModal({
-                unregCount: unregisteredSubs.length,
-                totalCount: subsToProcess.length,
-                unregisteredSubs,
-                registeredSubs
-            });
-        } else {
-            // All are already registered, confirm and approve directly
-            const confirmMsg = `هل أنت متأكد من اعتماد ${subsToProcess.length} طالب دفعة واحدة؟`;
-            if (window.confirm(confirmMsg)) {
-                executeBulkApprove(false, { unregisteredSubs, registeredSubs });
-            }
-        }
+        setBulkPoints(Number(link.pointsPerStudent) || 0);
+        setBulkTiming(link.pointsTiming || 'immediate');
+
+        setShowBulkCreateModal({
+            unregCount: unregisteredSubs.length,
+            regCount: registeredSubs.length,
+            totalCount: subsToProcess.length,
+            unregisteredSubs,
+            registeredSubs
+        });
     };
 
     // Execute Bulk Approve
@@ -594,7 +616,11 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
         const toastId = toast.loading("جاري الاعتماد الجماعي...");
 
         try {
-            const points = Number(link.pointsPerStudent) || 0;
+            const points = Number(bulkPoints) >= 0 ? Number(bulkPoints) : (Number(link.pointsPerStudent) || 0);
+            const effectiveTiming = bulkTiming || link.pointsTiming || 'immediate';
+            const isDeferred = effectiveTiming === 'on_event_done' && Boolean(link.eventId);
+            const pointsToAwardNow = isDeferred ? 0 : points;
+
             const pointsPerStudent = {};
             const studentIdsToAddToEvent = new Set();
             const subsToApprove = [];
@@ -616,7 +642,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                         class: `${sub.grade || ''} / ${sub.section || ''}`.trim(),
                         phone: sub.phone || '',
                         specializations: specializationsList,
-                        totalPoints: points,
+                        totalPoints: pointsToAwardNow,
                         active: true,
                         joinedAt: serverTimestamp(),
                         notes: `مسجل عبر رابط: ${link.title}`
@@ -627,7 +653,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                         studentIdsToAddToEvent.add(studentId);
                     }
                 }
-                subsToApprove.push({ sub, studentId });
+                subsToApprove.push({ sub, studentId, isNew: createProfilesForUnregistered });
             }
 
             // 2. Process already registered submissions
@@ -635,42 +661,58 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                 const dupInfo = duplicateMap[sub.id];
                 const studentId = dupInfo?.matchedStudent?.id;
 
-                if (studentId && points > 0) {
-                    pointsPerStudent[studentId] = (pointsPerStudent[studentId] || 0) + points;
+                if (studentId && pointsToAwardNow > 0) {
+                    pointsPerStudent[studentId] = (pointsPerStudent[studentId] || 0) + pointsToAwardNow;
                 }
 
                 if (link.eventId && studentId) {
                     studentIdsToAddToEvent.add(studentId);
                 }
 
-                subsToApprove.push({ sub, studentId });
+                subsToApprove.push({ sub, studentId, isNew: false });
             }
 
             // 3. Update submissions
-            subsToApprove.forEach(({ sub, studentId }) => {
+            subsToApprove.forEach(({ sub, studentId, isNew }) => {
                 batch.update(doc(db, 'link_submissions', sub.id), {
                     status: 'approved',
                     matchedStudentId: studentId || null,
-                    approvedAt: serverTimestamp()
+                    approvedAt: serverTimestamp(),
+                    approvalMode: !studentId ? 'event_only' : isNew ? 'new_profile' : 'linked',
+                    deferredPoints: isDeferred,
+                    pendingPoints: isDeferred ? points : 0,
+                    pointsAwarded: pointsToAwardNow
                 });
             });
 
-            // 4. Update points for existing registered students
-            Object.entries(pointsPerStudent).forEach(([stuId, pts]) => {
-                if (pts > 0) {
-                    batch.update(doc(db, 'students', stuId), {
-                        totalPoints: increment(pts)
-                    });
-                }
-            });
+            // 4. Update points for existing registered students (if immediate points)
+            if (pointsToAwardNow > 0) {
+                Object.entries(pointsPerStudent).forEach(([stuId, pts]) => {
+                    if (pts > 0) {
+                        batch.update(doc(db, 'students', stuId), {
+                            totalPoints: increment(pts)
+                        });
+                    }
+                });
+            }
 
-            // 5. Update event participants and participantDetails if eventId exists
+            // 5. Update event participants and details if eventId exists
             if (link.eventId && studentIdsToAddToEvent.size > 0) {
                 const idsToAdd = Array.from(studentIdsToAddToEvent);
                 const eventUpdates = {
                     participatingStudents: arrayUnion(...idsToAdd),
                     linkStudentIds: arrayUnion(...idsToAdd)
                 };
+
+                if (isDeferred) {
+                    idsToAdd.forEach(id => {
+                        eventUpdates[`deferredLinkStudents.${id}`] = points;
+                    });
+                } else if (link.pointsPolicy === 'combine_both') {
+                    idsToAdd.forEach(id => {
+                        eventUpdates[`combineLinkStudents.${id}`] = true;
+                    });
+                }
 
                 const customFieldsList = link.customFields || [];
                 subsToApprove.forEach(({ sub, studentId }) => {
@@ -701,7 +743,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
 
             await batch.commit();
 
-            if (points > 0) {
+            if (pointsToAwardNow > 0) {
                 subsToApprove.forEach(({ sub, studentId }) => {
                     if (!studentId) return;
                     logPointsChange({
@@ -710,8 +752,8 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                         grade: sub.grade || '',
                         section: sub.section || '',
                         class: `${sub.grade || ''} / ${sub.section || ''}`.trim(),
-                        change: points,
-                        reason: `اعتماد مشاركة عبر رابط: ${link.title}`,
+                        change: pointsToAwardNow,
+                        reason: `اعتماد جماعي عبر رابط: ${link.title}`,
                         actionType: 'link_registration',
                         eventId: link.eventId || null,
                         eventTitle: link.eventTitle || link.title
@@ -720,7 +762,11 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
             }
 
             setSelectedIds([]);
-            toast.success(`تم الاعتماد الجماعي لـ (${subsToApprove.length}) طالب بنجاح`, { id: toastId });
+            if (isDeferred) {
+                toast.success(`تم الاعتماد الجماعي لـ (${subsToApprove.length}) طالب (النقاط مؤجلة عند إنجاز الفعالية)`, { id: toastId });
+            } else {
+                toast.success(`تم الاعتماد الجماعي لـ (${subsToApprove.length}) طالب بنجاح (+${pointsToAwardNow} نقطة)`, { id: toastId });
+            }
         } catch (err) {
             console.error("Bulk approve error:", err);
             toast.error("حدث خطأ أثناء الاعتماد الجماعي: " + err.message, { id: toastId });
@@ -1241,7 +1287,18 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                                                 ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
                                                                 : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
                                                         }`}>
-                                                            {sub.status === 'approved' ? 'معتمد' : sub.status === 'pending' ? 'بانتظار الاعتماد' : sub.status === 'waitlist' ? 'قائمة انتظار' : 'مرفوض'}
+                                                            {sub.status === 'approved' ? (
+                                                                sub.deferredPoints ? (
+                                                                    <span className="flex items-center gap-1">
+                                                                        <Clock size={11} className="text-amber-400" />
+                                                                        <span>معتمد (مؤجل للإنجاز: {sub.pendingPoints || link.pointsPerStudent || 0} ن)</span>
+                                                                    </span>
+                                                                ) : sub.pointsAwarded > 0 ? (
+                                                                    <span>معتمد (+{sub.pointsAwarded} ن)</span>
+                                                                ) : (
+                                                                    <span>معتمد</span>
+                                                                )
+                                                            ) : sub.status === 'pending' ? 'بانتظار الاعتماد' : sub.status === 'waitlist' ? 'قائمة انتظار' : 'مرفوض'}
                                                         </span>
                                                     </div>
 
@@ -1291,6 +1348,8 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                                         setChosenStudentOverride(dupInfo.matchedStudent || null);
                                                         setShowManualReassign(false);
                                                         setReassignSearchQuery('');
+                                                        setActionPointsOverride(Number(link.pointsPerStudent) || 0);
+                                                        setActionTimingOverride(link.pointsTiming || 'immediate');
                                                         setStudentActionSub(sub);
                                                     }}
                                                     className={`px-2.5 py-1.5 rounded-lg border text-xs font-bold flex items-center gap-1.5 transition-all ${
@@ -1474,7 +1533,9 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                     const sub = studentActionSub;
                     const dupInfo = duplicateMap[sub.id] || {};
                     const matchedStudent = chosenStudentOverride || dupInfo.matchedStudent;
-                    const points = Number(link.pointsPerStudent) || 0;
+                    const rawPoints = actionPointsOverride !== null ? Number(actionPointsOverride) : (Number(link.pointsPerStudent) || 0);
+                    const effectiveTiming = actionTimingOverride !== null ? actionTimingOverride : (link.pointsTiming || 'immediate');
+                    const isDeferred = effectiveTiming === 'on_event_done' && Boolean(link.eventId);
                     const isOverridden = chosenStudentOverride && chosenStudentOverride.id !== dupInfo.matchedStudent?.id;
 
                     const normSubGrade = normalizeArabic(sub.grade);
@@ -1511,6 +1572,8 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                             setChosenStudentOverride(null);
                                             setShowManualReassign(false);
                                             setReassignSearchQuery('');
+                                            setActionPointsOverride(null);
+                                            setActionTimingOverride(null);
                                         }}
                                         className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
                                     >
@@ -1604,7 +1667,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                             <div className="text-slate-300 text-[11px]">الصف: {sub.grade} - شعبة {sub.section || '1'}</div>
                                             {sub.phone && <div className="text-slate-400 text-[11px] font-mono">الجوال: {sub.phone}</div>}
                                             <div className="text-emerald-400 font-bold text-[11px] pt-1">
-                                                نقاط الفعالية: +{points} نقطة
+                                                نقاط الفعالية: {isDeferred ? `⏳ مؤجلة للإنجاز (${rawPoints} ن)` : `⚡ +${rawPoints} نقطة فوراً`}
                                             </div>
                                         </div>
 
@@ -1616,7 +1679,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                                     <div className="text-slate-300 text-[11px]">الصف: {matchedStudent.grade || matchedStudent.class} - شعبة {matchedStudent.section || '1'}</div>
                                                     <div className="text-slate-400 text-[11px] font-mono">الجوال: {matchedStudent.phone || 'غير مسجل'}</div>
                                                     <div className="text-indigo-300 font-bold text-[11px] pt-1">
-                                                        الرصيد: {matchedStudent.totalPoints || 0} نقطة (يصبح: {(Number(matchedStudent.totalPoints) || 0) + points})
+                                                        الرصيد: {matchedStudent.totalPoints || 0} نقطة {isDeferred ? `(يُضاف ${rawPoints} ن عند إنجاز الفعالية)` : `(يصبح: ${(Number(matchedStudent.totalPoints) || 0) + rawPoints})`}
                                                     </div>
                                                 </>
                                             ) : (
@@ -1624,6 +1687,86 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                             )}
                                         </div>
                                     </div>
+                                </div>
+
+                                {/* Points & Timing Configuration Box */}
+                                <div className="bg-slate-950/70 rounded-xl border border-slate-800 p-3.5 space-y-3">
+                                    <div className="flex items-center justify-between">
+                                        <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                                            <Award size={14} className="text-amber-400" />
+                                            <span>النقاط المقررة لهذا الطالب:</span>
+                                        </label>
+                                        <span className="text-[11px] text-slate-400 font-mono">
+                                            افتراضي الرابط: {link.pointsPerStudent ?? 0} ن
+                                        </span>
+                                    </div>
+
+                                    <div className="flex items-center gap-2">
+                                        <input
+                                            type="number"
+                                            min="0"
+                                            max="100"
+                                            value={rawPoints}
+                                            onChange={(e) => setActionPointsOverride(Math.max(0, Number(e.target.value)))}
+                                            className="w-24 px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white font-mono text-center focus:outline-none focus:border-indigo-500"
+                                        />
+                                        <div className="flex items-center gap-1">
+                                            {[0, 2, 5, 10, 15].map(pts => (
+                                                <button
+                                                    key={pts}
+                                                    type="button"
+                                                    onClick={() => setActionPointsOverride(pts)}
+                                                    className={`px-2.5 py-1 rounded text-xs transition-colors ${
+                                                        rawPoints === pts
+                                                            ? 'bg-indigo-600 text-white font-bold'
+                                                            : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                                                    }`}
+                                                >
+                                                    {pts} ن
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {/* Points Timing Choice (if linked to an event) */}
+                                    {link.eventId && (
+                                        <div className="pt-2.5 border-t border-slate-800/80 space-y-1.5">
+                                            <span className="text-[11px] font-bold text-slate-400 block">توقيت رصد النقاط:</span>
+                                            <div className="grid grid-cols-2 gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setActionTimingOverride('immediate')}
+                                                    className={`p-2.5 rounded-lg border text-right transition-all text-xs flex items-center gap-2 ${
+                                                        effectiveTiming === 'immediate'
+                                                            ? 'bg-emerald-600/20 border-emerald-500/50 text-emerald-300 font-bold'
+                                                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                                                    }`}
+                                                >
+                                                    <Zap size={15} className="shrink-0 text-emerald-400" />
+                                                    <div>
+                                                        <div className="font-bold text-white text-xs">⚡ رصد فوري الآن</div>
+                                                        <div className="text-[10px] text-slate-400">إيداع النقاط فور اعتماد الطلب</div>
+                                                    </div>
+                                                </button>
+
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setActionTimingOverride('on_event_done')}
+                                                    className={`p-2.5 rounded-lg border text-right transition-all text-xs flex items-center gap-2 ${
+                                                        effectiveTiming === 'on_event_done'
+                                                            ? 'bg-indigo-600/20 border-indigo-500/50 text-indigo-300 font-bold'
+                                                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                                                    }`}
+                                                >
+                                                    <Clock size={15} className="shrink-0 text-indigo-400" />
+                                                    <div>
+                                                        <div className="font-bold text-white text-xs">⏳ مؤجل لإنجاز النشاط</div>
+                                                        <div className="text-[10px] text-slate-400">تُرصد مع كافة المشاركين</div>
+                                                    </div>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
 
                                 {/* Action Options */}
@@ -1639,19 +1782,21 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                                 targetStudent: matchedStudent,
                                                 updateProfile: false,
                                                 createProfile: false,
-                                                eventOnly: false
+                                                eventOnly: false,
+                                                customPoints: rawPoints,
+                                                timingOverride: effectiveTiming
                                             })}
                                             className="w-full p-3 rounded-xl bg-emerald-600/15 hover:bg-emerald-600/25 border border-emerald-500/40 text-right text-xs text-white flex flex-col gap-1 transition-all group"
                                         >
                                             <div className="flex items-center justify-between">
                                                 <span className="font-bold text-emerald-300 flex items-center gap-1.5">
                                                     <CheckCircle size={15} />
-                                                    <span>١. اعتماد وربط بملف الطالب ورصد النقاط (+{points})</span>
+                                                    <span>١. اعتماد وربط بملف الطالب {isDeferred ? `(نقاط مؤجلة: ${rawPoints} ن)` : `ورصد النقاط (+${rawPoints})`}</span>
                                                 </span>
                                                 <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-semibold">موصى به</span>
                                             </div>
                                             <span className="text-[11px] text-slate-300 leading-normal pr-5">
-                                                ربط التسجيل بملف ({matchedStudent.name}) وإضافة ({points}) نقطة إلى رصيده مع توثيق العملية بسجل النقاط وإلحاقه بالفعالية.
+                                                ربط التسجيل بملف ({matchedStudent.name}) وإلحاقه بالنشاط {isDeferred ? `، وسيتم إيداع (${rawPoints}) نقطة تلقائياً عند تنفيذ النشاط بالجدول.` : `وإضافة (${rawPoints}) نقطة إلى رصيده فوراً وتوثيقها بسجل النقاط.`}
                                             </span>
                                         </button>
                                     )}
@@ -1665,19 +1810,21 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                                 targetStudent: matchedStudent,
                                                 updateProfile: true,
                                                 createProfile: false,
-                                                eventOnly: false
+                                                eventOnly: false,
+                                                customPoints: rawPoints,
+                                                timingOverride: effectiveTiming
                                             })}
                                             className="w-full p-3 rounded-xl bg-amber-600/15 hover:bg-amber-600/25 border border-amber-500/40 text-right text-xs text-white flex flex-col gap-1 transition-all group"
                                         >
                                             <div className="flex items-center justify-between">
                                                 <span className="font-bold text-amber-300 flex items-center gap-1.5">
                                                     <RefreshCw size={15} />
-                                                    <span>٢. اعتماد وتحديث بيانات ملف الطالب بالمدرسة ورصد النقاط</span>
+                                                    <span>٢. اعتماد وتحديث بيانات ملف الطالب بالمدرسة {isDeferred ? `(نقاط مؤجلة: ${rawPoints} ن)` : `ورصد النقاط (+${rawPoints})`}</span>
                                                 </span>
                                                 <span className="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-semibold">تحديث الصف/الشعبة</span>
                                             </div>
                                             <span className="text-[11px] text-slate-300 leading-normal pr-5">
-                                                تحديث بيانات الطالب إلى: الصف ({sub.grade}) والشعبة ({sub.section || '1'}){sub.phone ? ` والجوال (${sub.phone})` : ''} في قاعدة البيانات، ورصد (+{points}) نقطة في سجله.
+                                                تحديث بيانات الطالب إلى: الصف ({sub.grade}) والشعبة ({sub.section || '1'}){sub.phone ? ` والجوال (${sub.phone})` : ''} في قاعدة البيانات، {isDeferred ? `مع جدولة (${rawPoints}) نقطة عند إنجاز الفعالية.` : `ورصد (+${rawPoints}) نقطة في سجله الآن.`}
                                             </span>
                                         </button>
                                     )}
@@ -1690,7 +1837,9 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                             targetStudent: matchedStudent,
                                             updateProfile: false,
                                             createProfile: false,
-                                            eventOnly: true
+                                            eventOnly: true,
+                                            customPoints: 0,
+                                            timingOverride: 'immediate'
                                         })}
                                         className="w-full p-3 rounded-xl bg-slate-800 hover:bg-slate-750 border border-slate-700 text-right text-xs text-white flex flex-col gap-1 transition-all"
                                     >
@@ -1711,7 +1860,9 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                             targetStudent: null,
                                             updateProfile: false,
                                             createProfile: true,
-                                            eventOnly: false
+                                            eventOnly: false,
+                                            customPoints: rawPoints,
+                                            timingOverride: effectiveTiming
                                         })}
                                         className={`w-full p-3 rounded-xl border text-right text-xs text-white flex flex-col gap-1 transition-all ${
                                             !matchedStudent
@@ -1722,14 +1873,14 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                         <div className="flex items-center justify-between">
                                             <span className="font-bold text-indigo-300 flex items-center gap-1.5">
                                                 <UserPlus size={15} />
-                                                <span>{matchedStudent ? '٤.' : '٢.'} اعتماد وإنشاء ملف طالب جديد منفصل في المدرسة</span>
+                                                <span>{matchedStudent ? '٤.' : '٢.'} اعتماد وإنشاء ملف طالب جديد منفصل في المدرسة {isDeferred ? `(نقاط مؤجلة: ${rawPoints} ن)` : `ورصد النقاط (+${rawPoints})`}</span>
                                             </span>
                                             {!matchedStudent && (
                                                 <span className="text-[10px] px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-semibold">موصى به لغير المقيد</span>
                                             )}
                                         </div>
                                         <span className="text-[11px] text-slate-300 leading-normal pr-5">
-                                            إضافة الطالب رسمياً لقاعدة بيانات طلاب المدرسة باسم ({sub.studentName}) وصف ({sub.grade} - {sub.section || '1'}) ومنحه (+{points}) نقطة كبداية.
+                                            إضافة الطالب رسمياً لقاعدة بيانات طلاب المدرسة باسم ({sub.studentName}) وصف ({sub.grade} - {sub.section || '1'}) {isDeferred ? `مع رصد (${rawPoints}) نقطة عند إنجاز الفعالية بالجدول.` : `ومنحه (+${rawPoints}) نقطة كبداية.`}
                                         </span>
                                     </button>
                                 </div>
@@ -1893,47 +2044,154 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                     </div>
                 )}
 
-                {/* Bulk Student Profile Creation Choice Modal */}
+                {/* Bulk Student Profile Creation & Points Choice Modal */}
                 {showBulkCreateModal && (
-                    <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-in fade-in">
-                        <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md p-6 text-right space-y-4 shadow-2xl" dir="rtl">
-                            <div className="flex items-center gap-3 text-indigo-400">
-                                <div className="p-2.5 rounded-xl bg-indigo-500/10 border border-indigo-500/30">
-                                    <ShieldAlert size={24} />
+                    <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 overflow-y-auto animate-in fade-in">
+                        <div className="bg-slate-900 border border-slate-700/80 rounded-2xl w-full max-w-lg p-5 sm:p-6 text-right space-y-4 shadow-2xl my-auto" dir="rtl">
+                            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                                <div className="flex items-center gap-3 text-indigo-400">
+                                    <div className="p-2.5 rounded-xl bg-indigo-500/15 border border-indigo-500/30">
+                                        <Users size={22} />
+                                    </div>
+                                    <div>
+                                        <h3 className="font-bold text-white text-base">اعتماد جماعي للطلاب المحددين</h3>
+                                        <p className="text-xs text-slate-400">
+                                            إجمالي: {showBulkCreateModal.totalCount} طالب ({showBulkCreateModal.regCount || (showBulkCreateModal.totalCount - showBulkCreateModal.unregCount)} مقيد بالمدرسة، {showBulkCreateModal.unregCount} غير مقيد)
+                                        </p>
+                                    </div>
                                 </div>
-                                <div>
-                                    <h3 className="font-bold text-white text-base">اعتماد جماعي - طلاب غير مقيدين</h3>
-                                    <p className="text-xs text-slate-400">
-                                        يوجد {showBulkCreateModal.unregCount} طالب من أصل {showBulkCreateModal.totalCount} غير مقيدين بقاعدة بيانات المدرسة
-                                    </p>
-                                </div>
-                            </div>
-
-                            <p className="text-xs text-slate-300 leading-relaxed">
-                                كيف ترغب في معالجة الطلاب غير المسجلين أثناء الاعتماد الجماعي؟
-                            </p>
-
-                            <div className="space-y-2.5 pt-1">
                                 <button
-                                    onClick={() => executeBulkApprove(true)}
-                                    className="w-full p-3.5 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/40 text-right text-xs text-white flex flex-col gap-1 transition-all"
+                                    type="button"
+                                    onClick={() => setShowBulkCreateModal(null)}
+                                    className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
                                 >
-                                    <span className="font-bold text-indigo-300">١. اعتماد الجميع وإنشاء ملفات للطلاب غير المسجلين فقط</span>
-                                    <span className="text-[11px] text-slate-400 leading-normal">
-                                        سيتم إنشاء ملفات جديدة لـ ({showBulkCreateModal.unregCount}) طلاب في سجل المدرسة ومنحهم النقاط وإضافتهم للفعالية.
-                                    </span>
-                                </button>
-
-                                <button
-                                    onClick={() => executeBulkApprove(false)}
-                                    className="w-full p-3.5 rounded-xl bg-slate-800 hover:bg-slate-750 border border-slate-700 text-right text-xs text-white flex flex-col gap-1 transition-all"
-                                >
-                                    <span className="font-bold text-slate-200">٢. اعتماد للمناسبة الحالية فقط (دون إنشاء ملفات جديدة)</span>
-                                    <span className="text-[11px] text-slate-400 leading-normal">
-                                        اعتماد مشاركتهم في هذا الكشف فقط. الطلاب المسجلون مسبقاً تُمنح لهم النقاط وتُربط الفعالية بسجلاتهم، ولن يتم إنشاء ملفات جديدة لمن ليس لديه ملف.
-                                    </span>
+                                    <X size={18} />
                                 </button>
                             </div>
+
+                            {/* Bulk Points Configuration Box */}
+                            <div className="bg-slate-950/70 rounded-xl border border-slate-800 p-3.5 space-y-3">
+                                <div className="flex items-center justify-between">
+                                    <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                                        <Award size={14} className="text-amber-400" />
+                                        <span>النقاط الممنوحة لكل طالب بالدفعة:</span>
+                                    </label>
+                                    <span className="text-[11px] text-slate-400 font-mono">
+                                        افتراضي الرابط: {link.pointsPerStudent ?? 0} ن
+                                    </span>
+                                </div>
+
+                                <div className="flex items-center gap-2">
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        max="100"
+                                        value={bulkPoints}
+                                        onChange={(e) => setBulkPoints(Math.max(0, Number(e.target.value)))}
+                                        className="w-24 px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white font-mono text-center focus:outline-none focus:border-indigo-500"
+                                    />
+                                    <div className="flex items-center gap-1">
+                                        {[0, 2, 5, 10, 15].map(pts => (
+                                            <button
+                                                key={pts}
+                                                type="button"
+                                                onClick={() => setBulkPoints(pts)}
+                                                className={`px-2.5 py-1 rounded text-xs transition-colors ${
+                                                    bulkPoints === pts
+                                                        ? 'bg-indigo-600 text-white font-bold'
+                                                        : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                                                }`}
+                                            >
+                                                {pts} ن
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* Bulk Timing Option (if linked to an event) */}
+                                {link.eventId && (
+                                    <div className="pt-2.5 border-t border-slate-800/80 space-y-1.5">
+                                        <span className="text-[11px] font-bold text-slate-400 block">توقيت رصد النقاط:</span>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => setBulkTiming('immediate')}
+                                                className={`p-2.5 rounded-lg border text-right transition-all text-xs flex items-center gap-2 ${
+                                                    bulkTiming === 'immediate'
+                                                        ? 'bg-emerald-600/20 border-emerald-500/50 text-emerald-300 font-bold'
+                                                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                                                }`}
+                                            >
+                                                <Zap size={15} className="shrink-0 text-emerald-400" />
+                                                <div>
+                                                    <div className="font-bold text-white text-xs">⚡ رصد فوري الآن</div>
+                                                    <div className="text-[10px] text-slate-400">إيداع النقاط للدفعة فوراً</div>
+                                                </div>
+                                            </button>
+
+                                            <button
+                                                type="button"
+                                                onClick={() => setBulkTiming('on_event_done')}
+                                                className={`p-2.5 rounded-lg border text-right transition-all text-xs flex items-center gap-2 ${
+                                                    bulkTiming === 'on_event_done'
+                                                        ? 'bg-indigo-600/20 border-indigo-500/50 text-indigo-300 font-bold'
+                                                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                                                }`}
+                                            >
+                                                <Clock size={15} className="shrink-0 text-indigo-400" />
+                                                <div>
+                                                    <div className="font-bold text-white text-xs">⏳ مؤجل لإنجاز النشاط</div>
+                                                    <div className="text-[10px] text-slate-400">تُرصد عند إنجاز الفعالية</div>
+                                                </div>
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Unregistered students action choices */}
+                            {showBulkCreateModal.unregCount > 0 ? (
+                                <div className="space-y-2">
+                                    <span className="text-xs text-slate-300 font-bold block">
+                                        طريقة التعامل مع الطلاب غير المقيدين بالمدرسة ({showBulkCreateModal.unregCount} طالب):
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={() => executeBulkApprove(true)}
+                                        className="w-full p-3.5 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/40 text-right text-xs text-white flex flex-col gap-1 transition-all"
+                                    >
+                                        <span className="font-bold text-indigo-300">١. اعتماد الجميع وإنشاء ملفات جديدة لغير المقيدين ({bulkTiming === 'on_event_done' && link.eventId ? `نقاط مؤجلة للإنجاز: ${bulkPoints} ن` : `رصد +${bulkPoints} ن`})</span>
+                                        <span className="text-[11px] text-slate-400">
+                                            سيتم إنشاء ملفات جديدة لـ ({showBulkCreateModal.unregCount}) طلاب في سجل المدرسة وربط جميع الطلاب بالفعالية.
+                                        </span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => executeBulkApprove(false)}
+                                        className="w-full p-3.5 rounded-xl bg-slate-800 hover:bg-slate-750 border border-slate-700 text-right text-xs text-white flex flex-col gap-1 transition-all"
+                                    >
+                                        <span className="font-bold text-slate-200">٢. اعتماد للمناسبة الحالية فقط (دون إنشاء ملفات جديدة)</span>
+                                        <span className="text-[11px] text-slate-400">
+                                            اعتماد مشاركتهم في هذا الكشف فقط. الطلاب المسجلون مسبقاً تُمنح لهم النقاط وتُربط الفعالية بسجلاتهم، ولن يتم إنشاء ملفات جديدة لمن ليس لديه ملف.
+                                        </span>
+                                    </button>
+                                </div>
+                            ) : (
+                                <div className="space-y-3 pt-1">
+                                    <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-600/40 text-emerald-200 text-xs flex items-center gap-2">
+                                        <CheckCircle size={16} className="text-emerald-400 shrink-0" />
+                                        <span>جميع الطلاب المحددين ({showBulkCreateModal.totalCount}) مقيدون ومطابقون في قاعدة بيانات المدرسة.</span>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => executeBulkApprove(false)}
+                                        className="w-full p-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/30 transition-all cursor-pointer"
+                                    >
+                                        <CheckCircle size={16} />
+                                        <span>تأكيد اعتماد الدفعة بالكامل ({showBulkCreateModal.totalCount} طالب {bulkTiming === 'on_event_done' && link.eventId ? `• نقاط مؤجلة للإنجاز: ${bulkPoints} ن` : `• +${bulkPoints} ن`})</span>
+                                    </button>
+                                </div>
+                            )}
 
                             <div className="flex justify-end pt-2 border-t border-slate-800">
                                 <button

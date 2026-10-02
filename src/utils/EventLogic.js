@@ -30,12 +30,23 @@ export async function updateEventWithSmartSync(eventId, newData) {
             const oldStudents = currentServerData.participatingStudents || [];
             const newStudents = newData.participatingStudents || [];
 
-            // Link-registered students are excluded from receiving event points (they keep link points)
-            const oldLinkStudents = currentServerData.linkStudentIds || [];
-            const newLinkStudents = newData.linkStudentIds !== undefined ? newData.linkStudentIds : oldLinkStudents;
+            // Helper to get awarded points for a student in an event
+            const getStudentEventPoints = (stuId, evData, defaultPts) => {
+                const links = evData.linkStudentIds || [];
+                const deferred = evData.deferredLinkStudents || {};
+                const combine = evData.combineLinkStudents || {};
 
-            const eligibleOldStudents = oldStudents.filter(id => !oldLinkStudents.includes(id));
-            const eligibleNewStudents = newStudents.filter(id => !newLinkStudents.includes(id));
+                if (deferred[stuId] !== undefined) {
+                    return Number(deferred[stuId]) || defaultPts;
+                }
+                if (combine[stuId]) {
+                    return defaultPts;
+                }
+                if (!links.includes(stuId)) {
+                    return defaultPts;
+                }
+                return 0; // Immediate link registration, already received link points
+            };
 
             // Points
             const oldPoints = Number(currentServerData.points) || 0;
@@ -43,6 +54,7 @@ export async function updateEventWithSmartSync(eventId, newData) {
 
             // Helper to get student and apply change
             const applyStudentPointsChange = async (studentId, diff, reason, actionType) => {
+                if (diff === 0) return;
                 const sRef = doc(db, 'students', studentId);
                 const sSnap = await transaction.get(sRef);
                 if (!sSnap.exists()) return;
@@ -72,47 +84,58 @@ export async function updateEventWithSmartSync(eventId, newData) {
 
             // 1. If it WAS Done and is NO LONGER Done -> Revert all points
             if (wasDone && !isDone) {
-                for (const studentId of eligibleOldStudents) {
-                    await applyStudentPointsChange(
-                        studentId,
-                        -oldPoints,
-                        `إلغاء اعتماد نشاط: ${currentServerData.title || ''}`,
-                        'activity_deduct'
-                    );
+                for (const studentId of oldStudents) {
+                    const ptsToRevert = getStudentEventPoints(studentId, currentServerData, oldPoints);
+                    if (ptsToRevert > 0) {
+                        await applyStudentPointsChange(
+                            studentId,
+                            -ptsToRevert,
+                            `إلغاء اعتماد نشاط: ${currentServerData.title || ''}`,
+                            'activity_deduct'
+                        );
+                    }
                 }
             }
 
             // 2. If it IS Done (whether it was before or just became)
             if (isDone) {
                 if (wasDone) {
-                    const removed = eligibleOldStudents.filter(id => !eligibleNewStudents.includes(id));
-                    const added = eligibleNewStudents.filter(id => !eligibleOldStudents.includes(id));
-                    const kept = eligibleNewStudents.filter(id => eligibleOldStudents.includes(id));
+                    const removed = oldStudents.filter(id => !newStudents.includes(id));
+                    const added = newStudents.filter(id => !oldStudents.includes(id));
+                    const kept = newStudents.filter(id => oldStudents.includes(id));
 
                     // Removed
                     for (const id of removed) {
-                        await applyStudentPointsChange(
-                            id,
-                            -oldPoints,
-                            `إزالة من نشاط معتمد: ${currentServerData.title || ''}`,
-                            'activity_deduct'
-                        );
+                        const oldAward = getStudentEventPoints(id, currentServerData, oldPoints);
+                        if (oldAward > 0) {
+                            await applyStudentPointsChange(
+                                id,
+                                -oldAward,
+                                `إزالة من نشاط معتمد: ${currentServerData.title || ''}`,
+                                'activity_deduct'
+                            );
+                        }
                     }
 
                     // Added
                     for (const id of added) {
-                        await applyStudentPointsChange(
-                            id,
-                            newPoints,
-                            `إضافة إلى نشاط معتمد: ${newData.title || currentServerData.title || ''}`,
-                            'activity_award'
-                        );
+                        const newAward = getStudentEventPoints(id, newData, newPoints);
+                        if (newAward > 0) {
+                            await applyStudentPointsChange(
+                                id,
+                                newAward,
+                                `إضافة إلى نشاط معتمد: ${newData.title || currentServerData.title || ''}`,
+                                'activity_award'
+                            );
+                        }
                     }
 
-                    // Kept (Only if points changed)
-                    if (oldPoints !== newPoints) {
-                        const diff = newPoints - oldPoints;
-                        for (const id of kept) {
+                    // Kept
+                    for (const id of kept) {
+                        const oldAward = getStudentEventPoints(id, currentServerData, oldPoints);
+                        const newAward = getStudentEventPoints(id, newData, newPoints);
+                        const diff = newAward - oldAward;
+                        if (diff !== 0) {
                             await applyStudentPointsChange(
                                 id,
                                 diff,
@@ -122,14 +145,17 @@ export async function updateEventWithSmartSync(eventId, newData) {
                         }
                     }
                 } else {
-                    // Was NOT Done, now IS Done -> add newPoints to all eligible newStudents
-                    for (const id of eligibleNewStudents) {
-                        await applyStudentPointsChange(
-                            id,
-                            newPoints,
-                            `مشاركة في نشاط: ${newData.title || currentServerData.title || ''}`,
-                            'activity_award'
-                        );
+                    // Was NOT Done, now IS Done -> add points to all newStudents
+                    for (const id of newStudents) {
+                        const award = getStudentEventPoints(id, newData, newPoints);
+                        if (award > 0) {
+                            await applyStudentPointsChange(
+                                id,
+                                award,
+                                `مشاركة في نشاط: ${newData.title || currentServerData.title || ''}`,
+                                'activity_award'
+                            );
+                        }
                     }
                 }
             }
