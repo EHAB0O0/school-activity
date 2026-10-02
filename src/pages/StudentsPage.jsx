@@ -37,7 +37,7 @@ export default function StudentsPage() {
 
     const { eventTypes, grades, settings } = useSettings();
     const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-    const [newStudent, setNewStudent] = useState({ name: '', class: '', grade: '', section: '', specializations: [] });
+    const [newStudent, setNewStudent] = useState({ name: '', class: '', grade: '', section: '', isGradeUnknown: false, specializations: [] });
 
     // Spec Options Construction
     const specOptions = [
@@ -90,16 +90,29 @@ export default function StudentsPage() {
     async function handleAdd(e) {
         e.preventDefault();
         try {
+            const isUnknown = !!newStudent.isGradeUnknown || newStudent.grade === 'غير معروف';
+            const finalGrade = isUnknown ? 'غير معروف' : (newStudent.grade || '');
+            const finalSection = isUnknown ? '' : (newStudent.section || '');
+            const finalClass = isUnknown ? 'غير معروف' : `${finalGrade} - ${finalSection}`.trim();
+
             await addDoc(collection(db, 'students'), {
-                ...newStudent,
+                name: newStudent.name.trim(),
+                grade: finalGrade,
+                section: finalSection,
+                class: finalClass,
+                isGradeUnknown: isUnknown,
+                specializations: newStudent.specializations || [],
                 active: true,
                 totalPoints: 0,
                 joinedAt: new Date()
             });
-            setNewStudent({ name: '', class: '', grade: '', section: '', specializations: [] });
+            setNewStudent({ name: '', class: '', grade: '', section: '', isGradeUnknown: false, specializations: [] });
             setIsAddModalOpen(false);
-            toast.success('تمت إضافة الطالب');
-        } catch { toast.error('حدث خطأ'); }
+            toast.success('تمت إضافة الطالب بنجاح');
+        } catch (err) {
+            console.error("Add student error:", err);
+            toast.error('حدث خطأ أثناء إضافة الطالب');
+        }
     }
 
     // --- Delete Student ---
@@ -172,11 +185,17 @@ export default function StudentsPage() {
             const newPoints = Math.max(0, Number(selectedStudent.totalPoints) || 0);
             const pointsDiff = newPoints - oldPoints;
 
+            const isUnknown = selectedStudent.grade === 'غير معروف' || !!selectedStudent.isGradeUnknown;
+            const finalGrade = isUnknown ? 'غير معروف' : (selectedStudent.grade || '');
+            const finalSection = isUnknown ? '' : (selectedStudent.section || '');
+            const finalClass = isUnknown ? 'غير معروف' : (selectedStudent.class || `${finalGrade} - ${finalSection}`).trim();
+
             await updateDoc(doc(db, 'students', selectedStudent.id), {
-                name: selectedStudent.name,
-                class: selectedStudent.class,
-                grade: selectedStudent.grade || '',
-                section: selectedStudent.section || '',
+                name: selectedStudent.name.trim(),
+                class: finalClass,
+                grade: finalGrade,
+                section: finalSection,
+                isGradeUnknown: isUnknown,
                 totalPoints: newPoints,
                 notes: selectedStudent.notes || '',
                 specializations: selectedStudent.specializations || []
@@ -186,9 +205,9 @@ export default function StudentsPage() {
                 await logPointsChange({
                     studentId: selectedStudent.id,
                     studentName: selectedStudent.name,
-                    grade: selectedStudent.grade,
-                    section: selectedStudent.section,
-                    class: selectedStudent.class,
+                    grade: finalGrade,
+                    section: finalSection,
+                    class: finalClass,
                     change: pointsDiff,
                     previousTotalPoints: oldPoints,
                     newTotalPoints: newPoints,
@@ -457,7 +476,7 @@ export default function StudentsPage() {
                 const matchesGrade = !gradeFilter
                     ? true
                     : gradeFilter === 'غير معروف'
-                        ? (!s.grade || s.grade === 'غير معروف' || s.grade === 'Unknown')
+                        ? (!s.grade || s.grade === 'غير معروف' || s.grade === 'Unknown' || !!s.isGradeUnknown || s.class === 'غير معروف')
                         : s.grade === gradeFilter;
                 const matchesSection = !sectionFilter || s.section === sectionFilter;
 
@@ -1220,7 +1239,13 @@ export default function StudentsPage() {
                                     </div>
                                     <div>
                                         <div>{student.name}</div>
-                                        <div className="md:hidden text-xs text-gray-400 mt-1">{student.class}</div>
+                                        <div className="md:hidden text-xs text-gray-400 mt-1">
+                                            {student.grade === 'غير معروف' || student.class === 'غير معروف' || !student.grade ? (
+                                                <span className="text-amber-300 font-semibold">❓ غير معروف</span>
+                                            ) : (
+                                                student.class || '-'
+                                            )}
+                                        </div>
                                     </div>
                                 </td>
                                 <td className="p-4 hidden md:table-cell">
@@ -1236,7 +1261,15 @@ export default function StudentsPage() {
                                         )}
                                     </div>
                                 </td>
-                                <td className="p-4 text-gray-300 hidden md:table-cell">{student.class}</td>
+                                <td className="p-4 text-gray-300 hidden md:table-cell">
+                                    {student.grade === 'غير معروف' || student.class === 'غير معروف' || !student.grade ? (
+                                        <span className="text-amber-300 bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded text-xs font-semibold">
+                                            ❓ غير معروف
+                                        </span>
+                                    ) : (
+                                        student.class || '-'
+                                    )}
+                                </td>
                                 <td className="p-4">
                                     <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-bold border ${student.totalPoints > 50 ? 'bg-amber-500/10 text-amber-300 border-amber-500/20' : 'bg-gray-700/30 text-gray-400 border-gray-600/30'}`}>
                                         <Award size={14} className="ml-1" />
@@ -1268,45 +1301,83 @@ export default function StudentsPage() {
                         <h3 className="text-xl font-bold text-white mb-6">تسجيل طالب جديد</h3>
                         <form onSubmit={handleAdd} className="space-y-4">
                             <div>
-                                <label className="block text-gray-400 text-sm mb-1">الاسم الرباعي</label>
+                                <label className="block text-gray-400 text-sm mb-1">الاسم الرباعي <span className="text-rose-400">*</span></label>
                                 <input required className="w-full bg-black/30 border border-gray-700 rounded-xl px-4 py-3 text-white focus:border-indigo-500 outline-none"
+                                    placeholder="أدخل اسم الطالب الرباعي..."
                                     value={newStudent.name} onChange={e => setNewStudent({ ...newStudent, name: e.target.value })} />
                             </div>
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-gray-400 text-sm mb-1">الصف / المرحلة</label>
-                                    <select
-                                        required
-                                        className="w-full bg-black/30 border border-gray-700 rounded-xl px-4 py-3 text-white focus:border-indigo-500 outline-none"
-                                        value={newStudent.grade || ''}
-                                        onChange={e => {
-                                            setNewStudent({ ...newStudent, grade: e.target.value, section: '', class: `${e.target.value} - ` });
+
+                            {/* Option: الصف / الفصل غير معروف */}
+                            <div className="bg-black/30 border border-gray-800 rounded-xl p-3 flex items-center justify-between">
+                                <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                                    <input
+                                        type="checkbox"
+                                        checked={!!newStudent.isGradeUnknown || newStudent.grade === 'غير معروف'}
+                                        onChange={(e) => {
+                                            const isUnknown = e.target.checked;
+                                            setNewStudent(prev => ({
+                                                ...prev,
+                                                isGradeUnknown: isUnknown,
+                                                grade: isUnknown ? 'غير معروف' : '',
+                                                section: isUnknown ? '' : '',
+                                                class: isUnknown ? 'غير معروف' : ''
+                                            }));
                                         }}
-                                    >
-                                        <option value="">اختر الصف...</option>
-                                        {grades?.map(g => <option key={g.id} value={g.name}>{g.name}</option>)}
-                                    </select>
-                                </div>
-                                <div>
-                                    <label className="block text-gray-400 text-sm mb-1">الشعبة</label>
-                                    <select
-                                        required
-                                        className="w-full bg-black/30 border border-gray-700 rounded-xl px-4 py-3 text-white focus:border-indigo-500 outline-none"
-                                        value={newStudent.section || ''}
-                                        onChange={e => setNewStudent({
-                                            ...newStudent,
-                                            section: e.target.value,
-                                            class: `${newStudent.grade} - ${e.target.value}`
-                                        })}
-                                        disabled={!newStudent.grade}
-                                    >
-                                        <option value="">اختر الشعبة...</option>
-                                        {grades?.find(g => g.name === newStudent.grade)?.sections?.map(s => (
-                                            <option key={s.id} value={s.name}>{s.name}</option>
-                                        ))}
-                                    </select>
-                                </div>
+                                        className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 bg-gray-800 border-gray-700 cursor-pointer"
+                                    />
+                                    <div>
+                                        <span className="text-xs font-bold text-gray-200 block">الصف / الفصل غير معروف</span>
+                                        <span className="text-[11px] text-gray-400">حدد هذا الخيار إذا كان صف الطالب أو فصله غير محدد حالياً</span>
+                                    </div>
+                                </label>
+                                {(newStudent.isGradeUnknown || newStudent.grade === 'غير معروف') && (
+                                    <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2.5 py-0.5 rounded-full font-bold">
+                                        صف غير معروف
+                                    </span>
+                                )}
                             </div>
+
+                            {(newStudent.isGradeUnknown || newStudent.grade === 'غير معروف') ? (
+                                <div className="bg-amber-950/20 border border-amber-500/30 rounded-xl p-3 text-xs text-amber-300 flex items-center gap-2">
+                                    <span>⚠️ سيتم تسجيل الطالب كـ <strong>صف غير معروف</strong>، ولا يلزم اختيار الصف أو الشعبة.</span>
+                                </div>
+                            ) : (
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-gray-400 text-sm mb-1">الصف / المرحلة <span className="text-rose-400">*</span></label>
+                                        <select
+                                            required
+                                            className="w-full bg-black/30 border border-gray-700 rounded-xl px-4 py-3 text-white focus:border-indigo-500 outline-none cursor-pointer"
+                                            value={newStudent.grade || ''}
+                                            onChange={e => {
+                                                setNewStudent({ ...newStudent, grade: e.target.value, section: '', class: `${e.target.value} - ` });
+                                            }}
+                                        >
+                                            <option value="">اختر الصف...</option>
+                                            {grades?.map(g => <option key={g.id} value={g.name}>{g.name}</option>)}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-gray-400 text-sm mb-1">الشعبة <span className="text-rose-400">*</span></label>
+                                        <select
+                                            required
+                                            className="w-full bg-black/30 border border-gray-700 rounded-xl px-4 py-3 text-white focus:border-indigo-500 outline-none cursor-pointer"
+                                            value={newStudent.section || ''}
+                                            onChange={e => setNewStudent({
+                                                ...newStudent,
+                                                section: e.target.value,
+                                                class: `${newStudent.grade} - ${e.target.value}`
+                                            })}
+                                            disabled={!newStudent.grade}
+                                        >
+                                            <option value="">اختر الشعبة...</option>
+                                            {grades?.find(g => g.name === newStudent.grade)?.sections?.map(s => (
+                                                <option key={s.id} value={s.name}>{s.name}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+                            )}
                             <input type="hidden" value={newStudent.class} /> {/* Legacy Support */}
                             <div>
                                 <MultiSelect
@@ -1350,7 +1421,16 @@ export default function StudentsPage() {
                                     <div className="mr-4">
                                         <h2 className="text-2xl font-bold text-white mb-1">{selectedStudent.name}</h2>
                                         <div className="flex items-center space-x-3 space-x-reverse text-sm">
-                                            <span className="text-gray-400 bg-white/5 px-2 py-0.5 rounded">{selectedStudent.class}</span>
+                                            <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
+                                                selectedStudent.grade === 'غير معروف' || selectedStudent.class === 'غير معروف' || selectedStudent.isGradeUnknown
+                                                    ? 'bg-amber-500/10 text-amber-300 border border-amber-500/30'
+                                                    : 'text-gray-400 bg-white/5'
+                                            }`}>
+                                                {selectedStudent.grade === 'غير معروف' || selectedStudent.class === 'غير معروف' || selectedStudent.isGradeUnknown
+                                                    ? '❓ صف غير معروف'
+                                                    : selectedStudent.class || '-'
+                                                }
+                                            </span>
                                             <span className="text-amber-400 flex items-center font-bold px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/20">
                                                 <Award size={14} className="ml-1" /> {selectedStudent.totalPoints} نقطة
                                             </span>
@@ -1406,44 +1486,91 @@ export default function StudentsPage() {
                                             <input className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-white focus:border-indigo-500 outline-none"
                                                 value={selectedStudent.name} onChange={e => setSelectedStudent({ ...selectedStudent, name: e.target.value })} />
                                         </div>
-                                        <div className="grid grid-cols-2 gap-4">
-                                            <div>
-                                                <label className="block text-gray-400 text-sm mb-1">الصف</label>
-                                                <select
-                                                    className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-white focus:border-indigo-500 outline-none"
-                                                    value={selectedStudent.grade || ''}
-                                                    onChange={e => {
-                                                        setSelectedStudent({
-                                                            ...selectedStudent,
-                                                            grade: e.target.value,
-                                                            section: '',
-                                                            class: `${e.target.value} - `
-                                                        });
+                                        {/* Option: الصف / الفصل غير معروف في ملف الطالب */}
+                                        <div className="bg-black/30 border border-white/10 rounded-xl p-3 flex items-center justify-between">
+                                            <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={selectedStudent.grade === 'غير معروف' || !!selectedStudent.isGradeUnknown}
+                                                    onChange={(e) => {
+                                                        const isUnknown = e.target.checked;
+                                                        if (isUnknown) {
+                                                            setSelectedStudent(prev => ({
+                                                                ...prev,
+                                                                isGradeUnknown: true,
+                                                                grade: 'غير معروف',
+                                                                section: '',
+                                                                class: 'غير معروف'
+                                                            }));
+                                                        } else {
+                                                            const firstGrade = grades?.[0]?.name || '';
+                                                            setSelectedStudent(prev => ({
+                                                                ...prev,
+                                                                isGradeUnknown: false,
+                                                                grade: firstGrade,
+                                                                section: '',
+                                                                class: firstGrade ? `${firstGrade} - ` : ''
+                                                            }));
+                                                        }
                                                     }}
-                                                >
-                                                    <option value="">اختر الصف...</option>
-                                                    {grades?.map(g => <option key={g.id} value={g.name}>{g.name}</option>)}
-                                                </select>
-                                            </div>
-                                            <div>
-                                                <label className="block text-gray-400 text-sm mb-1">الشعبة</label>
-                                                <select
-                                                    className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-white focus:border-indigo-500 outline-none"
-                                                    value={selectedStudent.section || ''}
-                                                    onChange={e => setSelectedStudent({
-                                                        ...selectedStudent,
-                                                        section: e.target.value,
-                                                        class: `${selectedStudent.grade} - ${e.target.value}`
-                                                    })}
-                                                    disabled={!selectedStudent.grade}
-                                                >
-                                                    <option value="">اختر الشعبة...</option>
-                                                    {grades?.find(g => g.name === selectedStudent.grade)?.sections?.map(s => (
-                                                        <option key={s.id} value={s.name}>{s.name}</option>
-                                                    ))}
-                                                </select>
-                                            </div>
+                                                    className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 bg-gray-800 border-gray-700 cursor-pointer"
+                                                />
+                                                <div>
+                                                    <span className="text-xs font-bold text-gray-200 block">الصف / الفصل غير معروف</span>
+                                                    <span className="text-[11px] text-gray-400">تحديد حالة الطالب كصف غير معروف في قاعدة البيانات</span>
+                                                </div>
+                                            </label>
+                                            {(selectedStudent.grade === 'غير معروف' || !!selectedStudent.isGradeUnknown) && (
+                                                <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2.5 py-0.5 rounded-full font-bold">
+                                                    صف غير معروف
+                                                </span>
+                                            )}
                                         </div>
+
+                                        {(selectedStudent.grade === 'غير معروف' || !!selectedStudent.isGradeUnknown) ? (
+                                            <div className="bg-amber-950/20 border border-amber-500/30 rounded-xl p-3 text-xs text-amber-300 flex items-center gap-2">
+                                                <span>⚠️ تم تعيين الصف كـ <strong>غير معروف</strong>. ألغِ التحديد أعلاه لتحديد صف وشعبة الطالب.</span>
+                                            </div>
+                                        ) : (
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <div>
+                                                    <label className="block text-gray-400 text-sm mb-1">الصف</label>
+                                                    <select
+                                                        className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-white focus:border-indigo-500 outline-none cursor-pointer"
+                                                        value={selectedStudent.grade || ''}
+                                                        onChange={e => {
+                                                            setSelectedStudent({
+                                                                ...selectedStudent,
+                                                                grade: e.target.value,
+                                                                section: '',
+                                                                class: `${e.target.value} - `
+                                                            });
+                                                        }}
+                                                    >
+                                                        <option value="">اختر الصف...</option>
+                                                        {grades?.map(g => <option key={g.id} value={g.name}>{g.name}</option>)}
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-gray-400 text-sm mb-1">الشعبة</label>
+                                                    <select
+                                                        className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-white focus:border-indigo-500 outline-none cursor-pointer"
+                                                        value={selectedStudent.section || ''}
+                                                        onChange={e => setSelectedStudent({
+                                                            ...selectedStudent,
+                                                            section: e.target.value,
+                                                            class: `${selectedStudent.grade} - ${e.target.value}`
+                                                        })}
+                                                        disabled={!selectedStudent.grade}
+                                                    >
+                                                        <option value="">اختر الشعبة...</option>
+                                                        {grades?.find(g => g.name === selectedStudent.grade)?.sections?.map(s => (
+                                                            <option key={s.id} value={s.name}>{s.name}</option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+                                            </div>
+                                        )}
                                         <div>
                                             <label className="block text-gray-400 text-sm mb-1">رصيد النقاط (تعديل يدوي)</label>
                                             <input type="number" className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-white focus:border-indigo-500 outline-none font-mono"
