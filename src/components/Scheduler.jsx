@@ -24,7 +24,7 @@ export default function Scheduler() {
     const { activeProfile, eventTypes, weekends, holidays } = useSettings();
     const [events, setEvents] = useState([]);
     const [currentDate, setCurrentDate] = useState(new Date());
-    const [view, setView] = useState('week'); // week | month
+    const [view, setView] = useState(() => (typeof window !== 'undefined' && window.innerWidth < 768 ? 'day' : 'week')); // day | week | month
     const [calendarSystem, setCalendarSystem] = useState('gregory'); // gregory | hijri
     const [isLoading, setIsLoading] = useState(false);
     const schedulerRef = React.useRef(null); // Ref for Visual Print
@@ -56,7 +56,7 @@ export default function Scheduler() {
         setIsLoading(true);
         try {
             let start, end;
-            if (view === 'week') {
+            if (view === 'week' || view === 'day') {
                 start = startOfWeek(currentDate, { weekStartsOn: 0 }); // Sunday start
                 end = endOfWeek(currentDate, { weekStartsOn: 0 });
             } else {
@@ -810,8 +810,10 @@ export default function Scheduler() {
 
     // Navigation
     const navigate = (direction) => {
-        if (view === 'week') {
-            setCurrentDate(addDays(currentDate, direction * 7));
+        if (view === 'day') {
+            setCurrentDate(prev => addDays(prev, direction));
+        } else if (view === 'week') {
+            setCurrentDate(prev => addDays(prev, direction * 7));
         } else {
             const newDate = new Date(currentDate);
             newDate.setMonth(newDate.getMonth() + direction);
@@ -983,52 +985,90 @@ export default function Scheduler() {
                 </div>
             </div>
 
-            {/* Navigation Bar */}
-            <div className="flex items-center justify-between mb-6 bg-white/5 p-2 rounded-xl border border-white/5 no-print">
+            {/* Navigation & Controls Bar */}
+            <div className="flex items-center justify-between mb-4 bg-white/5 p-2 sm:p-2.5 rounded-xl border border-white/5 no-print">
                 <button onClick={prev} aria-label="الفترة السابقة" className="p-2 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-colors">
                     <ChevronRight size={20} />
                 </button>
 
-                <h2 className="text-lg font-bold text-white flex items-center gap-2" dir="ltr">
-                    {/* Display Week Range if in Week View */}
-                    {view === 'week' ? (
-                        <span className="font-mono bg-black/30 px-3 py-1 rounded-lg border border-white/10 text-sm">
-                            {format(startOfWeek(currentDate, { weekStartsOn: 0 }), 'd MMM')} - {format(endOfWeek(currentDate, { weekStartsOn: 0 }), 'd MMM')}
-                        </span>
-                    ) : (
-                        <span className="font-mono bg-black/30 px-3 py-1 rounded-lg border border-white/10 text-sm">
-                            {format(currentDate, 'yyyy')}
-                        </span>
-                    )}
-                </h2>
+                <div className="flex items-center gap-2">
+                    <h2 className="text-sm sm:text-base font-bold text-white text-center">
+                        {view === 'day' ? (
+                            <span className="flex items-center gap-2">
+                                <span>{format(currentDate, 'EEEE d MMMM', { locale: ar })}</span>
+                                <span className="text-xs text-indigo-300 font-mono hidden sm:inline">
+                                    ({calendarSystem === 'hijri' ? getHijriDate(currentDate) : format(currentDate, 'yyyy-MM-dd')})
+                                </span>
+                            </span>
+                        ) : view === 'week' ? (
+                            <span className="font-mono bg-black/30 px-3 py-1 rounded-lg border border-white/10 text-xs sm:text-sm" dir="ltr">
+                                {format(startOfWeek(currentDate, { weekStartsOn: 0 }), 'd MMM')} - {format(endOfWeek(currentDate, { weekStartsOn: 0 }), 'd MMM yyyy')}
+                            </span>
+                        ) : (
+                            <span className="font-mono bg-black/30 px-3 py-1 rounded-lg border border-white/10 text-xs sm:text-sm">
+                                {getMonthTitle(currentDate)}
+                            </span>
+                        )}
+                    </h2>
+
+                    <button
+                        onClick={() => setCurrentDate(new Date())}
+                        title="الانتقال إلى اليوم الحالي"
+                        className="px-2.5 py-1 text-xs font-bold rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 transition-colors"
+                    >
+                        اليوم
+                    </button>
+                </div>
 
                 <button onClick={next} aria-label="الفترة التالية" className="p-2 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-colors">
                     <ChevronLeft size={20} />
                 </button>
             </div>
 
-            {/* View Toggle */}
-            <div className="flex items-center space-x-4 space-x-reverse bg-black/20 p-1 rounded-xl mt-4 md:mt-0 no-print">
-                <button onClick={() => setView('week')} aria-label="عرض الأسبوع" className={`px-6 py-2 rounded-lg transition-all ${view === 'week' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}>أسبوع</button>
-                <button onClick={() => setView('month')} aria-label="عرض الشهر" className={`px-6 py-2 rounded-lg transition-all ${view === 'month' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}>شهر</button>
-            </div>
+            {/* View & Calendar System Toggles */}
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4 no-print">
+                {/* View Tabs: يوم | أسبوع | شهر */}
+                <div className="flex items-center bg-black/25 p-1 rounded-xl border border-white/5">
+                    <button
+                        onClick={() => setView('day')}
+                        aria-label="عرض اليوم"
+                        className={`px-3.5 sm:px-5 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all ${view === 'day' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}
+                    >
+                        يوم
+                    </button>
+                    <button
+                        onClick={() => setView('week')}
+                        aria-label="عرض الأسبوع"
+                        className={`px-3.5 sm:px-5 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all ${view === 'week' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}
+                    >
+                        أسبوع
+                    </button>
+                    <button
+                        onClick={() => setView('month')}
+                        aria-label="عرض الشهر"
+                        className={`px-3.5 sm:px-5 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all ${view === 'month' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}
+                    >
+                        شهر
+                    </button>
+                </div>
 
-            {/* Calendar System Toggle */}
-            <div className="bg-black/30 p-1 rounded-lg flex items-center ml-4 border border-white/5 no-print">
-                <button
-                    onClick={() => setCalendarSystem('gregory')}
-                    aria-label="التقويم الميلادي"
-                    className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${calendarSystem === 'gregory' ? 'bg-indigo-600 text-white shadow' : 'text-gray-400 hover:text-white'}`}
-                >
-                    ميلادي
-                </button>
-                <button
-                    onClick={() => setCalendarSystem('hijri')}
-                    aria-label="التقويم الهجري"
-                    className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${calendarSystem === 'hijri' ? 'bg-emerald-600 text-white shadow' : 'text-gray-400 hover:text-white'}`}
-                >
-                    هجري
-                </button>
+                {/* Calendar System: ميلادي | هجري */}
+                <div className="bg-black/25 p-1 rounded-xl flex items-center border border-white/5">
+                    <button
+                        onClick={() => setCalendarSystem('gregory')}
+                        aria-label="التقويم الميلادي"
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${calendarSystem === 'gregory' ? 'bg-indigo-600 text-white shadow' : 'text-gray-400 hover:text-white'}`}
+                    >
+                        ميلادي
+                    </button>
+                    <button
+                        onClick={() => setCalendarSystem('hijri')}
+                        aria-label="التقويم الهجري"
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${calendarSystem === 'hijri' ? 'bg-emerald-600 text-white shadow' : 'text-gray-400 hover:text-white'}`}
+                    >
+                        هجري
+                    </button>
+                </div>
             </div>
 
             {/* Content Area */}
@@ -1036,6 +1076,182 @@ export default function Scheduler() {
                 {isLoading && (
                     <div className="absolute inset-0 z-20 bg-[rgba(0,0,0,0.5)] flex items-center justify-center backdrop-blur-sm">
                         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500"></div>
+                    </div>
+                )}
+
+                {/* DAY VIEW */}
+                {view === 'day' && (
+                    <div className="bg-[rgba(0,0,0,0.2)] rounded-2xl border border-[rgba(255,255,255,0.1)] overflow-hidden" dir="rtl">
+                        {/* Days of current week quick selector bar */}
+                        <div className="p-2 sm:p-3 bg-black/40 border-b border-white/10 flex items-center justify-between gap-1.5 overflow-x-auto custom-scrollbar">
+                            {weekDays.map(d => {
+                                const isSelected = isSameDay(d, currentDate);
+                                const isToday = isSameDay(d, new Date());
+                                const dStr = format(d, 'yyyy-MM-dd');
+                                const dayEventsCount = events.filter(e => {
+                                    const eDate = e.startTime?.toDate ? format(e.startTime.toDate(), 'yyyy-MM-dd') : e.date;
+                                    return eDate === dStr;
+                                }).length;
+
+                                return (
+                                    <button
+                                        key={d.toISOString()}
+                                        onClick={() => setCurrentDate(d)}
+                                        className={`flex-1 min-w-[58px] py-2 px-1 rounded-xl flex flex-col items-center justify-center transition-all ${
+                                            isSelected
+                                                ? 'bg-gradient-to-b from-indigo-600 to-indigo-700 text-white shadow-lg shadow-indigo-600/30 ring-2 ring-indigo-400/50'
+                                                : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                                        }`}
+                                    >
+                                        <span className="text-[11px] font-bold">{format(d, 'EEEE', { locale: ar })}</span>
+                                        <span className="text-sm font-black font-mono mt-0.5">{format(d, 'd')}</span>
+                                        {isToday && (
+                                            <span className="text-[9px] text-amber-300 font-bold leading-none mt-0.5">اليوم</span>
+                                        )}
+                                        {dayEventsCount > 0 && (
+                                            <span className={`w-1.5 h-1.5 rounded-full mt-1 ${isSelected ? 'bg-amber-300' : 'bg-indigo-400'}`} />
+                                        )}
+                                    </button>
+                                );
+                            })}
+                        </div>
+
+                        {/* Selected Day Agenda Content */}
+                        {(() => {
+                            const dayStr = format(currentDate, 'yyyy-MM-dd');
+                            const isWeekend = weekends?.includes(currentDate.getDay());
+                            const holiday = holidays?.find(h => h.date === dayStr);
+                            const isBlocked = isWeekend || !!holiday;
+                            const blockReason = holiday ? `إجازة رسمية: ${holiday.reason}` : 'عطلة أسبوعية';
+
+                            const dayEvents = events.filter(e => {
+                                const eDate = e.startTime?.toDate ? format(e.startTime.toDate(), 'yyyy-MM-dd') : e.date;
+                                return eDate === dayStr;
+                            });
+
+                            if (isBlocked) {
+                                return (
+                                    <div className="p-8 text-center bg-rose-500/10 border border-rose-500/20 rounded-2xl m-4">
+                                        <span className="text-4xl block mb-3">🌴</span>
+                                        <h3 className="text-lg font-bold text-rose-300">{blockReason}</h3>
+                                        <p className="text-xs text-rose-200/70 mt-1">عطلة معتمدة - لا توجد حصص أو أنشطة مجدولة لهذا اليوم</p>
+                                    </div>
+                                );
+                            }
+
+                            return (
+                                <div className="divide-y divide-white/5">
+                                    {slots.map((slot, idx) => {
+                                        const isClass = slot.type === 'Class';
+                                        const matchingEvents = dayEvents.filter(ev => {
+                                            const evStart = ev.startTime?.toDate ? format(ev.startTime.toDate(), 'HH:mm') : (ev.startTime || '08:00');
+                                            const evEnd = ev.endTime?.toDate ? format(ev.endTime.toDate(), 'HH:mm') : (ev.endTime || '09:00');
+                                            return evStart < slot.end && evEnd > slot.start;
+                                        });
+
+                                        if (!isClass) {
+                                            return (
+                                                <div key={idx} className="flex items-center gap-3 py-2.5 px-4 bg-white/[0.02] text-gray-400 text-xs">
+                                                    <span className="font-semibold text-slate-300">{slot.label}</span>
+                                                    <span className="font-mono text-[11px] text-gray-500">({slot.start} - {slot.end})</span>
+                                                    <div className="flex-1 border-t border-dashed border-white/10" />
+                                                </div>
+                                            );
+                                        }
+
+                                        return (
+                                            <div key={idx} className="p-3 sm:p-4 hover:bg-white/[0.02] transition-colors">
+                                                <div className="flex items-center justify-between mb-2">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-xs font-black text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 rounded-md">
+                                                            {slot.label}
+                                                        </span>
+                                                        <span className="text-xs font-mono text-gray-400">
+                                                            {slot.start} - {slot.end}
+                                                        </span>
+                                                    </div>
+                                                    {matchingEvents.length === 0 && (
+                                                        <button
+                                                            onClick={() => handleCellClick(currentDate, slot)}
+                                                            className="text-xs text-indigo-300 hover:text-white bg-indigo-600/20 hover:bg-indigo-600/40 border border-indigo-500/30 px-2.5 py-1 rounded-lg flex items-center gap-1 transition-all"
+                                                        >
+                                                            <Plus size={13} />
+                                                            <span>إضافة نشاط</span>
+                                                        </button>
+                                                    )}
+                                                </div>
+
+                                                {matchingEvents.length > 0 ? (
+                                                    <div className="space-y-2 mt-2">
+                                                        {matchingEvents.map(ev => {
+                                                            const isDone = ev.status === 'Done' || ev.status === 'مكتمل';
+                                                            return (
+                                                                <div
+                                                                    key={ev.id}
+                                                                    onClick={(e) => handleEventClick(e, ev)}
+                                                                    className={`p-3.5 rounded-xl border cursor-pointer transition-all active:scale-[0.99] shadow-lg ${
+                                                                        isDone
+                                                                            ? 'bg-gradient-to-r from-emerald-950/70 to-teal-950/70 border-emerald-500/40 hover:border-emerald-400'
+                                                                            : 'bg-gradient-to-r from-indigo-950/70 to-purple-950/70 border-indigo-500/40 hover:border-indigo-400'
+                                                                    }`}
+                                                                >
+                                                                    <div className="flex items-start justify-between gap-2">
+                                                                        <div>
+                                                                            <h4 className="font-bold text-white text-sm sm:text-base leading-snug">
+                                                                                {ev.title}
+                                                                            </h4>
+                                                                            {ev.typeName && (
+                                                                                <span className="inline-block mt-1 text-[11px] text-indigo-300 bg-indigo-500/20 border border-indigo-500/30 px-2 py-0.5 rounded-full">
+                                                                                    🏷️ {ev.typeName}
+                                                                                </span>
+                                                                            )}
+                                                                        </div>
+                                                                        {isDone ? (
+                                                                            <span className="text-xs bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-1 rounded-lg font-bold flex items-center gap-1 shrink-0">
+                                                                                <CheckCircle size={13} /> تم التنفيذ
+                                                                            </span>
+                                                                        ) : (
+                                                                            <span className="text-xs bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-2 py-1 rounded-lg font-bold shrink-0">
+                                                                                مجدول
+                                                                            </span>
+                                                                        )}
+                                                                    </div>
+
+                                                                    <div className="mt-3 pt-2.5 border-t border-white/10 flex flex-wrap items-center justify-between text-xs text-gray-300 gap-2">
+                                                                        <div className="flex items-center gap-3 flex-wrap">
+                                                                            <span className="flex items-center gap-1 text-emerald-400">
+                                                                                <MapPin size={13} /> {ev.venueId || 'المدرسة'}
+                                                                            </span>
+                                                                            <span className="flex items-center gap-1 text-amber-400">
+                                                                                ⭐ {ev.points || 10} نقطة
+                                                                            </span>
+                                                                            <span className="flex items-center gap-1 text-blue-400">
+                                                                                <Users size={13} /> {ev.participatingStudents?.length || 0} طالب
+                                                                            </span>
+                                                                        </div>
+                                                                        <span className="text-[11px] text-gray-400 font-mono">
+                                                                            اضغط للتفاصيل ❯
+                                                                        </span>
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                ) : (
+                                                    <div
+                                                        onClick={() => handleCellClick(currentDate, slot)}
+                                                        className="py-3 px-4 rounded-xl border border-dashed border-white/10 hover:border-indigo-500/40 hover:bg-white/[0.02] cursor-pointer text-center text-xs text-gray-500 hover:text-indigo-300 transition-all flex items-center justify-center gap-1.5"
+                                                    >
+                                                        <Plus size={14} />
+                                                        <span>لا توجد أنشطة مجدولة (اضغط للحجز)</span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            );
+                        })()}
                     </div>
                 )}
 
@@ -1048,10 +1264,15 @@ export default function Scheduler() {
                             </div>
                         )}
 
+                        <div className="md:hidden flex items-center justify-between text-xs text-gray-400 bg-white/5 py-2 px-3 rounded-xl m-2 border border-white/5">
+                            <span>💡 اسحب أفقياً لاستعراض الحصص الدراسية</span>
+                            <button onClick={() => setView('day')} className="text-indigo-400 font-bold hover:underline">عرض اليوم ❯</button>
+                        </div>
+
                         <div className="min-w-[1000px]">
                             {/* Timeline Header */}
                             <div className="h-12 bg-[#1a1a20] border-b border-[rgba(255,255,255,0.1)] flex sticky top-0 z-30">
-                                <div className="w-32 shrink-0 border-l border-[rgba(255,255,255,0.1)] p-3 text-right font-bold text-gray-400 sticky right-0 bg-[#1a1a20] z-40 shadow-xl">اليوم</div>
+                                <div className="w-20 sm:w-32 shrink-0 border-l border-[rgba(255,255,255,0.1)] p-2 sm:p-3 text-right font-bold text-gray-400 sticky right-0 bg-[#1a1a20] z-40 shadow-xl text-xs sm:text-base">اليوم</div>
                                 <div className="flex-1 relative">
                                     {slots.map((slot, idx) => {
                                         const pos = getPositionStyle(slot.start, slot.end);
@@ -1087,9 +1308,9 @@ export default function Scheduler() {
                                     return (
                                         <div key={day.toString()} className={`flex h-36 group relative ${isBlocked ? 'bg-[rgba(136,19,55,0.05)]' : 'hover:bg-[rgba(255,255,255,0.05)]'} transition-colors`}>
                                             {/* Day Label */}
-                                            <div className="w-32 shrink-0 border-l border-[rgba(255,255,255,0.1)] p-4 bg-[rgba(26,26,32,0.95)] backdrop-blur sticky right-0 z-20 flex flex-col justify-center" style={{ boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)' }}>
-                                                <span className={`text-lg font-bold ${isBlocked ? 'text-rose-400' : 'text-white'}`}>{format(day, 'EEEE', { locale: ar })}</span>
-                                                <span className="text-sm text-gray-400 font-mono opacity-60">
+                                            <div className="w-20 sm:w-32 shrink-0 border-l border-[rgba(255,255,255,0.1)] p-2 sm:p-4 bg-[rgba(26,26,32,0.95)] backdrop-blur sticky right-0 z-20 flex flex-col justify-center" style={{ boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)' }}>
+                                                <span className={`text-sm sm:text-lg font-bold truncate ${isBlocked ? 'text-rose-400' : 'text-white'}`}>{format(day, 'EEEE', { locale: ar })}</span>
+                                                <span className="text-[10px] sm:text-sm text-gray-400 font-mono opacity-60 truncate">
                                                     {calendarSystem === 'hijri' ? getHijriDate(day) : format(day, 'd MMM')}
                                                 </span>
                                             </div>

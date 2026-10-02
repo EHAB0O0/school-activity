@@ -490,7 +490,7 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                     </div>
                 )}
 
-                <div className="p-4 sm:p-6 overflow-y-auto custom-scrollbar space-y-6 flex-1">
+                <div className="p-4 sm:p-6 overflow-y-auto overflow-x-hidden custom-scrollbar space-y-6 flex-1">
                     {/* READONLY WARNING REMOVED as we want full edit access now */}
 
                     {conflict && (
@@ -952,20 +952,70 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                     </form>
                 </div>
 
-                <div className="p-4 sm:p-6 border-t border-white/10 flex flex-wrap justify-between items-center gap-2.5 bg-[#141418] sticky bottom-0 z-20 shrink-0">
-                    {initialData?.id && (
-                        <button type="button" onClick={() => onDelete(initialData)} className="px-3.5 py-2.5 rounded-xl text-red-400 hover:bg-red-500/10 border border-transparent hover:border-red-500/30 flex items-center transition-all text-xs sm:text-sm">
-                            <Trash2 size={16} className="ml-1.5" /> حذف النشاط
+                {/* Mobile Responsive Footer (< sm) */}
+                <div className="sm:hidden p-3.5 border-t border-white/10 bg-[#141418] sticky bottom-0 z-20 shrink-0 space-y-2">
+                    {initialData?.id && initialData?.status !== 'Done' && (
+                        <button
+                            type="button"
+                            onClick={() => onSave({
+                                ...initialData,
+                                ...formData,
+                                participatingStudents: formData.studentIds,
+                                linkStudentIds: (formData.linkStudentIds || []).filter(id => formData.studentIds.includes(id)),
+                                status: 'Done',
+                                markDone: true
+                            })}
+                            className="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold shadow-lg flex items-center justify-center text-sm active:scale-[0.98] transition-transform"
+                        >
+                            <CheckCircle size={17} className="ml-1.5" />
+                            تأكيد التنفيذ ورصد النقاط
                         </button>
                     )}
 
-                    <div className="flex items-center gap-2 mr-auto flex-wrap">
+                    <button
+                        form="eventForm"
+                        type="submit"
+                        disabled={checking || isSubmitting}
+                        className="w-full py-3 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold shadow-lg flex items-center justify-center text-sm active:scale-[0.98] transition-transform disabled:opacity-50"
+                    >
+                        {checking || isSubmitting ? 'جاري التحقق...' : (initialData?.id ? 'حفظ التعديلات' : (isRecurring ? 'إنشاء المتكرر' : 'إنشاء النشاط'))}
+                    </button>
+
+                    <div className={`grid ${initialData?.id ? 'grid-cols-2' : 'grid-cols-1'} gap-2`}>
+                        <button
+                            type="button"
+                            onClick={onClose}
+                            className="w-full py-2.5 rounded-xl text-gray-300 hover:bg-white/5 transition-all text-xs font-semibold border border-white/10 text-center"
+                        >
+                            إلغاء
+                        </button>
+                        {initialData?.id && (
+                            <button
+                                type="button"
+                                onClick={() => onDelete(initialData)}
+                                className="w-full py-2.5 rounded-xl text-red-400 hover:bg-red-500/10 border border-red-500/20 flex items-center justify-center transition-all text-xs font-semibold"
+                            >
+                                <Trash2 size={14} className="ml-1" /> حذف النشاط
+                            </button>
+                        )}
+                    </div>
+                </div>
+
+                {/* Desktop Footer (>= sm) */}
+                <div className="hidden sm:flex p-4 sm:p-6 border-t border-white/10 justify-between items-center gap-3 bg-[#141418] sticky bottom-0 z-20 shrink-0">
+                    {initialData?.id ? (
+                        <button type="button" onClick={() => onDelete(initialData)} className="px-3.5 py-2.5 rounded-xl text-red-400 hover:bg-red-500/10 border border-transparent hover:border-red-500/30 flex items-center transition-all text-xs sm:text-sm">
+                            <Trash2 size={16} className="ml-1.5" /> حذف النشاط
+                        </button>
+                    ) : <div />}
+
+                    <div className="flex items-center gap-2 flex-wrap">
                         <button type="button" onClick={onClose} className="px-4 py-2.5 rounded-xl text-gray-400 hover:bg-white/5 transition-all text-xs sm:text-sm border border-white/5">إلغاء</button>
+                        
                         <button form="eventForm" type="submit" disabled={checking || isSubmitting} className="px-5 sm:px-8 py-2.5 sm:py-3 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold shadow-lg transition-transform transform active:scale-95 flex items-center hover:shadow-indigo-500/25 text-xs sm:text-sm">
                             {checking || isSubmitting ? 'جاري التحقق...' : (initialData?.id ? 'حفظ التعديلات' : (isRecurring ? 'إنشاء المتكرر' : 'إنشاء النشاط'))}
                         </button>
 
-                        {/* Status Change Button (Simplified) - usually handled in parent or here? */}
                         {initialData?.id && initialData?.status !== 'Done' && (
                             <button
                                 type="button"
@@ -977,7 +1027,7 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                                     status: 'Done',
                                     markDone: true
                                 })}
-                                className="px-4 py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold shadow-lg flex items-center text-sm"
+                                className="px-4 py-2.5 sm:py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold shadow-lg flex items-center text-xs sm:text-sm"
                             >
                                 <CheckCircle size={16} className="ml-1" />
                                 تأكيد التنفيذ ورصد النقاط
