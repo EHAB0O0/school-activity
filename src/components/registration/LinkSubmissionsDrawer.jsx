@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {
     X, CheckCircle, XCircle, Search, Download, Printer,
     AlertTriangle, UserCheck, Trash2, Edit2, ShieldAlert,
@@ -22,6 +22,8 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
     const [submissions, setSubmissions] = useState([]);
     const [students, setStudents] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [isApproving, setIsApproving] = useState(false);
+    const processingSubIdsRef = useRef(new Set());
     const [searchTerm, setSearchTerm] = useState('');
     const [statusFilter, setStatusFilter] = useState('all'); // all | pending | approved | rejected | waitlist | matched | unregistered | discrepancy | duplicate
     const [gradeFilter, setGradeFilter] = useState('all'); // all | unknown | specific grade
@@ -387,6 +389,19 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
         customPoints = null,
         timingOverride = null
     }) => {
+        if (!sub || !sub.id || processingSubIdsRef.current.has(sub.id) || isApproving) {
+            return;
+        }
+
+        if (sub.status === 'approved') {
+            toast.error("هذا الطالب تم اعتماده مسبقاً");
+            setStudentActionSub(null);
+            return;
+        }
+
+        processingSubIdsRef.current.add(sub.id);
+        setIsApproving(true);
+
         try {
             const rawPoints = customPoints !== null ? Number(customPoints) : (Number(link.pointsPerStudent) || 0);
             const effectiveTiming = timingOverride || link.pointsTiming || 'immediate';
@@ -539,10 +554,14 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
             setShowManualReassign(false);
             setReassignSearchQuery('');
             setActionPointsOverride(null);
-            setActionTimingOverride(null);
         } catch (err) {
             console.error("Approve error:", err);
             toast.error("فشل في اعتماد الطالب: " + err.message);
+        } finally {
+            if (sub?.id) {
+                processingSubIdsRef.current.delete(sub.id);
+            }
+            setIsApproving(false);
         }
     };
 
@@ -1435,6 +1454,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                                 {sub.status !== 'approved' && dupInfo.matchedStudent && !dupInfo.hasDiscrepancy && (
                                                     <button
                                                         type="button"
+                                                        disabled={isApproving}
                                                         onClick={() => handleApproveStudent({
                                                             sub,
                                                             targetStudent: dupInfo.matchedStudent,
@@ -1442,7 +1462,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                                             createProfile: false,
                                                             eventOnly: false
                                                         })}
-                                                        className="px-2.5 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/40 border border-emerald-500/30 text-emerald-300 text-xs font-bold flex items-center gap-1 transition-colors"
+                                                        className="px-2.5 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/40 disabled:opacity-50 disabled:cursor-not-allowed border border-emerald-500/30 text-emerald-300 text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer"
                                                         title="اعتماد مباشر وربط بالملف ورصد النقاط"
                                                     >
                                                         <CheckCircle size={14} />
@@ -1837,12 +1857,21 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
 
                                 {/* Action Options */}
                                 <div className="space-y-2 pt-1">
-                                    <span className="text-xs text-slate-400 font-bold block">اختر طريقة الاعتماد والتعامل:</span>
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-xs text-slate-400 font-bold block">اختر طريقة الاعتماد والتعامل:</span>
+                                        {isApproving && (
+                                            <span className="text-[11px] text-indigo-400 font-bold flex items-center gap-1.5 animate-pulse">
+                                                <div className="w-3.5 h-3.5 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin" />
+                                                <span>جاري الاعتماد...</span>
+                                            </span>
+                                        )}
+                                    </div>
 
                                     {/* Option 1: Direct link & award points */}
                                     {matchedStudent && (
                                         <button
                                             type="button"
+                                            disabled={isApproving}
                                             onClick={() => handleApproveStudent({
                                                 sub,
                                                 targetStudent: matchedStudent,
@@ -1852,7 +1881,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                                 customPoints: rawPoints,
                                                 timingOverride: effectiveTiming
                                             })}
-                                            className="w-full p-3 rounded-xl bg-emerald-600/15 hover:bg-emerald-600/25 border border-emerald-500/40 text-right text-xs text-white flex flex-col gap-1 transition-all group"
+                                            className="w-full p-3 rounded-xl bg-emerald-600/15 hover:bg-emerald-600/25 disabled:opacity-50 disabled:cursor-not-allowed border border-emerald-500/40 text-right text-xs text-white flex flex-col gap-1 transition-all group cursor-pointer"
                                         >
                                             <div className="flex items-center justify-between">
                                                 <span className="font-bold text-emerald-300 flex items-center gap-1.5">
@@ -1871,6 +1900,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                     {matchedStudent && (!isGradeMatch || !isSecMatch || (!isPhoneMatch && subPhone)) && (
                                         <button
                                             type="button"
+                                            disabled={isApproving}
                                             onClick={() => handleApproveStudent({
                                                 sub,
                                                 targetStudent: matchedStudent,
@@ -1880,7 +1910,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                                 customPoints: rawPoints,
                                                 timingOverride: effectiveTiming
                                             })}
-                                            className="w-full p-3 rounded-xl bg-amber-600/15 hover:bg-amber-600/25 border border-amber-500/40 text-right text-xs text-white flex flex-col gap-1 transition-all group"
+                                            className="w-full p-3 rounded-xl bg-amber-600/15 hover:bg-amber-600/25 disabled:opacity-50 disabled:cursor-not-allowed border border-amber-500/40 text-right text-xs text-white flex flex-col gap-1 transition-all group cursor-pointer"
                                         >
                                             <div className="flex items-center justify-between">
                                                 <span className="font-bold text-amber-300 flex items-center gap-1.5">
@@ -1898,6 +1928,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                     {/* Option 3: Event-only approval (no points or profile modification) */}
                                     <button
                                         type="button"
+                                        disabled={isApproving}
                                         onClick={() => handleApproveStudent({
                                             sub,
                                             targetStudent: matchedStudent,
@@ -1907,7 +1938,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                             customPoints: 0,
                                             timingOverride: 'immediate'
                                         })}
-                                        className="w-full p-3 rounded-xl bg-slate-800 hover:bg-slate-750 border border-slate-700 text-right text-xs text-white flex flex-col gap-1 transition-all"
+                                        className="w-full p-3 rounded-xl bg-slate-800 hover:bg-slate-750 disabled:opacity-50 disabled:cursor-not-allowed border border-slate-700 text-right text-xs text-white flex flex-col gap-1 transition-all cursor-pointer"
                                     >
                                         <span className="font-bold text-slate-200 flex items-center gap-1.5">
                                             <Calendar size={15} className="text-slate-400" />
@@ -1921,6 +1952,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                     {/* Option 4: Create new student profile in school */}
                                     <button
                                         type="button"
+                                        disabled={isApproving}
                                         onClick={() => handleApproveStudent({
                                             sub,
                                             targetStudent: null,
@@ -1930,7 +1962,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                             customPoints: rawPoints,
                                             timingOverride: effectiveTiming
                                         })}
-                                        className={`w-full p-3 rounded-xl border text-right text-xs text-white flex flex-col gap-1 transition-all ${
+                                        className={`w-full p-3 rounded-xl border text-right text-xs text-white flex flex-col gap-1 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
                                             !matchedStudent
                                                 ? 'bg-indigo-600/20 hover:bg-indigo-600/30 border-indigo-500/40'
                                                 : 'bg-slate-800 hover:bg-slate-750 border-slate-700'

@@ -67,4 +67,22 @@ body,
         --color-purple-600: #9333ea;
         --color-gray-900: #111827;
     }
+
+    button,
+    [role="button"],
+    input[type="button"],
+    input[type="submit"],
+    input[type="reset"],
+    select,
+    summary {
+        cursor: pointer;
+    }
+
+    button:disabled,
+    [role="button"][aria-disabled="true"],
+    input[type="button"]:disabled,
+    input[type="submit"]:disabled,
+    select:disabled {
+        cursor: not-allowed;
+    }
 }

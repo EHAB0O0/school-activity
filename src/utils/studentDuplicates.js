@@ -67,7 +67,7 @@ export const enrichDuplicateGroupsWithEvents = (groups, allEvents) => {
             // 10 pts per event + 1 pt per point + 5 pts for grade/section + 2 pts per spec + 3 pts for notes
             const completenessScore =
                 (studentEvents.length * 10) +
-                Math.min(student.totalPoints || 0, 100) +
+                Math.min(st.totalPoints || 0, 100) +
                 (st.grade ? 5 : 0) +
                 (st.section ? 5 : 0) +
                 ((st.specializations || []).length * 2) +
