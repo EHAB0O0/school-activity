@@ -24,6 +24,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
     const [statusFilter, setStatusFilter] = useState('all'); // all | pending | approved | rejected | waitlist | matched | unregistered | discrepancy | duplicate
+    const [gradeFilter, setGradeFilter] = useState('all'); // all | unknown | specific grade
     const [selectedIds, setSelectedIds] = useState([]);
     const [lastSelectedId, setLastSelectedId] = useState(null);
     const [editingSubmission, setEditingSubmission] = useState(null);
@@ -225,11 +226,12 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                 const subGradeNorm = normalizeArabic(sub.grade);
                 const stuGradeNorm = normalizeArabic(matchedStudent.grade);
                 const stuClassNorm = normalizeArabic(matchedStudent.class || '');
-                isSameGrade = !subGradeNorm || stuGradeNorm === subGradeNorm || stuClassNorm.includes(subGradeNorm);
+                const isSubUnknown = !subGradeNorm || subGradeNorm === 'غير معروف' || !!sub.isGradeUnknown;
+                isSameGrade = isSubUnknown || stuGradeNorm === subGradeNorm || stuClassNorm.includes(subGradeNorm);
 
                 const subSec = String(sub.section || '').trim();
                 const stuSec = String(matchedStudent.section || '').trim();
-                isSameSection = !subSec || !stuSec || subSec === stuSec;
+                isSameSection = isSubUnknown || !subSec || !stuSec || subSec === stuSec;
 
                 isSamePhone = !subPhone || !matchedStudent.sPhone || subPhone === matchedStudent.sPhone;
             }
@@ -283,6 +285,21 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
         ? link.specializations.join('، ')
         : (link?.specialization || 'عام');
 
+    // Available unique grades & unknown grade count
+    const availableGrades = useMemo(() => {
+        const set = new Set();
+        submissions.forEach(s => {
+            if (s.grade && s.grade !== 'غير معروف') {
+                set.add(s.grade);
+            }
+        });
+        return Array.from(set).sort();
+    }, [submissions]);
+
+    const unknownGradesCount = useMemo(() => {
+        return submissions.filter(s => !s.grade || s.grade === 'غير معروف' || !!s.isGradeUnknown).length;
+    }, [submissions]);
+
     if (!isOpen || !link) return null;
 
     // Filtered Submissions
@@ -307,7 +324,14 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
         else if (statusFilter === 'discrepancy') matchesStatus = !!dup.hasDiscrepancy;
         else if (statusFilter === 'duplicate') matchesStatus = !!dup.duplicateInLink;
 
-        return matchesSearch && matchesStatus;
+        let matchesGrade = true;
+        if (gradeFilter === 'unknown') {
+            matchesGrade = !sub.grade || sub.grade === 'غير معروف' || !!sub.isGradeUnknown;
+        } else if (gradeFilter !== 'all') {
+            matchesGrade = sub.grade === gradeFilter;
+        }
+
+        return matchesSearch && matchesStatus && matchesGrade;
     });
 
     // Counts
@@ -836,11 +860,15 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                     ? customFields.map(f => s.customValues?.[f.id] || (f.id === 'f_legacy' ? s.customFieldValue : '') || (customFields.length === 1 ? s.customFieldValue : '') || '-')
                     : [s.customFieldValue || '-'];
 
+                const isUnknown = s.grade === 'غير معروف' || !!s.isGradeUnknown;
+                const gradeStr = isUnknown ? 'غير معروف' : (s.grade || '');
+                const sectionStr = isUnknown ? '-' : (s.section || '');
+
                 return [
                     idx + 1,
                     s.studentName || '',
-                    s.grade || '',
-                    s.section || '',
+                    gradeStr,
+                    sectionStr,
                     ...customVals,
                     s.phone || '',
                     s.status === 'approved' ? 'معتمد' : s.status === 'pending' ? 'بانتظار المراجعة' : s.status === 'waitlist' ? 'قائمة انتظار' : 'مرفوض',
@@ -850,7 +878,22 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
         ];
 
         const ws = XLSX.utils.aoa_to_sheet(data);
+
+        // Auto-fit column widths & set RTL
+        const maxColLengths = data[0].map((_, colIdx) => {
+            let maxLen = 10;
+            data.forEach(row => {
+                const valStr = String(row[colIdx] ?? '');
+                if (valStr.length > maxLen) maxLen = valStr.length;
+            });
+            return { wch: Math.min(Math.max(maxLen + 3, 12), 40) };
+        });
+        ws['!cols'] = maxColLengths;
+        ws['!views'] = [{ RTL: true }];
+
         const wb = XLSX.utils.book_new();
+        if (!wb.Workbook) wb.Workbook = {};
+        wb.Workbook.Views = [{ RTL: true }];
         XLSX.utils.book_append_sheet(wb, ws, "المسجلون");
         XLSX.writeFile(wb, `سجل_تسجيل_${link.title.replace(/\s+/g, '_')}.xlsx`);
         toast.success("تم تصدير ملف Excel بنجاح");
@@ -884,11 +927,14 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                 ? customFields.map(f => `<td>${s.customValues?.[f.id] || (f.id === 'f_legacy' ? s.customFieldValue : '') || (customFields.length === 1 ? s.customFieldValue : '') || '-'}</td>`).join('')
                 : `<td>${s.customFieldValue || '-'}</td>`;
 
+            const isUnknown = s.grade === 'غير معروف' || !!s.isGradeUnknown;
+            const classDisplay = isUnknown ? 'غير معروف' : (s.grade && s.section ? `${s.grade} / ${s.section}` : (s.grade || '-'));
+
             return `
                 <tr>
                     <td style="text-align:center;">${idx + 1}</td>
                     <td style="font-weight:bold;">${s.studentName || ''}</td>
-                    <td style="text-align:center;">${s.grade || ''} / ${s.section || ''}</td>
+                    <td style="text-align:center;">${classDisplay}</td>
                     ${customTds}
                     <td style="text-align:center;">${s.status === 'approved' ? 'معتمد' : s.status === 'pending' ? 'بانتظار الاعتماد' : s.status === 'waitlist' ? 'انتظار' : 'مرفوض'}</td>
                     <td style="width:120px; border-bottom: 1px dotted #94a3b8;"></td>
@@ -1116,6 +1162,19 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                             <option value="waitlist">قائمة انتظار ({counts.waitlist})</option>
                             <option value="rejected">مرفوض ({counts.rejected})</option>
                         </select>
+
+                        {/* Grade Filter */}
+                        <select
+                            value={gradeFilter}
+                            onChange={(e) => setGradeFilter(e.target.value)}
+                            className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-500 font-semibold"
+                        >
+                            <option value="all">كل الصفوف</option>
+                            <option value="unknown">❓ غير معروف ({unknownGradesCount})</option>
+                            {availableGrades.map(g => (
+                                <option key={g} value={g}>{g}</option>
+                            ))}
+                        </select>
                     </div>
 
                     {/* Export & Print */}
@@ -1230,8 +1289,15 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                                         <h4 className="font-bold text-white text-sm">
                                                             {sub.studentName}
                                                         </h4>
-                                                        <span className="text-xs px-2 py-0.5 rounded-md bg-slate-700 text-slate-300 font-semibold">
-                                                            {sub.grade} - شعبة {sub.section || '1'}
+                                                        <span className={`text-xs px-2 py-0.5 rounded-md font-semibold ${
+                                                            sub.grade === 'غير معروف' || !sub.grade || sub.isGradeUnknown
+                                                                ? 'bg-amber-950/70 border border-amber-600/50 text-amber-300'
+                                                                : 'bg-slate-700 text-slate-300'
+                                                        }`}>
+                                                            {sub.grade === 'غير معروف' || !sub.grade || sub.isGradeUnknown
+                                                                ? 'الصف غير معروف'
+                                                                : `${sub.grade} - شعبة ${sub.section || '1'}`
+                                                            }
                                                         </span>
 
                                                         {/* Smart Status Badges */}

@@ -32,6 +32,7 @@ export default function PublicRegistrationPage() {
     // Single Form State
     const [singleForm, setSingleForm] = useState({
         studentName: '',
+        isGradeUnknown: false,
         grade: '',
         section: '',
         phone: '',
@@ -41,9 +42,9 @@ export default function PublicRegistrationPage() {
 
     // Rapid Entry State (multi-row)
     const [rapidRows, setRapidRows] = useState([
-        { studentName: '', grade: '', section: '', customValues: {}, phone: '' },
-        { studentName: '', grade: '', section: '', customValues: {}, phone: '' },
-        { studentName: '', grade: '', section: '', customValues: {}, phone: '' }
+        { studentName: '', isGradeUnknown: false, grade: '', section: '', customValues: {}, phone: '' },
+        { studentName: '', isGradeUnknown: false, grade: '', section: '', customValues: {}, phone: '' },
+        { studentName: '', isGradeUnknown: false, grade: '', section: '', customValues: {}, phone: '' }
     ]);
 
     // Submissions by this link listener
@@ -298,12 +299,18 @@ export default function PublicRegistrationPage() {
             });
             const customFieldValue = Object.values(customValues).filter(Boolean).join(' | ');
 
+            const isUnknown = !!singleForm.isGradeUnknown;
+            const finalGrade = isUnknown ? 'غير معروف' : (singleForm.grade || gradeOptions[0] || '');
+            const finalSection = isUnknown ? '' : (singleForm.section || '1');
+            const finalClass = isUnknown ? 'غير معروف' : `${finalGrade} / ${finalSection}`.trim();
+
             const payload = {
                 linkId: linkData.id,
                 studentName: singleForm.studentName.trim(),
-                grade: singleForm.grade || gradeOptions[0] || '',
-                section: singleForm.section || '1',
-                class: `${singleForm.grade || ''} / ${singleForm.section || '1'}`.trim(),
+                grade: finalGrade,
+                section: finalSection,
+                class: finalClass,
+                isGradeUnknown: isUnknown,
                 phone: singleForm.phone || '',
                 customValues,
                 customFieldValue,
@@ -329,12 +336,14 @@ export default function PublicRegistrationPage() {
                 setSingleForm(prev => ({
                     ...prev,
                     studentName: '',
+                    isGradeUnknown: false,
                     phone: '',
                     customValues: {}
                 }));
             } else {
                 setSingleForm({
                     studentName: '',
+                    isGradeUnknown: false,
                     grade: gradeOptions[0] || '',
                     section: '1',
                     phone: '',
@@ -393,12 +402,18 @@ export default function PublicRegistrationPage() {
                 });
                 const customFieldValue = Object.values(customValues).filter(Boolean).join(' | ');
 
+                const isUnknown = !!row.isGradeUnknown || row.grade === 'غير معروف';
+                const finalGrade = isUnknown ? 'غير معروف' : (row.grade || gradeOptions[0] || '');
+                const finalSection = isUnknown ? '' : (row.section || '1');
+                const finalClass = isUnknown ? 'غير معروف' : `${finalGrade} / ${finalSection}`.trim();
+
                 await addDoc(collection(db, 'link_submissions'), {
                     linkId: linkData.id,
                     studentName: row.studentName.trim(),
-                    grade: row.grade || gradeOptions[0] || '',
-                    section: row.section || '1',
-                    class: `${row.grade || ''} / ${row.section || '1'}`.trim(),
+                    grade: finalGrade,
+                    section: finalSection,
+                    class: finalClass,
+                    isGradeUnknown: isUnknown,
                     phone: row.phone || '',
                     customValues,
                     customFieldValue,
@@ -417,9 +432,9 @@ export default function PublicRegistrationPage() {
             const defaultGrade = gradeOptions[0] || '';
             const defaultSection = getSectionOptions(defaultGrade)[0] || '1';
             setRapidRows([
-                { studentName: '', grade: defaultGrade, section: defaultSection, customValues: {}, phone: '' },
-                { studentName: '', grade: defaultGrade, section: defaultSection, customValues: {}, phone: '' },
-                { studentName: '', grade: defaultGrade, section: defaultSection, customValues: {}, phone: '' }
+                { studentName: '', isGradeUnknown: false, grade: defaultGrade, section: defaultSection, customValues: {}, phone: '' },
+                { studentName: '', isGradeUnknown: false, grade: defaultGrade, section: defaultSection, customValues: {}, phone: '' },
+                { studentName: '', isGradeUnknown: false, grade: defaultGrade, section: defaultSection, customValues: {}, phone: '' }
             ]);
         } catch (err) {
             console.error("Rapid submit error:", err);
@@ -453,11 +468,17 @@ export default function PublicRegistrationPage() {
             const customValues = editingSub.customValues || {};
             const customFieldValue = Object.values(customValues).filter(Boolean).join(' | ') || editingSub.customFieldValue || '';
 
+            const isUnknown = editingSub.grade === 'غير معروف' || !!editingSub.isGradeUnknown;
+            const finalGrade = isUnknown ? 'غير معروف' : (editingSub.grade || '');
+            const finalSection = isUnknown ? '' : (editingSub.section || '');
+            const finalClass = isUnknown ? 'غير معروف' : `${finalGrade} / ${finalSection}`.trim();
+
             await updateDoc(doc(db, 'link_submissions', editingSub.id), {
                 studentName: editingSub.studentName,
-                grade: editingSub.grade,
-                section: editingSub.section,
-                class: `${editingSub.grade || ''} / ${editingSub.section || ''}`.trim(),
+                grade: finalGrade,
+                section: finalSection,
+                class: finalClass,
+                isGradeUnknown: isUnknown,
                 customValues,
                 customFieldValue,
                 phone: editingSub.phone || '',
@@ -684,41 +705,80 @@ export default function PublicRegistrationPage() {
                                     />
                                 </div>
 
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                                            الصف الدراسي <span className="text-rose-400">*</span>
-                                        </label>
-                                        <select
-                                            value={singleForm.grade}
+                                {/* Option: الصف غير معروف (بين خانة الاسم والصف) */}
+                                <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-3 flex items-center justify-between">
+                                    <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                                        <input
+                                            type="checkbox"
+                                            checked={!!singleForm.isGradeUnknown}
                                             onChange={(e) => {
-                                                const newGrade = e.target.value;
-                                                const firstSec = getSectionOptions(newGrade)[0] || '1';
-                                                setSingleForm({ ...singleForm, grade: newGrade, section: firstSec });
+                                                const isUnknown = e.target.checked;
+                                                setSingleForm(prev => ({
+                                                    ...prev,
+                                                    isGradeUnknown: isUnknown,
+                                                    grade: isUnknown ? 'غير معروف' : (prev.grade === 'غير معروف' ? (gradeOptions[0] || '') : prev.grade || gradeOptions[0] || ''),
+                                                    section: isUnknown ? '' : (prev.section || getSectionOptions(gradeOptions[0] || '')[0] || '1')
+                                                }));
                                             }}
-                                            className="w-full px-4 py-3 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500 transition-colors"
-                                        >
-                                            {gradeOptions.map(g => (
-                                                <option key={g} value={g}>{g}</option>
-                                            ))}
-                                        </select>
-                                    </div>
-
-                                    <div>
-                                        <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                                            الشعبة <span className="text-rose-400">*</span>
-                                        </label>
-                                        <select
-                                            value={singleForm.section}
-                                            onChange={(e) => setSingleForm({ ...singleForm, section: e.target.value })}
-                                            className="w-full px-4 py-3 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500 transition-colors"
-                                        >
-                                            {getSectionOptions(singleForm.grade).map(sec => (
-                                                <option key={sec} value={sec}>شعبة {sec}</option>
-                                            ))}
-                                        </select>
-                                    </div>
+                                            className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 bg-slate-800 border-slate-700"
+                                        />
+                                        <div>
+                                            <span className="text-xs font-bold text-slate-200 block">
+                                                الصف غير معروف
+                                            </span>
+                                            <span className="text-[11px] text-slate-400">
+                                                حدد هذا الخيار إذا لم تكن متأكداً من صف الطالب أو تعذر تحديده حالياً
+                                            </span>
+                                        </div>
+                                    </label>
+                                    {singleForm.isGradeUnknown && (
+                                        <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2.5 py-1 rounded-full font-bold">
+                                            صف غير معروف
+                                        </span>
+                                    )}
                                 </div>
+
+                                {singleForm.isGradeUnknown ? (
+                                    <div className="bg-amber-950/20 border border-amber-500/30 rounded-xl p-3 text-xs text-amber-300 flex items-center gap-2">
+                                        <span>⚠️ تم تعيين الصف كـ <strong>غير معروف</strong>. لا يلزم اختيار الصف أو الشعبة.</span>
+                                    </div>
+                                ) : (
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                                                الصف الدراسي <span className="text-rose-400">*</span>
+                                            </label>
+                                            <select
+                                                value={singleForm.grade}
+                                                onChange={(e) => {
+                                                    const newGrade = e.target.value;
+                                                    const firstSec = getSectionOptions(newGrade)[0] || '1';
+                                                    setSingleForm({ ...singleForm, grade: newGrade, section: firstSec });
+                                                }}
+                                                className="w-full px-4 py-3 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500 transition-colors"
+                                            >
+                                                {gradeOptions.map(g => (
+                                                    <option key={g} value={g}>{g}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                                                الشعبة <span className="text-rose-400">*</span>
+                                            </label>
+                                            <select
+                                                value={singleForm.section}
+                                                onChange={(e) => setSingleForm({ ...singleForm, section: e.target.value })}
+                                                className="w-full px-4 py-3 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500 transition-colors"
+                                            >
+                                                {getSectionOptions(singleForm.grade).map(sec => (
+                                                    <option key={sec} value={sec}>شعبة {sec}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    </div>
+                                )}
 
                                 {/* Dynamic Custom Fields for Single Mode */}
                                 {customFields.length > 0 && (
@@ -818,42 +878,82 @@ export default function PublicRegistrationPage() {
                                                 className="flex-2 min-w-[150px] px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white"
                                             />
 
-                                            <select
-                                                value={row.grade || gradeOptions[0]}
-                                                onChange={(e) => {
-                                                    const newGrade = e.target.value;
-                                                    const availableSections = getSectionOptions(newGrade);
-                                                    const updated = [...rapidRows];
-                                                    updated[idx] = {
-                                                        ...updated[idx],
-                                                        grade: newGrade,
-                                                        section: availableSections[0] || '1'
-                                                    };
-                                                    setRapidRows(updated);
-                                                }}
-                                                className="w-28 px-2 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white"
+                                            {/* خيار الصف غير معروف بين خانة الاسم والصف */}
+                                            <label
+                                                className={`flex items-center gap-1.5 px-2.5 py-2 rounded-xl border text-[11px] font-semibold cursor-pointer shrink-0 select-none transition-all ${
+                                                    row.isGradeUnknown
+                                                        ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
+                                                        : 'bg-slate-900/80 border-slate-700 text-slate-400 hover:text-slate-200'
+                                                }`}
+                                                title="الصف غير معروف لهذا الطالب"
                                             >
-                                                {gradeOptions.map(g => (
-                                                    <option key={g} value={g}>{g}</option>
-                                                ))}
-                                            </select>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={!!row.isGradeUnknown}
+                                                    onChange={(e) => {
+                                                        const isUnknown = e.target.checked;
+                                                        const updated = [...rapidRows];
+                                                        updated[idx] = {
+                                                            ...updated[idx],
+                                                            isGradeUnknown: isUnknown,
+                                                            grade: isUnknown ? 'غير معروف' : (gradeOptions[0] || ''),
+                                                            section: isUnknown ? '' : (getSectionOptions(gradeOptions[0] || '')[0] || '1')
+                                                        };
+                                                        setRapidRows(updated);
+                                                    }}
+                                                    className="w-3.5 h-3.5 rounded text-indigo-600 focus:ring-indigo-500 bg-slate-800 border-slate-700"
+                                                />
+                                                <span>الصف غير معروف</span>
+                                            </label>
 
-                                            <select
-                                                value={row.section || getSectionOptions(row.grade || gradeOptions[0])[0] || '1'}
-                                                onChange={(e) => {
-                                                    const updated = [...rapidRows];
-                                                    updated[idx] = {
-                                                        ...updated[idx],
-                                                        section: e.target.value
-                                                    };
-                                                    setRapidRows(updated);
-                                                }}
-                                                className="w-24 px-2 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white text-center"
-                                            >
-                                                {getSectionOptions(row.grade || gradeOptions[0]).map(sec => (
-                                                    <option key={sec} value={sec}>شعبة {sec}</option>
-                                                ))}
-                                            </select>
+                                            {row.isGradeUnknown ? (
+                                                <div className="w-28 px-2 py-2 bg-amber-950/30 border border-amber-600/30 rounded-xl text-[11px] text-amber-300 text-center font-bold">
+                                                    غير معروف
+                                                </div>
+                                            ) : (
+                                                <select
+                                                    value={row.grade || gradeOptions[0]}
+                                                    onChange={(e) => {
+                                                        const newGrade = e.target.value;
+                                                        const availableSections = getSectionOptions(newGrade);
+                                                        const updated = [...rapidRows];
+                                                        updated[idx] = {
+                                                            ...updated[idx],
+                                                            grade: newGrade,
+                                                            section: availableSections[0] || '1'
+                                                        };
+                                                        setRapidRows(updated);
+                                                    }}
+                                                    className="w-28 px-2 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white"
+                                                >
+                                                    {gradeOptions.map(g => (
+                                                        <option key={g} value={g}>{g}</option>
+                                                    ))}
+                                                </select>
+                                            )}
+
+                                            {row.isGradeUnknown ? (
+                                                <div className="w-24 px-2 py-2 bg-slate-900/40 border border-dashed border-slate-700 rounded-xl text-xs text-slate-500 text-center">
+                                                    -
+                                                </div>
+                                            ) : (
+                                                <select
+                                                    value={row.section || getSectionOptions(row.grade || gradeOptions[0])[0] || '1'}
+                                                    onChange={(e) => {
+                                                        const updated = [...rapidRows];
+                                                        updated[idx] = {
+                                                            ...updated[idx],
+                                                            section: e.target.value
+                                                        };
+                                                        setRapidRows(updated);
+                                                    }}
+                                                    className="w-24 px-2 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white text-center"
+                                                >
+                                                    {getSectionOptions(row.grade || gradeOptions[0]).map(sec => (
+                                                        <option key={sec} value={sec}>شعبة {sec}</option>
+                                                    ))}
+                                                </select>
+                                            )}
 
                                             {customFields.map((field) => (
                                                 field.isFixed && field.fixedValue ? (
@@ -902,7 +1002,7 @@ export default function PublicRegistrationPage() {
                                         onClick={() => {
                                             const defaultGrade = gradeOptions[0] || '';
                                             const defaultSection = getSectionOptions(defaultGrade)[0] || '1';
-                                            setRapidRows([...rapidRows, { studentName: '', grade: defaultGrade, section: defaultSection, customValues: {}, phone: '' }]);
+                                            setRapidRows([...rapidRows, { studentName: '', isGradeUnknown: false, grade: defaultGrade, section: defaultSection, customValues: {}, phone: '' }]);
                                         }}
                                         className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors"
                                     >
@@ -955,8 +1055,15 @@ export default function PublicRegistrationPage() {
                                         <div>
                                             <div className="flex items-center gap-2">
                                                 <h4 className="font-bold text-white text-sm">{sub.studentName}</h4>
-                                                <span className="text-[11px] px-2 py-0.5 rounded-md bg-slate-900 text-slate-300">
-                                                    {typeof sub.grade === 'object' ? (sub.grade?.name || '') : sub.grade} - شعبة {typeof sub.section === 'object' ? (sub.section?.name || '') : (sub.section || '1')}
+                                                <span className={`text-[11px] px-2 py-0.5 rounded-md font-semibold ${
+                                                    sub.grade === 'غير معروف' || !sub.grade || sub.isGradeUnknown
+                                                        ? 'bg-amber-950/60 text-amber-300 border border-amber-600/30'
+                                                        : 'bg-slate-900 text-slate-300'
+                                                }`}>
+                                                    {sub.grade === 'غير معروف' || !sub.grade || sub.isGradeUnknown
+                                                        ? 'الصف غير معروف'
+                                                        : `${typeof sub.grade === 'object' ? (sub.grade?.name || '') : sub.grade} - شعبة ${typeof sub.section === 'object' ? (sub.section?.name || '') : (sub.section || '1')}`
+                                                    }
                                                 </span>
                                                 <span className={`text-[10px] px-2 py-0.5 rounded-md font-bold ${
                                                     sub.status === 'approved'
@@ -1034,29 +1141,62 @@ export default function PublicRegistrationPage() {
                                         className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm"
                                     />
                                 </div>
-                                <div className="grid grid-cols-2 gap-3">
-                                    <div>
-                                        <label className="block text-xs text-slate-400 mb-1">الصف</label>
-                                        <select
-                                            value={editingSub.grade}
-                                            onChange={(e) => setEditingSub({ ...editingSub, grade: e.target.value })}
-                                            className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm"
-                                        >
-                                            {gradeOptions.map(g => (
-                                                <option key={g} value={g}>{g}</option>
-                                            ))}
-                                        </select>
-                                    </div>
-                                    <div>
-                                        <label className="block text-xs text-slate-400 mb-1">الشعبة</label>
+
+                                {/* Option: الصف غير معروف */}
+                                <div className="bg-slate-800/60 border border-slate-700 rounded-xl p-2.5 flex items-center justify-between">
+                                    <label className="flex items-center gap-2 cursor-pointer select-none text-xs text-slate-300">
                                         <input
-                                            type="text"
-                                            value={editingSub.section}
-                                            onChange={(e) => setEditingSub({ ...editingSub, section: e.target.value })}
-                                            className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm"
+                                            type="checkbox"
+                                            checked={editingSub.grade === 'غير معروف' || !!editingSub.isGradeUnknown}
+                                            onChange={(e) => {
+                                                const isUnknown = e.target.checked;
+                                                setEditingSub({
+                                                    ...editingSub,
+                                                    isGradeUnknown: isUnknown,
+                                                    grade: isUnknown ? 'غير معروف' : (editingSub.grade === 'غير معروف' ? (gradeOptions[0] || '') : editingSub.grade || gradeOptions[0] || ''),
+                                                    section: isUnknown ? '' : (editingSub.section || '1')
+                                                });
+                                            }}
+                                            className="w-3.5 h-3.5 rounded text-indigo-600 focus:ring-indigo-500 bg-slate-800 border-slate-700"
                                         />
-                                    </div>
+                                        <span>الصف غير معروف</span>
+                                    </label>
+                                    {(editingSub.grade === 'غير معروف' || editingSub.isGradeUnknown) && (
+                                        <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded font-bold">
+                                            صف غير معروف
+                                        </span>
+                                    )}
                                 </div>
+
+                                {editingSub.grade === 'غير معروف' || editingSub.isGradeUnknown ? (
+                                    <div className="bg-amber-950/20 border border-amber-500/30 rounded-xl p-2.5 text-xs text-amber-300">
+                                        ⚠️ تم تحديد الصف والشعبة كـ: <strong>غير معروف</strong>
+                                    </div>
+                                ) : (
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="block text-xs text-slate-400 mb-1">الصف</label>
+                                            <select
+                                                value={editingSub.grade}
+                                                onChange={(e) => setEditingSub({ ...editingSub, grade: e.target.value })}
+                                                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm"
+                                            >
+                                                {gradeOptions.map(g => (
+                                                    <option key={g} value={g}>{g}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs text-slate-400 mb-1">الشعبة</label>
+                                            <input
+                                                type="text"
+                                                value={editingSub.section}
+                                                onChange={(e) => setEditingSub({ ...editingSub, section: e.target.value })}
+                                                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm"
+                                            />
+                                        </div>
+                                    </div>
+                                )}
 
                                 {customFields.map((field) => (
                                     <div key={field.id}>

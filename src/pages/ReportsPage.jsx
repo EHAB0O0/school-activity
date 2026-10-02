@@ -898,11 +898,23 @@ export default function ReportsPage() {
 
         // 2. Create Workbook
         const wb = XLSX.utils.book_new();
-        const ws = XLSX.utils.json_to_sheet(exportData, { rtl: true });
+        if (!wb.Workbook) wb.Workbook = {};
+        wb.Workbook.Views = [{ RTL: true }];
 
-        // Auto-width columns
-        const wscols = Object.keys(exportData[0] || {}).map(() => ({ wch: 20 }));
+        const ws = XLSX.utils.json_to_sheet(exportData);
+
+        // Auto-width columns based on content
+        const keys = Object.keys(exportData[0] || {});
+        const wscols = keys.map(k => {
+            let maxLen = k.length;
+            exportData.forEach(row => {
+                const valStr = String(row[k] ?? '');
+                if (valStr.length > maxLen) maxLen = valStr.length;
+            });
+            return { wch: Math.min(Math.max(maxLen + 3, 12), 40) };
+        });
         ws['!cols'] = wscols;
+        ws['!views'] = [{ RTL: true }];
 
         XLSX.utils.book_append_sheet(wb, ws, "تقرير");
 
@@ -934,7 +946,8 @@ export default function ReportsPage() {
                 'activities': 'سجل الأنشطة المدرسي',
                 'students': 'قائمة الطلاب المتميزين',
                 'assets': 'جرد الموارد والمعدات',
-                'points': 'سجل حركات نقاط التميز للطلاب'
+                'points': 'سجل حركات نقاط التميز للطلاب',
+                'archive': archiveSubTab === 'students' ? 'أرشيف الطلاب المستبعدين' : 'أرشيف الأنشطة السابقة'
             };
             let pageTitle = titleMap[activeTab] || 'تقرير شامل';
 
@@ -1212,6 +1225,52 @@ export default function ReportsPage() {
                     </tr>
                     `;
                 }).join('');
+            } else if (activeTab === 'archive') {
+                if (archiveSubTab === 'students') {
+                    tableHeader = `
+                        <tr>
+                            <th style="width: 5%">#</th>
+                            <th style="width: 35%">اسم الطالب</th>
+                            <th style="width: 25%">التخصصات</th>
+                            <th style="width: 20%">الصف والشعبة</th>
+                            <th style="width: 15%">النقاط السابقة</th>
+                        </tr>
+                    `;
+                    tableRowsHtml = previewData.map((item, i) => {
+                        const specs = item.specializations && item.specializations.length > 0
+                            ? item.specializations.map(s => s === 'General' ? 'عام' : s).join('، ')
+                            : '-';
+                        const className = (item.grade && item.section) ? `${item.grade} - ${item.section}` : (item.class || item.grade || '-');
+                        return `
+                        <tr>
+                            <td class="center dim">${i + 1}</td>
+                            <td class="bold">${item.name}</td>
+                            <td>${specs}</td>
+                            <td class="center">${className}</td>
+                            <td class="center bold success-text">${item.points || 0}</td>
+                        </tr>
+                        `;
+                    }).join('');
+                } else {
+                    tableHeader = `
+                        <tr>
+                            <th style="width: 30%">النشاط</th>
+                            <th style="width: 20%">التاريخ</th>
+                            <th style="width: 15%">المكان</th>
+                            <th style="width: 15%">الحالة</th>
+                            <th style="width: 10%">الطلاب</th>
+                        </tr>
+                    `;
+                    tableRowsHtml = previewData.map(item => `
+                        <tr>
+                            <td class="bold">${item.title}</td>
+                            <td class="dim">${item.formattedDate || item.date}</td>
+                            <td>${item.venue}</td>
+                            <td><span class="badge neutral">مؤرشف</span></td>
+                            <td class="center">${item.studentsCount}</td>
+                        </tr>
+                    `).join('');
+                }
             }
 
             // 3. Write Full HTML Document

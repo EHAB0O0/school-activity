@@ -454,7 +454,11 @@ export default function StudentsPage() {
                     ? true
                     : (s.specializations && s.specializations.includes(specFilter));
 
-                const matchesGrade = !gradeFilter || s.grade === gradeFilter;
+                const matchesGrade = !gradeFilter
+                    ? true
+                    : gradeFilter === 'غير معروف'
+                        ? (!s.grade || s.grade === 'غير معروف' || s.grade === 'Unknown')
+                        : s.grade === gradeFilter;
                 const matchesSection = !sectionFilter || s.section === sectionFilter;
 
                 return matchesSpec && matchesGrade && matchesSection;
@@ -707,33 +711,51 @@ export default function StudentsPage() {
         });
     };
 
-    // 6. Bulk Export to Excel / CSV
-    const handleExportCSV = () => {
+    // 6. Bulk Export to Excel (.xlsx)
+    const handleExportCSV = async () => {
         const selectedList = students.filter(s => selectedIds.includes(s.id));
         if (selectedList.length === 0) return;
 
-        const headers = ["اسم الطالب", "الصف", "الشعبة", "الفصل الكامل", "نقاط التميز", "التخصصات", "تاريخ الانضمام"];
-        const rows = selectedList.map(s => [
-            `"${(s.name || '').replace(/"/g, '""')}"`,
-            `"${(s.grade || '').replace(/"/g, '""')}"`,
-            `"${(s.section || '').replace(/"/g, '""')}"`,
-            `"${(s.class || '').replace(/"/g, '""')}"`,
-            s.totalPoints || 0,
-            `"${(s.specializations || []).join('، ').replace(/"/g, '""')}"`,
-            s.joinedAt?.toDate ? s.joinedAt.toDate().toLocaleDateString('ar-SA') : '-'
-        ]);
+        const toastId = toast.loading('جاري تجهيز ملف Excel...');
+        try {
+            const XLSX = await import('xlsx');
+            const headers = ["م", "اسم الطالب", "الصف", "الشعبة", "الفصل الكامل", "نقاط التميز", "التخصصات", "تاريخ الانضمام"];
+            const rows = selectedList.map((s, idx) => [
+                idx + 1,
+                s.name || '',
+                s.grade || '',
+                s.section || '',
+                (s.grade && s.section) ? `${s.grade} - ${s.section}` : (s.class || s.grade || ''),
+                s.totalPoints || 0,
+                (s.specializations || []).join('، ') || '-',
+                s.joinedAt?.toDate ? s.joinedAt.toDate().toLocaleDateString('ar-SA') : '-'
+            ]);
 
-        const csvContent = "\uFEFF" + [headers.join(','), ...rows.map(r => r.join(','))].join('\r\n');
-        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.setAttribute('href', url);
-        link.setAttribute('download', `قائمة_الطلاب_المحددين_${new Date().toLocaleDateString('en-CA')}.csv`);
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-        toast.success(`تم تصدير كشف ${selectedList.length} طالب إلى Excel بنجاح!`);
+            const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+
+            // Auto column widths & RTL
+            const maxCols = headers.map((h, colIdx) => {
+                let maxLen = h.length;
+                rows.forEach(r => {
+                    const str = String(r[colIdx] ?? '');
+                    if (str.length > maxLen) maxLen = str.length;
+                });
+                return { wch: Math.min(Math.max(maxLen + 3, 10), 35) };
+            });
+            ws['!cols'] = maxCols;
+            ws['!views'] = [{ RTL: true }];
+
+            const wb = XLSX.utils.book_new();
+            if (!wb.Workbook) wb.Workbook = {};
+            wb.Workbook.Views = [{ RTL: true }];
+            XLSX.utils.book_append_sheet(wb, ws, "الطلاب المحددين");
+            XLSX.writeFile(wb, `كشف_الطلاب_${new Date().toLocaleDateString('en-CA')}.xlsx`);
+
+            toast.success(`تم تصدير كشف ${selectedList.length} طالب إلى Excel بنجاح!`, { id: toastId });
+        } catch (err) {
+            console.error("Export Excel error:", err);
+            toast.error("فشل تصدير ملف Excel", { id: toastId });
+        }
     };
 
     // 7. Bulk Consolidated Sheet Print
@@ -1101,6 +1123,7 @@ export default function StudentsPage() {
                         onChange={e => { setGradeFilter(e.target.value); setSectionFilter(''); }}
                     >
                         <option value="">جميع الصفوف</option>
+                        <option value="غير معروف">❓ غير معروف</option>
                         {grades?.map(g => <option key={g.id} value={g.name}>{g.name}</option>)}
                     </select>
 
@@ -1108,7 +1131,7 @@ export default function StudentsPage() {
                         className="bg-black/30 border border-white/10 text-white text-sm rounded-lg px-3 py-2 outline-none focus:border-indigo-500 w-full md:w-48 disabled:opacity-50"
                         value={sectionFilter}
                         onChange={e => setSectionFilter(e.target.value)}
-                        disabled={!gradeFilter}
+                        disabled={!gradeFilter || gradeFilter === 'غير معروف'}
                     >
                         <option value="">جميع الشعب</option>
                         {grades?.find(g => g.name === gradeFilter)?.sections?.map(s => (
