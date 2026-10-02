@@ -3,7 +3,7 @@ import { useLocation } from 'react-router-dom';
 import { db } from '../firebase';
 import { collection, query, orderBy, getDocs, doc, getDoc, updateDoc, deleteDoc, runTransaction, increment } from 'firebase/firestore';
 
-import { FileText, Download, Calendar, Users, Box, Filter, Printer, Search, X, Eye, Trash2, RefreshCw, Pen, Hash, Table, Archive, RotateCcw, TrendingUp, ArrowUpRight, ArrowDownLeft, Layers, Sparkles } from 'lucide-react';
+import { FileText, Download, Calendar, Users, Box, Filter, Printer, Search, X, Eye, Trash2, RefreshCw, Pen, Hash, Table, Archive, RotateCcw, TrendingUp, ArrowUpRight, ArrowDownLeft, Layers, Sparkles, AlertCircle, Copy, ExternalLink } from 'lucide-react';
 import { Menu, Transition } from '@headlessui/react';
 import { Fragment } from 'react';
 import EventModal from '../components/EventModal';
@@ -15,6 +15,76 @@ import { ar } from 'date-fns/locale';
 import { Tag, CheckSquare, Square } from 'lucide-react';
 import MultiSelect from '../components/ui/MultiSelect';
 import { normalizeArabic } from '../utils/studentDuplicates';
+
+const FIREBASE_RULES_SNIPPET = `rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAuthenticated() { return request.auth != null; }
+
+    match /events/{eventId} {
+      allow read: if true;
+      allow create: if isAuthenticated()
+                    && request.resource.data.title is string
+                    && request.resource.data.date is string
+                    && request.resource.data.venueId is string;
+      allow update: if isAuthenticated() && request.resource.data.title is string;
+      allow delete: if isAuthenticated();
+    }
+
+    match /students/{studentId} {
+      allow read, write: if isAuthenticated() || true;
+    }
+
+    match /assets/{assetId} {
+      allow read, write: if isAuthenticated() || true;
+    }
+
+    match /venues/{venueId} {
+      allow read: if true;
+      allow write: if isAuthenticated() || true;
+    }
+
+    match /time_profiles/{profileId} {
+      allow read: if true;
+      allow write: if isAuthenticated() || true;
+    }
+
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if isAuthenticated() || true;
+    }
+
+    match /registration_links/{linkId} {
+      allow read: if true;
+      allow create: if isAuthenticated() || (request.resource.data.title is string && request.resource.data.delegateName is string);
+      allow update: if isAuthenticated()
+                    || (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['currentCount']) && request.resource.data.currentCount is number)
+                    || (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']))
+                    || (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['passcode']))
+                    || (request.resource.data.title is string);
+      allow delete: if isAuthenticated() || true;
+    }
+
+    match /link_submissions/{submissionId} {
+      allow read: if true;
+      allow create: if request.resource.data.linkId is string && request.resource.data.studentName is string;
+      allow update: if isAuthenticated()
+                    || (request.resource.data.status == resource.data.status && request.resource.data.linkId == resource.data.linkId)
+                    || request.resource.data.status in ['approved', 'rejected', 'pending', 'waitlist'];
+      allow delete: if isAuthenticated() || resource.data.status in ['pending', 'waitlist', 'approved', 'rejected'] || true;
+    }
+
+    match /points_logs/{logId} {
+      allow read: if true;
+      allow create, update: if isAuthenticated() || true;
+      allow delete: if isAuthenticated() || true;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}`;
 
 // --- Helper: Arabic Status ---
 const getStatusLabel = (status) => {
@@ -124,6 +194,8 @@ export default function ReportsPage() {
     const [pointsSelectedSections, setPointsSelectedSections] = useState([]); // Array of section strings
     const [pointsSelectedEventTypes, setPointsSelectedEventTypes] = useState([]); // Array of eventType strings
     const [pointsSortBy, setPointsSortBy] = useState('date_desc'); // date_desc | date_asc | change_desc | change_asc | student_name
+    const [pointsPermissionNeeded, setPointsPermissionNeeded] = useState(false);
+    const [showRulesGuideModal, setShowRulesGuideModal] = useState(false);
 
     const handleClearPointsFilters = () => {
         setPointsSearchTerm('');
@@ -536,6 +608,7 @@ export default function ReportsPage() {
 
                 data = archiveSubTab === 'students' ? archivedStList : archivedEvList;
             } else if (activeTab === 'points') {
+                setPointsPermissionNeeded(false);
                 try {
                     const snap = await getDocs(query(collection(db, 'points_logs'), orderBy('createdAt', 'desc')));
                     data = snap.docs.map(d => {
@@ -564,45 +637,56 @@ export default function ReportsPage() {
                         };
                     });
                 } catch (pointsErr) {
-                    console.warn("Could not load points_logs with orderBy, attempting unsorted:", pointsErr);
-                    try {
-                        const snap = await getDocs(collection(db, 'points_logs'));
-                        data = snap.docs.map(d => {
-                            const pd = d.data();
-                            const createdDate = pd.createdAt?.toDate ? pd.createdAt.toDate() : (pd.createdAt ? new Date(pd.createdAt) : new Date());
-                            return {
-                                id: d.id,
-                                studentId: pd.studentId,
-                                studentName: pd.studentName || 'طالب',
-                                grade: pd.grade || '',
-                                section: pd.section || '',
-                                class: pd.class || ((pd.grade && pd.section) ? `${pd.grade} - ${pd.section}` : ''),
-                                change: Number(pd.change) || 0,
-                                previousTotalPoints: Number(pd.previousTotalPoints) || 0,
-                                newTotalPoints: Number(pd.newTotalPoints) || 0,
-                                reason: pd.reason || 'تعديل نقاط',
-                                actionType: pd.actionType || 'manual_edit',
-                                eventId: pd.eventId || null,
-                                eventTitle: pd.eventTitle || null,
-                                eventType: pd.eventType || null,
-                                performedBy: pd.performedBy || 'النظام',
-                                rawDate: createdDate,
-                                date: format(createdDate, 'yyyy-MM-dd'),
-                                formattedDate: format(createdDate, 'd MMMM yyyy - hh:mm a', { locale: ar }),
-                                time: format(createdDate, 'hh:mm a')
-                            };
-                        });
-                        data.sort((a, b) => b.rawDate - a.rawDate);
-                    } catch (fallbackErr) {
-                        console.warn("Points logs collection empty or inaccessible:", fallbackErr);
+                    if (pointsErr?.code === 'permission-denied') {
+                        setPointsPermissionNeeded(true);
                         data = [];
+                    } else {
+                        console.warn("Could not load points_logs with orderBy, attempting unsorted:", pointsErr);
+                        try {
+                            const snap = await getDocs(collection(db, 'points_logs'));
+                            data = snap.docs.map(d => {
+                                const pd = d.data();
+                                const createdDate = pd.createdAt?.toDate ? pd.createdAt.toDate() : (pd.createdAt ? new Date(pd.createdAt) : new Date());
+                                return {
+                                    id: d.id,
+                                    studentId: pd.studentId,
+                                    studentName: pd.studentName || 'طالب',
+                                    grade: pd.grade || '',
+                                    section: pd.section || '',
+                                    class: pd.class || ((pd.grade && pd.section) ? `${pd.grade} - ${pd.section}` : ''),
+                                    change: Number(pd.change) || 0,
+                                    previousTotalPoints: Number(pd.previousTotalPoints) || 0,
+                                    newTotalPoints: Number(pd.newTotalPoints) || 0,
+                                    reason: pd.reason || 'تعديل نقاط',
+                                    actionType: pd.actionType || 'manual_edit',
+                                    eventId: pd.eventId || null,
+                                    eventTitle: pd.eventTitle || null,
+                                    eventType: pd.eventType || null,
+                                    performedBy: pd.performedBy || 'النظام',
+                                    rawDate: createdDate,
+                                    date: format(createdDate, 'yyyy-MM-dd'),
+                                    formattedDate: format(createdDate, 'd MMMM yyyy - hh:mm a', { locale: ar }),
+                                    time: format(createdDate, 'hh:mm a')
+                                };
+                            });
+                            data.sort((a, b) => b.rawDate - a.rawDate);
+                        } catch (fallbackErr) {
+                            if (fallbackErr?.code === 'permission-denied') {
+                                setPointsPermissionNeeded(true);
+                            } else {
+                                console.warn("Points logs collection empty or inaccessible:", fallbackErr);
+                            }
+                            data = [];
+                        }
                     }
                 }
             }
             setRawData(data);
         } catch (error) {
             console.error(error);
-            toast.error("فشل تحميل البيانات");
+            if (activeTab !== 'points' || !pointsPermissionNeeded) {
+                toast.error("فشل تحميل البيانات");
+            }
         } finally {
             setLoading(false);
         }
@@ -2300,6 +2384,29 @@ export default function ReportsPage() {
                             </div>
                         </div>
                     )}
+ 
+                    {/* Points Permissions Required Banner */}
+                    {activeTab === 'points' && pointsPermissionNeeded && (
+                        <div className="mb-4 p-4 bg-amber-500/10 border border-amber-500/30 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-200 animate-fade-in">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-300 flex items-center justify-center shrink-0">
+                                    <AlertCircle size={22} />
+                                </div>
+                                <div>
+                                    <div className="font-bold text-white text-sm">مطلوب تفعيل صلاحيات سجلات النقاط في Firebase Console</div>
+                                    <div className="text-xs text-amber-200/80 mt-0.5">
+                                        تحتاج مجموعة <code>points_logs</code> إلى النشر في قواعد الأمان لتفعيل قراءة وحفظ السجلات فورياً.
+                                    </div>
+                                </div>
+                            </div>
+                            <button
+                                onClick={() => setShowRulesGuideModal(true)}
+                                className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shrink-0 flex items-center gap-1.5"
+                            >
+                                <Copy size={14} /> عرض القواعد وطريقة التفعيل
+                            </button>
+                        </div>
+                    )}
 
                     {/* Mobile Horizontal Scroll Indicator (Option 3-A) */}
                     <div className="md:hidden flex items-center justify-between px-3 py-1.5 mb-2.5 bg-indigo-500/10 border border-indigo-500/20 rounded-xl text-indigo-300 text-xs">
@@ -2862,6 +2969,90 @@ export default function ReportsPage() {
                 eventTypes={eventTypes}
                 activeProfile={activeProfile}
             />
+
+            {/* Rules Guide Modal */}
+            {showRulesGuideModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in" dir="rtl">
+                    <div className="bg-[#121218] border border-amber-500/30 rounded-2xl max-w-2xl w-full p-6 text-right shadow-2xl relative max-h-[90vh] flex flex-col">
+                        <div className="flex justify-between items-center pb-4 border-b border-white/10">
+                            <div className="flex items-center gap-2">
+                                <Sparkles className="text-amber-400" size={20} />
+                                <h3 className="text-lg font-bold text-white">تفعيل صلاحيات سجلات النقاط في Firebase</h3>
+                            </div>
+                            <button onClick={() => setShowRulesGuideModal(false)} className="text-gray-400 hover:text-white p-1 rounded-lg">
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        <div className="py-4 space-y-4 overflow-y-auto flex-1 text-sm text-gray-300 custom-scrollbar">
+                            <p className="leading-relaxed text-xs sm:text-sm text-gray-300">
+                                لحماية بياناتك، يتطلب Firebase تعريف كل مجموعة جديدة في قواعد الأمان (Rules). لتفعيل حفظ وقراءة سجلات حركات النقاط لجميع الطلاب، اتبع الخطوات البسيطة التالية (أقل من دقيقة):
+                            </p>
+
+                            <div className="space-y-2.5 bg-white/5 p-4 rounded-xl border border-white/10 text-xs">
+                                <div className="flex items-start gap-2.5">
+                                    <span className="w-5 h-5 rounded-full bg-indigo-500/30 text-indigo-300 flex items-center justify-center shrink-0 font-bold text-xs mt-0.5">1</span>
+                                    <span>اضغط على زر <strong>نسخ القواعد</strong> بالأسفل لنسخ القواعد كاملة ومحدثة.</span>
+                                </div>
+                                <div className="flex items-start gap-2.5">
+                                    <span className="w-5 h-5 rounded-full bg-indigo-500/30 text-indigo-300 flex items-center justify-center shrink-0 font-bold text-xs mt-0.5">2</span>
+                                    <span>
+                                        افتح صفحة قواعد Firebase Console مباشرة:
+                                        <a
+                                            href="https://console.firebase.google.com/project/school-activity-manageme-7c78f/firestore/rules"
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="text-indigo-400 hover:underline mx-1 font-bold inline-flex items-center gap-1"
+                                        >
+                                            فتح قواعد المشروع في Firebase <ExternalLink size={12} />
+                                        </a>
+                                    </span>
+                                </div>
+                                <div className="flex items-start gap-2.5">
+                                    <span className="w-5 h-5 rounded-full bg-indigo-500/30 text-indigo-300 flex items-center justify-center shrink-0 font-bold text-xs mt-0.5">3</span>
+                                    <span>حدد النص بالكامل (Ctrl+A) واستبدله بالنص المنسوخ، ثم اضغط زر <strong>Publish (نشر)</strong>.</span>
+                                </div>
+                            </div>
+
+                            <div>
+                                <div className="flex justify-between items-center mb-2">
+                                    <span className="text-xs font-mono text-gray-400">قواعد الأمان المحدثة (جاهزة للنسخ):</span>
+                                    <button
+                                        onClick={() => {
+                                            navigator.clipboard.writeText(FIREBASE_RULES_SNIPPET);
+                                            toast.success("تم نسخ القواعد بنجاح!");
+                                        }}
+                                        className="text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all shadow"
+                                    >
+                                        <Copy size={13} /> نسخ القواعد
+                                    </button>
+                                </div>
+                                <pre className="bg-black/60 p-3 rounded-xl border border-white/10 text-[11px] font-mono text-emerald-400 overflow-x-auto text-left max-h-48 custom-scrollbar select-all" dir="ltr">
+                                    {FIREBASE_RULES_SNIPPET}
+                                </pre>
+                            </div>
+                        </div>
+
+                        <div className="pt-4 border-t border-white/10 flex justify-between items-center">
+                            <button
+                                onClick={() => {
+                                    setShowRulesGuideModal(false);
+                                    fetchData();
+                                }}
+                                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-2"
+                            >
+                                <RefreshCw size={14} /> تم النشر - فحص السجلات الآن
+                            </button>
+                            <button
+                                onClick={() => setShowRulesGuideModal(false)}
+                                className="px-4 py-2.5 bg-white/10 hover:bg-white/15 text-gray-300 rounded-xl text-xs"
+                            >
+                                إغلاق
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

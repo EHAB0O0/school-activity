@@ -129,9 +129,9 @@ export default function StudentsPage() {
         setProfileTab('info');
     };
 
-    // Live History Listener
+    // Live History Listener (Only run when opening a different student)
     useEffect(() => {
-        if (!selectedStudent) return;
+        if (!selectedStudent?.id) return;
 
         const q = query(
             collection(db, 'events'),
@@ -146,22 +146,23 @@ export default function StudentsPage() {
         });
 
         return () => unsubscribe();
-    }, [selectedStudent]);
+    }, [selectedStudent?.id]);
 
-    // Points History Fetcher
+    // Points History Fetcher (Only run when opening a different student)
     useEffect(() => {
-        if (!selectedStudent) return;
+        if (!selectedStudent?.id) return;
         setLoadingPointsLogs(true);
         fetchStudentPointsLogs(selectedStudent.id)
             .then(logs => {
-                setStudentPointsLogs(logs);
+                setStudentPointsLogs(logs || []);
                 setLoadingPointsLogs(false);
             })
             .catch(err => {
-                console.error("Points logs fetch error:", err);
+                console.warn("Points logs fetch error:", err?.message || err);
+                setStudentPointsLogs([]);
                 setLoadingPointsLogs(false);
             });
-    }, [selectedStudent]);
+    }, [selectedStudent?.id]);
 
     const saveProfileChanges = async () => {
         if (!selectedStudent) return;

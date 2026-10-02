@@ -60,7 +60,11 @@ export async function logPointsChange({
         const docRef = await addDoc(collection(db, 'points_logs'), payload);
         return docRef.id;
     } catch (err) {
-        console.warn("Failed to log points change:", err);
+        if (err?.code === 'permission-denied') {
+            console.info("Firestore: points_logs write rule pending in Firebase Console.");
+        } else {
+            console.warn("Failed to log points change:", err);
+        }
         return null;
     }
 }
@@ -126,7 +130,11 @@ export async function fetchStudentPointsLogs(studentId) {
 
         return logs;
     } catch (err) {
-        console.warn("Error fetching student points logs:", err);
+        if (err?.code === 'permission-denied') {
+            console.info("Firestore: points_logs read rule pending in Firebase Console.");
+        } else {
+            console.warn("Error fetching student points logs:", err);
+        }
         return [];
     }
 }
