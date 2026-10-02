@@ -7,7 +7,8 @@ import {
 } from 'firebase/firestore';
 import {
     Lock, CheckCircle, AlertCircle, Users, Plus, Trash2,
-    Edit2, Save, Sparkles, Clock, AlertTriangle, ArrowRight, X
+    Edit2, Save, Sparkles, Clock, AlertTriangle, ArrowRight, X,
+    HelpCircle, RotateCcw
 } from 'lucide-react';
 import toast, { Toaster } from 'react-hot-toast';
 import AppLogo from '../components/ui/AppLogo';
@@ -356,6 +357,36 @@ export default function PublicRegistrationPage() {
         } finally {
             setIsSubmitting(false);
         }
+    };
+
+    // Bulk toggle unknown grades in Rapid Mode
+    const handleSetAllRapidUnknown = () => {
+        setRapidRows(prev => prev.map(row => ({
+            ...row,
+            isGradeUnknown: true,
+            grade: 'غير معروف',
+            section: ''
+        })));
+        toast.success('تم تعيين "الصف غير معروف" لجميع الطلاب في القائمة');
+    };
+
+    const handleClearAllRapidUnknown = () => {
+        const defaultGrade = gradeOptions[0] || '';
+        const defaultSection = getSectionOptions(defaultGrade)[0] || '1';
+        setRapidRows(prev => prev.map(row => {
+            const targetGrade = (row.grade && row.grade !== 'غير معروف') ? row.grade : defaultGrade;
+            const availableSecs = getSectionOptions(targetGrade);
+            const targetSection = (row.section && row.grade !== 'غير معروف' && availableSecs.includes(row.section))
+                ? row.section
+                : (availableSecs[0] || defaultSection);
+            return {
+                ...row,
+                isGradeUnknown: false,
+                grade: targetGrade,
+                section: targetSection
+            };
+        }));
+        toast.success('تم إلغاء خيار "غير معروف" واستعادة الصفوف لجميع الطلاب');
     };
 
     // Submit Rapid Entries
@@ -859,6 +890,44 @@ export default function PublicRegistrationPage() {
                         {/* Mode 2: Rapid Multi-row Entry */}
                         {entryMode === 'rapid' && (
                             <div className="space-y-4">
+                                {/* شريط التحكم الجماعي لتعيين / إلغاء الصف غير معروف */}
+                                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-slate-950/80 border border-slate-800 p-3 rounded-2xl">
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-xs font-bold text-slate-300">
+                                            التحكم السريع بحالة الصفوف:
+                                        </span>
+                                        <span className={`text-[11px] px-2.5 py-0.5 rounded-full font-bold border transition-colors ${
+                                            rapidRows.some(r => r.isGradeUnknown)
+                                                ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+                                                : 'bg-slate-800 text-slate-400 border-slate-700'
+                                        }`}>
+                                            {rapidRows.filter(r => r.isGradeUnknown).length} من {rapidRows.length} غير معروف
+                                        </span>
+                                    </div>
+
+                                    <div className="flex items-center gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={handleSetAllRapidUnknown}
+                                            className="flex-1 sm:flex-none px-3 py-1.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all bg-amber-500/15 hover:bg-amber-500/25 active:scale-95 text-amber-300 border border-amber-500/40 shadow-sm"
+                                            title="جعل صف جميع الطلاب الحاليين غير معروف"
+                                        >
+                                            <HelpCircle size={14} className="shrink-0" />
+                                            <span>تحديد الكل كصف غير معروف</span>
+                                        </button>
+
+                                        <button
+                                            type="button"
+                                            onClick={handleClearAllRapidUnknown}
+                                            className="flex-1 sm:flex-none px-3 py-1.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 border border-slate-700 shadow-sm"
+                                            title="إلغاء غير معروف واستعادة الصفوف لجميع الطلاب"
+                                        >
+                                            <RotateCcw size={14} className="shrink-0" />
+                                            <span>إلغاء غير معروف للكل</span>
+                                        </button>
+                                    </div>
+                                </div>
+
                                 <div className="space-y-2.5">
                                     {rapidRows.map((row, idx) => (
                                         <div key={idx} className="flex items-center gap-2 bg-slate-800/50 p-2.5 rounded-2xl border border-slate-800 flex-wrap sm:flex-nowrap">
@@ -1000,9 +1069,20 @@ export default function PublicRegistrationPage() {
                                     <button
                                         type="button"
                                         onClick={() => {
+                                            const allCurrentlyUnknown = rapidRows.length > 0 && rapidRows.every(r => r.isGradeUnknown);
                                             const defaultGrade = gradeOptions[0] || '';
                                             const defaultSection = getSectionOptions(defaultGrade)[0] || '1';
-                                            setRapidRows([...rapidRows, { studentName: '', isGradeUnknown: false, grade: defaultGrade, section: defaultSection, customValues: {}, phone: '' }]);
+                                            setRapidRows([
+                                                ...rapidRows,
+                                                {
+                                                    studentName: '',
+                                                    isGradeUnknown: allCurrentlyUnknown,
+                                                    grade: allCurrentlyUnknown ? 'غير معروف' : defaultGrade,
+                                                    section: allCurrentlyUnknown ? '' : defaultSection,
+                                                    customValues: {},
+                                                    phone: ''
+                                                }
+                                            ]);
                                         }}
                                         className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors"
                                     >
