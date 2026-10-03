@@ -44,6 +44,8 @@ export default function AdvancedPrintModal({
         { role: 'رائد النشاط الطلابي', name: 'أ. ________________' },
         { role: 'مدير المدرسة', name: 'أ. ________________' }
     ],
+    sortOptions = [],
+    extraToggles = [],
     onPrint
 }) {
     const storageKey = `school_activity_print_prefs_${reportType}`;
@@ -96,6 +98,8 @@ export default function AdvancedPrintModal({
     const [footerNote, setFooterNote] = useState('');
     const [signatures, setSignatures] = useState(initialSignatures);
     const [activeTab, setActiveTab] = useState('layout'); // 'layout' | 'columns' | 'signatures'
+    const [sortBy, setSortBy] = useState('');
+    const [extraToggleValues, setExtraToggleValues] = useState({});
 
     // Load Saved Preferences on Mount / Open
     useEffect(() => {
@@ -160,6 +164,18 @@ export default function AdvancedPrintModal({
         }
 
         setCustomTitle(initialCustomTitle || '');
+
+        // Sorting & extra toggles defaults + saved values
+        let savedPrefs = {};
+        try { savedPrefs = JSON.parse(localStorage.getItem(storageKey) || '{}') || {}; } catch { savedPrefs = {}; }
+        const validSort = sortOptions.some(o => o.id === savedPrefs.sortBy) ? savedPrefs.sortBy : (sortOptions[0]?.id || '');
+        setSortBy(validSort);
+        const toggleDefaults = {};
+        extraToggles.forEach(t => {
+            const sv = savedPrefs.extraToggles?.[t.id];
+            toggleDefaults[t.id] = typeof sv === 'boolean' ? sv : t.defaultValue !== false;
+        });
+        setExtraToggleValues(toggleDefaults);
     }, [isOpen, reportKeyEffectDependency(availableColumns), storageKey, hasSelectionSupport, selectedRecordsCount, initialCustomTitle]);
 
     function reportKeyEffectDependency(cols) {
@@ -179,7 +195,9 @@ export default function AdvancedPrintModal({
                 showSignatures: overrides.showSignatures !== undefined ? overrides.showSignatures : showSignatures,
                 showSignatureCol: overrides.showSignatureCol !== undefined ? overrides.showSignatureCol : showSignatureCol,
                 footerNote: overrides.footerNote !== undefined ? overrides.footerNote : footerNote,
-                signatures: overrides.signatures || signatures
+                signatures: overrides.signatures || signatures,
+                sortBy: overrides.sortBy || sortBy,
+                extraToggles: overrides.extraToggles || extraToggleValues
             };
             localStorage.setItem(storageKey, JSON.stringify(prefs));
         } catch (e) {
@@ -247,6 +265,12 @@ export default function AdvancedPrintModal({
         setCustomTitle(initialCustomTitle || '');
         setFooterNote('');
         setSignatures(initialSignatures);
+        setSortBy(sortOptions[0]?.id || '');
+        const toggleDefaults = {};
+        extraToggles.forEach(t => {
+            toggleDefaults[t.id] = t.defaultValue !== false;
+        });
+        setExtraToggleValues(toggleDefaults);
     };
 
     const handleSignatureChange = (index, field, value) => {
@@ -270,7 +294,9 @@ export default function AdvancedPrintModal({
             showSignatureCol,
             signatures,
             customTitle: customTitle.trim(),
-            footerNote: footerNote.trim()
+            footerNote: footerNote.trim(),
+            sortBy,
+            extraToggles: extraToggleValues
         });
         onClose();
     };
@@ -564,9 +590,48 @@ export default function AdvancedPrintModal({
                                             />
                                             <span>ذيل التوقيعات والاعتماد الرسمي</span>
                                         </label>
+                                        {extraToggles.map(t => (
+                                            <label key={t.id} className="flex items-center gap-2 cursor-pointer text-xs text-gray-300 hover:text-white">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={!!extraToggleValues[t.id]}
+                                                    onChange={e => {
+                                                        const next = { ...extraToggleValues, [t.id]: e.target.checked };
+                                                        setExtraToggleValues(next);
+                                                        saveCurrentPreferences({ extraToggles: next });
+                                                    }}
+                                                    className="w-4 h-4 rounded text-indigo-600 focus:ring-0 bg-white/10 border-white/20"
+                                                />
+                                                <span>{t.label}</span>
+                                            </label>
+                                        ))}
                                     </div>
                                 </div>
                             </div>
+
+                            {/* 4. Student Sorting */}
+                            {sortOptions.length > 0 && (
+                                <div className="pt-2 border-t border-white/10">
+                                    <label className="block text-xs font-bold text-gray-300 mb-2">
+                                        ترتيب الطلاب في التقرير:
+                                    </label>
+                                    <div className={`grid gap-2 bg-black/40 p-1 rounded-xl border border-white/10 text-xs`} style={{ gridTemplateColumns: `repeat(${sortOptions.length}, minmax(0, 1fr))` }}>
+                                        {sortOptions.map(opt => (
+                                            <button
+                                                key={opt.id}
+                                                type="button"
+                                                onClick={() => { setSortBy(opt.id); saveCurrentPreferences({ sortBy: opt.id }); }}
+                                                className={`py-2 px-3 rounded-lg font-bold transition-all ${sortBy === opt.id ? 'bg-indigo-600 text-white shadow' : 'text-gray-400 hover:text-white'}`}
+                                            >
+                                                {opt.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                    {sortOptions.find(o => o.id === sortBy)?.hint && (
+                                        <p className="text-[10px] text-gray-400 mt-1">{sortOptions.find(o => o.id === sortBy).hint}</p>
+                                    )}
+                                </div>
+                            )}
                         </div>
                     )}
 

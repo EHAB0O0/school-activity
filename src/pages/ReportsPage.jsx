@@ -17,6 +17,8 @@ import MultiSelect from '../components/ui/MultiSelect';
 import { normalizeArabic } from '../utils/studentDuplicates';
 import {
     sortStudentsArabic,
+    sortStudentsByMode,
+    STUDENT_SORT_OPTIONS,
     cleanClassString,
     getOfficialReportHeaderHtml,
     getOfficialReportFooterHtml,
@@ -37,7 +39,7 @@ const getReportColumnsDefinition = (tab, archiveSub) => {
             { id: 'studentsCount', label: 'عدد الطلاب', defaultVisible: true },
             { id: 'studentsList', label: 'قائمة الطلاب المشاركين', defaultVisible: false, badge: 'تفصيلي' },
             { id: 'assetsList', label: 'الموارد المستخدمة', defaultVisible: false, badge: 'تفصيلي' },
-            { id: 'customData', label: 'البيانات الإضافية', defaultVisible: false, badge: 'تفصيلي' }
+            { id: 'customData', label: 'الحقول المخصصة للنشاط', defaultVisible: false, badge: 'تفصيلي' }
         ];
     } else if (tab === 'students') {
         return [
@@ -648,7 +650,7 @@ export default function ReportsPage() {
                         type: pd.typeName || 'عام',
                         typeId: pd.typeId,
                         assets: pd.assets?.map(id => assetMap[id] || id) || [], // Map ID to Name
-                        customData: pd.customData || {},
+                        customData: pd.customData || pd.customFields || {},
                         participantDetails: pd.participantDetails || {},
                         points: pd.points || 10 // Sortable
                     };
@@ -730,7 +732,7 @@ export default function ReportsPage() {
                                 type: pd.typeName || 'عام',
                                 typeId: pd.typeId,
                                 assets: pd.assets?.map(id => assetMap[id] || id) || [],
-                                customData: pd.customData || {},
+                                customData: pd.customData || pd.customFields || {},
                                 participantDetails: pd.participantDetails || {},
                                 points: pd.points || 10
                             };
@@ -1113,9 +1115,12 @@ export default function ReportsPage() {
                 return;
             }
 
-            // 2. Sort Records (Alphabetical for students)
+            // 2. Sort Records (user-chosen mode for student lists)
             if (activeTab === 'students' || (activeTab === 'archive' && archiveSubTab === 'students')) {
-                targetData = sortStudentsArabic(targetData, 'name');
+                targetData = sortStudentsByMode(targetData, options.sortBy || 'alphabetical', s => Number(s.points) || 0);
+            } else if (activeTab === 'points' && options.sortBy) {
+                const withName = targetData.map(r => ({ ...r, name: r.studentName }));
+                targetData = sortStudentsByMode(withName, options.sortBy, r => Number(r.change) || 0);
             } else if (activeTab === 'points' && pointsSortBy === 'student_name') {
                 targetData = sortStudentsArabic(targetData, 'studentName');
             }
@@ -1331,7 +1336,7 @@ export default function ReportsPage() {
 
                 // 1. Students in activity
                 if (colSet.has('studentsList') && item.studentNames && item.studentNames.length > 0) {
-                    const tags = item.studentNames.map(s => {
+                    const tags = sortStudentsByMode(item.studentNames, options.sortBy || 'alphabetical', s => getStudentActivityPoints(item, s.id)).map(s => {
                         const cls = cleanClassString(s);
                         return `<span class="badge" style="margin: 2px;">${s.name} (${cls})</span>`;
                     }).join(' ');
@@ -1591,8 +1596,42 @@ export default function ReportsPage() {
 
             const activeCustomCols = customFieldLabels.filter(label => colSet.has(`custom_${label}`));
 
-            // Sort students alphabetically (أبجدي)
-            const sortedStudents = sortStudentsArabic(event.studentNames || []);
+            // Sort students per chosen mode
+            const sortedStudents = sortStudentsByMode(
+                event.studentNames || [],
+                options.sortBy || 'alphabetical',
+                s => getStudentActivityPoints(event, s.id, singleEventPointsMap)
+            );
+            const sortLabelMap = {
+                alphabetical: 'مرتبين أبجدياً',
+                class: 'مرتبين حسب الصف والشعبة',
+                points_desc: 'مرتبين حسب النقاط تنازلياً',
+                points_asc: 'مرتبين حسب النقاط تصاعدياً'
+            };
+            const sortLabel = sortLabelMap[options.sortBy] || sortLabelMap.alphabetical;
+
+            // Activity custom fields (filled once per activity)
+            const showActivityCustomFields = options.extraToggles?.activityCustomFields !== false;
+            const rawCustomData = event.customData || event.customFields || {};
+            const customDataEntries = Object.entries(rawCustomData)
+                .filter(([, v]) => v !== undefined && v !== null && String(v).trim() !== '');
+            const customDataHtml = (showActivityCustomFields && customDataEntries.length > 0) ? `
+                <div style="margin-bottom: 16px; page-break-inside: avoid !important; break-inside: avoid !important;">
+                    <h3 style="font-size: 13px; font-weight: 800; color: ${isDark ? '#f1f5f9' : isMonochrome ? '#000000' : '#1e293b'}; margin: 0 0 8px 0;">
+                        بيانات النشاط:
+                    </h3>
+                    <table style="margin-top: 0;">
+                        <tbody>
+                            ${customDataEntries.map(([k, v]) => `
+                                <tr>
+                                    <th style="width: 30%; text-align: right;">${k}</th>
+                                    <td>${Array.isArray(v) ? v.join('، ') : v}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            ` : '';
 
             // Table Header THs
             let ths = [];
@@ -1778,10 +1817,11 @@ export default function ReportsPage() {
                 <body>
                     ${headerHtml}
                     ${kpiHtml}
+                    ${customDataHtml}
 
                     <div style="margin-bottom: 20px;">
                         <h3 style="font-size: 13px; font-weight: 800; color: ${isDark ? '#f1f5f9' : isMonochrome ? '#000000' : '#1e293b'}; margin: 0 0 10px 0;">
-                            كشف بأسماء الطلاب المشاركين (${sortedStudents.length} طالب - مرتبين أبجدياً):
+                            كشف بأسماء الطلاب المشاركين (${sortedStudents.length} طالب - ${sortLabel}):
                         </h3>
                         ${studentsListHtml}
                     </div>
@@ -3141,6 +3181,15 @@ export default function ReportsPage() {
                         ? `تقرير طلاب ${gradeFilter}${sectionFilter ? ` - ${sectionFilter}` : ''}`
                         : ''
                 }
+                sortOptions={
+                    (activeTab === 'students' || (activeTab === 'archive' && archiveSubTab === 'students'))
+                        ? STUDENT_SORT_OPTIONS('النقاط المملوكة')
+                        : activeTab === 'points'
+                            ? STUDENT_SORT_OPTIONS('قيمة التغيير')
+                            : (activeTab === 'activities' || (activeTab === 'archive' && archiveSubTab === 'activities'))
+                                ? STUDENT_SORT_OPTIONS('النقاط المكتسبة')
+                                : []
+                }
                 onPrint={handleExecuteAdvancedPrint}
             />
 
@@ -3158,6 +3207,10 @@ export default function ReportsPage() {
                     { role: 'المشرف على النشاط', name: 'أ. ________________' },
                     { role: 'رائد النشاط الطلابي', name: 'أ. ________________' },
                     { role: 'مدير المدرسة', name: 'أ. ________________' }
+                ]}
+                sortOptions={STUDENT_SORT_OPTIONS('النقاط المكتسبة')}
+                extraToggles={[
+                    { id: 'activityCustomFields', label: 'الحقول المخصصة للنشاط (عنوان الإذاعة، المعد...)', defaultValue: true }
                 ]}
                 onPrint={handleExecuteSingleEventPrint}
             />

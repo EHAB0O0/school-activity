@@ -16,7 +16,7 @@ import {
 import toast from 'react-hot-toast';
 import { useSettings } from '../../contexts/SettingsContext';
 import { logPointsChange } from '../../utils/pointsLedger';
-import { sortStudentsArabic, cleanClassString, getOfficialReportHeaderHtml, getStandardPrintStyles, printHtmlDocument, getOfficialReportFooterHtml } from '../../utils/reportUtils';
+import { sortStudentsArabic, sortStudentsByMode, STUDENT_SORT_OPTIONS, cleanClassString, getOfficialReportHeaderHtml, getStandardPrintStyles, printHtmlDocument, getOfficialReportFooterHtml } from '../../utils/reportUtils';
 import AdvancedPrintModal from '../ui/AdvancedPrintModal';
 
 export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpdated, onEditLink }) {
@@ -981,7 +981,14 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                 return;
             }
 
-            const sortedList = sortStudentsArabic(targetList, 'studentName');
+            const sortedList = sortStudentsByMode(
+                targetList.map(s => ({ ...s, name: s.studentName })),
+                options.sortBy || 'alphabetical',
+                s => {
+                    const st = students.find(x => x.id === s.matchedStudentId);
+                    return Number(st?.totalPoints) || 0;
+                }
+            );
 
             // Table Headers
             const ths = [];
@@ -2396,6 +2403,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                     defaultTitle={`كشف حصر المشاركات والتسليم - ${link.title}`}
                     totalRecordsCount={filteredSubmissions.length}
                     selectedRecordsCount={selectedIds.length}
+                    sortOptions={STUDENT_SORT_OPTIONS('النقاط المملوكة')}
                     onPrint={handleExecuteAdvancedPrint}
                 />
             </div>

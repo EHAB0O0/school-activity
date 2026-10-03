@@ -32,6 +32,70 @@ export const sortStudentsArabic = (list, nameKey = 'name') => {
 };
 
 /**
+ * Rank a grade string: stage (ابتدائي < متوسط < ثانوي) then ordinal (أول..سادس).
+ */
+const ORDINALS = [
+    ['اول', 'أول', 'الاول', 'الأول', 'اولى', 'أولى', '1'],
+    ['ثاني', 'الثاني', 'ثانية', '2'],
+    ['ثالث', 'الثالث', 'ثالثة', '3'],
+    ['رابع', 'الرابع', '4'],
+    ['خامس', 'الخامس', '5'],
+    ['سادس', 'السادس', '6'],
+    ['سابع', '7'], ['ثامن', '8'], ['تاسع', '9'], ['عاشر', '10']
+];
+const ordinalRank = (str) => {
+    if (str === undefined || str === null) return 99;
+    const s = String(str).trim();
+    if (!s) return 99;
+    const num = parseInt(s.replace(/[^\d]/g, ''), 10);
+    const tokens = s.split(/[\s\-/]+/);
+    for (const tok of tokens) {
+        const idx = ORDINALS.findIndex(list => list.includes(tok));
+        if (idx !== -1) return idx + 1;
+    }
+    if (!isNaN(num)) return num;
+    return 99;
+};
+export const getGradeRank = (grade) => {
+    const g = String(grade || '').trim();
+    if (!g || g.startsWith('غير معروف') || g === 'Unknown') return 9999;
+    let stage = 2;
+    if (g.includes('ابتدائي')) stage = 0;
+    else if (g.includes('متوسط')) stage = 1;
+    else if (g.includes('ثانوي')) stage = 2;
+    return stage * 100 + ordinalRank(g);
+};
+
+/**
+ * Sort students by mode:
+ * - 'alphabetical': Arabic A-Z
+ * - 'class': grouped by grade (أول -> ثالث) then section (1 -> 6) then name
+ * - 'points_desc' / 'points_asc': by points (getPoints callback)
+ */
+export const sortStudentsByMode = (list, mode = 'alphabetical', getPoints = (s) => Number(s?.points) || 0) => {
+    const alpha = sortStudentsArabic(list);
+    if (mode === 'class') {
+        return [...alpha].sort((a, b) => {
+            const gr = getGradeRank(a?.grade || a?.class) - getGradeRank(b?.grade || b?.class);
+            if (gr !== 0) return gr;
+            return ordinalRank(a?.section) - ordinalRank(b?.section);
+        });
+    }
+    if (mode === 'points_desc' || mode === 'points_asc') {
+        const dir = mode === 'points_desc' ? -1 : 1;
+        return [...alpha].sort((a, b) => dir * ((getPoints(a) || 0) - (getPoints(b) || 0)));
+    }
+    return alpha;
+};
+
+export const STUDENT_SORT_OPTIONS = (pointsLabel = 'النقاط') => [
+    { id: 'alphabetical', label: 'أبجدي (أ - ي)', hint: 'ترتيب أسماء الطلاب أبجدياً.' },
+    { id: 'class', label: 'حسب الصف والشعبة', hint: 'طلاب كل صف تحت بعض: من أول/1 إلى ثالث/6، وأبجدياً داخل كل شعبة.' },
+    { id: 'points_desc', label: `${pointsLabel} (الأعلى أولاً)`, hint: `ترتيب تنازلي حسب ${pointsLabel}.` },
+    { id: 'points_asc', label: `${pointsLabel} (الأقل أولاً)`, hint: `ترتيب تصاعدي حسب ${pointsLabel}.` }
+];
+
+/**
  * Universal clean class string formatter
  * Prevents trailing hyphens ('غير معروف - ') and ensures standard display.
  */
