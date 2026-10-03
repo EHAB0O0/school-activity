@@ -37,7 +37,13 @@ export default function BulkPrintCertificatesModal({
         const doc = iframe.contentWindow.document;
         doc.open();
 
-        const certificatesHtml = selectedStudents.map((student) => `
+        const certificatesHtml = selectedStudents.map((student) => {
+            const isUnknown = student.grade === 'غير معروف' || student.grade === 'Unknown' || !!student.isGradeUnknown || (student.class && String(student.class).startsWith('غير معروف'));
+            const classLabel = isUnknown 
+                ? 'طالب متميز' 
+                : (student.grade && student.section ? `${student.grade} - ${student.section}` : (student.class || student.grade || 'طالب متميز')).replace(/\s*-\s*$/, '');
+
+            return `
             <div class="cert-page">
                 <div class="cert-outer-border">
                     <div class="cert-inner-border">
@@ -54,7 +60,7 @@ export default function BulkPrintCertificatesModal({
                             </div>
                             <div class="header-side left">
                                 <div>التاريخ: ${certificateDate}</div>
-                                <div>الصف: ${student.class || 'طالب متميز'}</div>
+                                <div>الصف: ${classLabel}</div>
                             </div>
                         </div>
 
@@ -91,7 +97,8 @@ export default function BulkPrintCertificatesModal({
                     </div>
                 </div>
             </div>
-        `).join('');
+        `;
+    }).join('');
 
         doc.write(`
             <!DOCTYPE html>
@@ -124,6 +131,9 @@ export default function BulkPrintCertificatesModal({
                         height: 210mm;
                         padding: 12mm;
                         page-break-after: always;
+                        break-after: page;
+                        page-break-inside: avoid !important;
+                        break-inside: avoid !important;
                         display: flex;
                         align-items: center;
                         justify-content: center;

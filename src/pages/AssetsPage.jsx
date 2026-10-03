@@ -188,26 +188,31 @@ export default function AssetsPage() {
             <head>
                 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
                 <style>
-                    body { font-family: 'Cairo', sans-serif; padding: 40px; color: #1a1a1a; background: #fff; }
-                    .header { text-align: center; border-bottom: 2px solid #eee; padding-bottom: 20px; margin-bottom: 30px; }
+                    @page { size: A4 portrait; margin: 12mm 15mm; }
+                    * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                    body { font-family: 'Cairo', sans-serif; padding: 20px 0; color: #1a1a1a; background: #fff; margin: 0; }
+                    .header { text-align: center; border-bottom: 2px solid #eee; padding-bottom: 20px; margin-bottom: 30px; page-break-inside: avoid !important; break-inside: avoid !important; }
                     .header h1 { margin: 0; color: #4f46e5; font-size: 24px; }
                     .header p { margin: 5px 0 0; color: #666; font-size: 14px; }
                     
-                    .card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+                    .card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 20px; page-break-inside: avoid !important; break-inside: avoid !important; }
                     .label { color: #64748b; font-size: 12px; margin-bottom: 4px; display: block; }
                     .value { font-size: 16px; font-weight: bold; color: #0f172a; }
                     
                     .status-available { color: #10b981; }
                     .status-maintenance { color: #ef4444; }
 
-                    .section-title { font-size: 18px; font-weight: bold; margin: 30px 0 15px; border-right: 4px solid #4f46e5; padding-right: 10px; }
+                    .section-title { font-size: 18px; font-weight: bold; margin: 30px 0 15px; border-right: 4px solid #4f46e5; padding-right: 10px; page-break-inside: avoid !important; break-inside: avoid !important; }
                     
-                    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
+                    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; page-break-inside: auto; break-inside: auto; }
+                    thead { display: table-header-group !important; }
+                    tfoot { display: table-footer-group !important; }
                     th { background: #f1f5f9; padding: 12px; text-align: right; color: #475569; font-weight: 600; border-bottom: 2px solid #e2e8f0; }
                     td { padding: 12px; border-bottom: 1px solid #e2e8f0; color: #334155; }
+                    tr, th, td { page-break-inside: avoid !important; break-inside: avoid !important; }
                     tr:last-child td { border-bottom: none; }
                     
-                    .notes-box { background: #fffbeb; border: 1px solid #fcd34d; padding: 15px; border-radius: 8px; color: #92400e; line-height: 1.6; }
+                    .notes-box { background: #fffbeb; border: 1px solid #fcd34d; padding: 15px; border-radius: 8px; color: #92400e; line-height: 1.6; page-break-inside: avoid !important; break-inside: avoid !important; }
                 </style>
             </head>
             <body>
@@ -440,18 +445,23 @@ export default function AssetsPage() {
             <head>
                 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
                 <style>
-                    body { font-family: 'Cairo', sans-serif; padding: 40px; color: #1a1a1a; background: #fff; }
-                    .header { text-align: center; border-bottom: 2px solid #eee; padding-bottom: 20px; margin-bottom: 30px; }
+                    @page { size: A4 portrait; margin: 12mm 15mm; }
+                    * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                    body { font-family: 'Cairo', sans-serif; padding: 20px 0; color: #1a1a1a; background: #fff; margin: 0; }
+                    .header { text-align: center; border-bottom: 2px solid #eee; padding-bottom: 20px; margin-bottom: 30px; page-break-inside: avoid !important; break-inside: avoid !important; }
                     .header h1 { margin: 0; color: #4f46e5; font-size: 24px; }
-                    .card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; }
+                    .card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; page-break-inside: avoid !important; break-inside: avoid !important; }
                     .label { color: #64748b; font-size: 12px; }
                     .value { font-size: 16px; font-weight: bold; color: #0f172a; }
                     .status-emerald { color: #10b981; } .status-amber { color: #d97706; } .status-red { color: #ef4444; }
-                    .section-title { font-size: 18px; font-weight: bold; margin: 30px 0 15px; border-right: 4px solid #4f46e5; padding-right: 10px; }
-                    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
+                    .section-title { font-size: 18px; font-weight: bold; margin: 30px 0 15px; border-right: 4px solid #4f46e5; padding-right: 10px; page-break-inside: avoid !important; break-inside: avoid !important; }
+                    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; page-break-inside: auto; break-inside: auto; }
+                    thead { display: table-header-group !important; }
+                    tfoot { display: table-footer-group !important; }
                     th { background: #f1f5f9; padding: 12px; text-align: right; border-bottom: 2px solid #e2e8f0; }
                     td { padding: 12px; border-bottom: 1px solid #e2e8f0; }
-                    .notes-box { background: #fffbeb; border: 1px solid #fcd34d; padding: 15px; border-radius: 8px; color: #92400e; }
+                    tr, th, td { page-break-inside: avoid !important; break-inside: avoid !important; }
+                    .notes-box { background: #fffbeb; border: 1px solid #fcd34d; padding: 15px; border-radius: 8px; color: #92400e; page-break-inside: avoid !important; break-inside: avoid !important; }
                 </style>
             </head>
             <body>

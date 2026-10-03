@@ -86,6 +86,27 @@ export default function StudentsPage() {
         return enrichDuplicateGroupsWithEvents(rawDuplicateGroups, allEvents);
     }, [rawDuplicateGroups, allEvents]);
 
+    // Helper to format student class cleanly without trailing hyphens
+    const cleanClassString = (stOrClass, grade, section) => {
+        if (!stOrClass) return '-';
+        if (typeof stOrClass === 'object') {
+            const isUnknown = stOrClass.grade === 'غير معروف' || 
+                              stOrClass.grade === 'Unknown' || 
+                              !!stOrClass.isGradeUnknown || 
+                              (stOrClass.class && String(stOrClass.class).startsWith('غير معروف'));
+            if (isUnknown) return 'غير معروف';
+            const g = (stOrClass.grade || '').trim();
+            const s = (stOrClass.section || '').trim();
+            if (g && s) return `${g} - ${s}`;
+            if (g) return g;
+            return (stOrClass.class || '').replace(/\s*-\s*$/, '').trim() || '-';
+        }
+        const str = String(stOrClass || '').trim();
+        if (!str || str.startsWith('غير معروف') || grade === 'غير معروف' || grade === 'Unknown') return 'غير معروف';
+        if (grade && section) return `${grade} - ${section}`;
+        return str.replace(/\s*-\s*$/, '').trim() || '-';
+    };
+
     // --- Add Student ---
     async function handleAdd(e) {
         e.preventDefault();
@@ -93,7 +114,7 @@ export default function StudentsPage() {
             const isUnknown = !!newStudent.isGradeUnknown || newStudent.grade === 'غير معروف';
             const finalGrade = isUnknown ? 'غير معروف' : (newStudent.grade || '');
             const finalSection = isUnknown ? '' : (newStudent.section || '');
-            const finalClass = isUnknown ? 'غير معروف' : `${finalGrade} - ${finalSection}`.trim();
+            const finalClass = isUnknown ? 'غير معروف' : (finalSection ? `${finalGrade} - ${finalSection}` : finalGrade).trim();
 
             await addDoc(collection(db, 'students'), {
                 name: newStudent.name.trim(),
@@ -188,7 +209,7 @@ export default function StudentsPage() {
             const isUnknown = selectedStudent.grade === 'غير معروف' || !!selectedStudent.isGradeUnknown;
             const finalGrade = isUnknown ? 'غير معروف' : (selectedStudent.grade || '');
             const finalSection = isUnknown ? '' : (selectedStudent.section || '');
-            const finalClass = isUnknown ? 'غير معروف' : (selectedStudent.class || `${finalGrade} - ${finalSection}`).trim();
+            const finalClass = isUnknown ? 'غير معروف' : (finalSection ? `${finalGrade} - ${finalSection}` : (selectedStudent.class || finalGrade)).replace(/\s*-\s*$/, '').trim();
 
             await updateDoc(doc(db, 'students', selectedStudent.id), {
                 name: selectedStudent.name.trim(),
@@ -226,224 +247,399 @@ export default function StudentsPage() {
         }
     };
 
-    // --- Student Profile PDF ---
-    const generateStudentProfilePDF = async (student, history, includePoints = false, pointsLogs = []) => {
-        const toastId = toast.loading('جاري طباعة الملف...');
+    // --- Student Profile PDF / Print ---
+    const generateStudentProfilePDF = async (student, history = [], includePoints = false, pointsLogs = []) => {
+        const toastId = toast.loading('جاري تجهيز ملف الطالب للطباعة...');
         try {
+            const schoolName = settings?.schoolName || 'ثانوية الملك عبدالله';
+            const currentDate = new Date().toLocaleDateString('ar-SA');
+            const classDisplay = cleanClassString(student);
+
             // 1. Iframe Isolation
             const iframe = document.createElement('iframe');
             Object.assign(iframe.style, {
-                position: 'fixed', top: '-9999px', left: '0', border: 'none',
-                width: '1000px', height: 'auto' // Auto height for dynamic content
+                position: 'fixed', right: '0', bottom: '0', width: '0', height: '0',
+                border: 'none', zIndex: '-9999'
             });
             document.body.appendChild(iframe);
             const doc = iframe.contentWindow.document;
             doc.open();
 
-            // 2. HTML Content
-            const specsHtml = (student.specializations || []).map(s =>
-                `<span class="badge">${s === 'General' ? 'عام' : s}</span>`
-            ).join(' ');
+            // 2. HTML Elements
+            const specsHtml = (student.specializations && student.specializations.length > 0)
+                ? student.specializations.map(s => `<span class="badge">${s === 'General' ? 'عام' : s}</span>`).join(' ')
+                : '<span style="color:#94a3b8; font-size:12px;">لا يوجد تخصيص محدد</span>';
 
-            const historyHtml = history.length > 0
+            const historyRows = history.length > 0
                 ? history.map((evt, i) => `
-                    <div class="row">
-                        <div class="cell w-5">${i + 1}</div>
-                        <div class="cell w-40 bold">${evt.title}</div>
-                        <div class="cell w-20">${evt.typeName || '-'}</div>
-                        <div class="cell w-20 dim">${evt.date || ''}</div>
-                        <div class="cell w-15 center">
-                             ${evt.status === 'Done' ? '<span class="status success">مكتمل</span>' : '<span class="status">مسجّل</span>'}
-                        </div>
-                    </div>
+                    <tr>
+                        <td style="text-align: center; font-weight: bold;">${i + 1}</td>
+                        <td style="font-weight: bold;">${evt.title || '-'}</td>
+                        <td>${evt.typeName || '-'}</td>
+                        <td style="color: #64748b; font-size: 12px;">${evt.date || (evt.startTime?.toDate ? evt.startTime.toDate().toLocaleDateString('ar-SA') : '-')}</td>
+                        <td style="text-align: center;">
+                            <span class="status ${evt.status === 'Done' ? 'success' : ''}">
+                                ${evt.status === 'Done' ? 'مكتمل' : (evt.status || 'مسجّل')}
+                            </span>
+                        </td>
+                    </tr>
                 `).join('')
-                : '<div class="empty">لا يوجد سجل نشاط</div>';
+                : `<tr><td colspan="5" style="text-align: center; color: #94a3b8; padding: 20px;">لا توجد مشاركات مسجلة لهذا الطالب حتى الآن</td></tr>`;
 
-            let pointsPageHtml = '';
+            let pointsSectionHtml = '';
             if (includePoints) {
-                const pointsRowsHtml = pointsLogs && pointsLogs.length > 0
+                const pointsRows = pointsLogs && pointsLogs.length > 0
                     ? pointsLogs.map((log, i) => {
                         const isPos = (Number(log.change) || 0) > 0;
                         const changeStr = isPos ? `+${log.change}` : `${log.change}`;
                         const logDate = log.createdAt?.toDate ? log.createdAt.toDate().toLocaleDateString('ar-SA') : (log.date || '-');
+                        const logTime = log.createdAt?.toDate ? log.createdAt.toDate().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' }) : '';
                         return `
-                            <div class="row">
-                                <div class="cell w-5">${i + 1}</div>
-                                <div class="cell w-20 dim">${logDate}</div>
-                                <div class="cell w-40 bold">${log.reason || log.eventTitle || 'حركة نقاط'}</div>
-                                <div class="cell w-15 center bold" style="${isPos ? 'color: #059669;' : 'color: #dc2626;'}">${changeStr}</div>
-                                <div class="cell w-20 center bold points">${log.newTotalPoints ?? '-'}</div>
-                            </div>
+                            <tr>
+                                <td style="text-align: center; font-weight: bold;">${i + 1}</td>
+                                <td style="color: #64748b; font-size: 12px;">${logDate} ${logTime ? `• ${logTime}` : ''}</td>
+                                <td style="font-weight: bold;">${log.reason || log.eventTitle || 'حركة نقاط'}</td>
+                                <td style="text-align: center;">
+                                    <span class="type-pill">${log.eventType || (log.actionType === 'manual_add' || log.actionType === 'manual_deduct' ? 'يدوي' : 'نشاط')}</span>
+                                </td>
+                                <td style="text-align: center; font-weight: bold; ${isPos ? 'color: #059669;' : 'color: #dc2626;'} direction: ltr;">
+                                    ${changeStr} ن
+                                </td>
+                                <td style="text-align: center; font-weight: bold; color: #047857;">${log.newTotalPoints ?? '-'}</td>
+                            </tr>
                         `;
                     }).join('')
-                    : '<div class="empty">لا توجد حركات نقاط مسجلة للطالب (الرصيد الحالي رصيد افتتاحي سابق)</div>';
+                    : `<tr><td colspan="6" style="text-align: center; color: #94a3b8; padding: 20px;">الرصيد الحالي لهذا الطالب (${student.totalPoints || 0} نقطة) معتمد كرصيد افتتاحي سابق دون حركات مسجلة</td></tr>`;
 
-                pointsPageHtml = `
-                    <div style="page-break-before: always; break-before: page; margin-top: 40px; padding-top: 20px; border-top: 2px dashed #cbd5e1;">
-                        <div class="header">
-                            <div class="avatar">${student.name.charAt(0)}</div>
-                            <h1>${student.name}</h1>
-                            <p>كشف سجل حركات نقاط التميز للطالب</p>
+                pointsSectionHtml = `
+                    <div class="section-container">
+                        <div class="section-title">
+                            <h3>سجل وتفاصيل حركات نقاط التميز (${pointsLogs ? pointsLogs.length : 0} حركة مسجلة)</h3>
                         </div>
-
-                        <div class="grid">
-                            <div class="card">
-                                <label>رصيد النقاط الحالي</label>
-                                <div class="val points">${student.totalPoints} نقطة</div>
-                            </div>
-                            <div class="card">
-                                <label>إجمالي العمليات المسجلة</label>
-                                <div class="val">${pointsLogs ? pointsLogs.length : 0} حركة</div>
-                            </div>
-                            <div class="card">
-                                <label>الصف / الشعبة</label>
-                                <div class="val">${student.class || '-'}</div>
-                            </div>
-                        </div>
-
-                        <h3>سجل حركات النقاط بالتفصيل</h3>
-                        <div class="table">
-                            <div class="row head">
-                                <div class="cell w-5">#</div>
-                                <div class="cell w-20">التاريخ والوقت</div>
-                                <div class="cell w-40">سبب الحركة / النشاط</div>
-                                <div class="cell w-15 center">مقدار التغيير</div>
-                                <div class="cell w-20 center">الرصيد بعد الحركة</div>
-                            </div>
-                            ${pointsRowsHtml}
-                        </div>
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th style="width: 5%;">#</th>
+                                    <th style="width: 20%;">التاريخ والوقت</th>
+                                    <th style="width: 35%;">سبب الحركة / النشاط</th>
+                                    <th style="width: 15%; text-align: center;">نوع العملية</th>
+                                    <th style="width: 12%; text-align: center;">مقدار التغيير</th>
+                                    <th style="width: 13%; text-align: center;">الرصيد بعد الحركة</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${pointsRows}
+                            </tbody>
+                        </table>
                     </div>
                 `;
             }
+
+            const joinDateStr = student.joinedAt?.toDate ? student.joinedAt.toDate().toLocaleDateString('ar-SA') : '-';
 
             doc.write(`
                 <!DOCTYPE html>
                 <html dir="rtl" lang="ar">
                 <head>
+                    <meta charset="UTF-8">
+                    <title>ملف الطالب - ${student.name}</title>
                     <style>
-                        body { font-family: 'Arial', sans-serif; background: #fff; color: #1f2937; padding: 40px; margin: 0; }
-                        .header { text-align: center; border-bottom: 2px solid #e5e7eb; padding-bottom: 20px; margin-bottom: 30px; }
-                        .avatar { width: 80px; height: 80px; background: #4f46e5; color: white; border-radius: 50%; font-size: 32px; font-weight: bold; display: flex; align-items: center; justify-content: center; margin: 0 auto 10px; }
-                        h1 { margin: 0; color: #111827; }
-                        p { margin: 5px 0 0; color: #6b7280; }
+                        @page { size: A4 portrait; margin: 12mm 15mm; }
+                        * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                        body {
+                            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                            background: #ffffff;
+                            color: #0f172a;
+                            margin: 0;
+                            padding: 0;
+                            line-height: 1.5;
+                        }
                         
-                        .grid { display: flex; gap: 20px; margin-bottom: 30px; }
-                        .card { flex: 1; background: #f9fafb; padding: 15px; border-radius: 8px; border: 1px solid #e5e7eb; text-align: center; }
-                        .card label { display: block; font-size: 11px; color: #6b7280; margin-bottom: 5px; }
-                        .card .val { font-size: 16px; font-weight: bold; color: #111827; }
-                        .points { color: #059669; }
-
-                        h3 { border-bottom: 1px solid #e5e7eb; padding-bottom: 5px; margin-bottom: 15px; font-size: 16px; }
-                        .badge { background: #e0e7ff; color: #4338ca; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin-left: 5px; }
+                        /* HEADER */
+                        .header {
+                            display: flex;
+                            justify-content: space-between;
+                            align-items: center;
+                            border-bottom: 2px solid #1e1b4b;
+                            padding-bottom: 12px;
+                            margin-bottom: 20px;
+                            page-break-inside: avoid !important;
+                            break-inside: avoid !important;
+                        }
+                        .header-side { font-size: 12px; line-height: 1.6; }
+                        .header-title { text-align: center; }
+                        .header-title h1 { margin: 0; font-size: 20px; color: #1e1b4b; }
+                        .header-title p { margin: 3px 0 0 0; font-size: 12px; color: #64748b; }
                         
-                        .table { border: 1px solid #e5e7eb; border-radius: 8px; }
-                        .row { display: flex; border-bottom: 1px solid #e5e7eb; padding: 10px; font-size: 13px; break-inside: avoid; }
-                        .row.head { background: #f9fafb; font-weight: bold; color: #374151; }
-                        .cell { padding: 0 5px; }
-                        .w-5 { width: 5%; } .w-20 { width: 20%; } .w-25 { width: 25%; } .w-35 { width: 35%; } .w-40 { width: 40%; } .w-15 { width: 15%; }
+                        /* STUDENT BANNER */
+                        .student-banner {
+                            display: flex;
+                            align-items: center;
+                            gap: 16px;
+                            background: #f8fafc;
+                            border: 1px solid #e2e8f0;
+                            border-radius: 12px;
+                            padding: 16px 20px;
+                            margin-bottom: 20px;
+                            page-break-inside: avoid !important;
+                            break-inside: avoid !important;
+                        }
+                        .avatar {
+                            width: 56px;
+                            height: 56px;
+                            background: linear-gradient(135deg, #4f46e5, #7c3aed);
+                            color: #ffffff;
+                            border-radius: 50%;
+                            font-size: 24px;
+                            font-weight: bold;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            flex-shrink: 0;
+                        }
+                        .student-banner-info { flex: 1; }
+                        .student-banner-info h2 { margin: 0 0 4px 0; font-size: 20px; color: #0f172a; }
+                        .student-banner-info p { margin: 0; font-size: 12px; color: #64748b; }
                         
-                        .bold { font-weight: bold; } .dim { color: #6b7280; } .center { text-align: center; }
-                        .status { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: #f3f4f6; color: #4b5563; }
-                        .status.success { background: #ecfdf5; color: #059669; }
-                        .empty { padding: 20px; text-align: center; color: #9ca3af; }
+                        /* KPI SUMMARY CARDS */
+                        .grid-cards {
+                            display: grid;
+                            grid-template-columns: repeat(4, 1fr);
+                            gap: 12px;
+                            margin-bottom: 20px;
+                            page-break-inside: avoid !important;
+                            break-inside: avoid !important;
+                        }
+                        .kpi-card {
+                            background: #f8fafc;
+                            border: 1px solid #e2e8f0;
+                            border-radius: 10px;
+                            padding: 12px 14px;
+                            text-align: center;
+                        }
+                        .kpi-card label { display: block; font-size: 11px; color: #64748b; margin-bottom: 4px; font-weight: 600; }
+                        .kpi-card .val { font-size: 15px; font-weight: bold; color: #0f172a; }
+                        .kpi-card .points-val { color: #059669; }
+                        
+                        /* SPECIALIZATIONS */
+                        .specs-section {
+                            background: #f8fafc;
+                            border: 1px solid #e2e8f0;
+                            border-radius: 10px;
+                            padding: 12px 16px;
+                            margin-bottom: 20px;
+                            display: flex;
+                            align-items: center;
+                            gap: 12px;
+                            page-break-inside: avoid !important;
+                            break-inside: avoid !important;
+                        }
+                        .specs-label { font-size: 12px; font-weight: bold; color: #334155; white-space: nowrap; }
+                        .badge {
+                            background: #ede9fe;
+                            color: #5b21b6;
+                            border: 1px solid #ddd6fe;
+                            padding: 3px 10px;
+                            border-radius: 6px;
+                            font-size: 11px;
+                            font-weight: 600;
+                            display: inline-block;
+                        }
+                        
+                        /* SECTION */
+                        .section-container {
+                            margin-bottom: 25px;
+                            page-break-inside: auto;
+                            break-inside: auto;
+                        }
+                        .section-title {
+                            border-bottom: 2px solid #e2e8f0;
+                            padding-bottom: 6px;
+                            margin-bottom: 12px;
+                            page-break-inside: avoid !important;
+                            break-inside: avoid !important;
+                        }
+                        .section-title h3 {
+                            margin: 0;
+                            font-size: 15px;
+                            color: #1e293b;
+                            font-weight: bold;
+                        }
+                        
+                        /* TABLES */
+                        table {
+                            width: 100%;
+                            border-collapse: collapse;
+                            font-size: 12px;
+                            page-break-inside: auto;
+                            break-inside: auto;
+                        }
+                        thead {
+                            display: table-header-group !important;
+                        }
+                        tfoot {
+                            display: table-footer-group !important;
+                        }
+                        th {
+                            background-color: #f1f5f9;
+                            color: #1e293b;
+                            font-weight: bold;
+                            text-align: right;
+                            padding: 8px 10px;
+                            border: 1px solid #cbd5e1;
+                        }
+                        td {
+                            padding: 7px 10px;
+                            border: 1px solid #cbd5e1;
+                            color: #334155;
+                            vertical-align: middle;
+                        }
+                        tr:nth-child(even) { background-color: #f8fafc; }
+                        tr, th, td {
+                            page-break-inside: avoid !important;
+                            break-inside: avoid !important;
+                        }
+                        
+                        .status {
+                            display: inline-block;
+                            font-size: 10px;
+                            font-weight: bold;
+                            padding: 2px 8px;
+                            border-radius: 4px;
+                            background: #f1f5f9;
+                            color: #475569;
+                            border: 1px solid #cbd5e1;
+                        }
+                        .status.success {
+                            background: #ecfdf5;
+                            color: #059669;
+                            border-color: #a7f3d0;
+                        }
+                        
+                        .type-pill {
+                            font-size: 10px;
+                            background: #f1f5f9;
+                            color: #475569;
+                            padding: 2px 6px;
+                            border-radius: 4px;
+                            border: 1px solid #e2e8f0;
+                        }
+                        
+                        /* SIGNATURES */
+                        .signatures {
+                            display: flex;
+                            justify-content: space-between;
+                            margin-top: 35px;
+                            padding: 0 40px;
+                            font-size: 13px;
+                            page-break-inside: avoid !important;
+                            break-inside: avoid !important;
+                        }
+                        .sig-box { text-align: center; width: 180px; }
+                        .sig-role { font-weight: bold; margin-bottom: 40px; color: #1e1b4b; }
+                        .sig-line { border-top: 1px dashed #94a3b8; padding-top: 5px; font-size: 11px; color: #64748b; }
                     </style>
                 </head>
                 <body>
                     <div class="header">
+                        <div class="header-side">
+                            <div>المملكة العربية السعودية</div>
+                            <div>وزارة التعليم</div>
+                            <div>${schoolName}</div>
+                        </div>
+                        <div class="header-title">
+                            <h1>${includePoints ? 'تقرير السجل الشامل ونقاط التميز' : 'تقرير الملف الفردي للطالب'}</h1>
+                            <p>قسم النشاط الطلابي المدرسي</p>
+                        </div>
+                        <div class="header-side" style="text-align: left;">
+                            <div>تاريخ الاستخراج: ${currentDate}</div>
+                            <div>حالة القيد: ${student.active !== false ? 'طالب منتظم' : 'مؤرشف'}</div>
+                        </div>
+                    </div>
+
+                    <div class="student-banner">
                         <div class="avatar">${student.name.charAt(0)}</div>
-                        <h1>${student.name}</h1>
-                        <p>تقرير الملف الشخصي للطالب</p>
-                    </div>
-
-                    <div class="grid">
-                        <div class="card">
-                            <label>الفصل</label>
-                            <div class="val">${student.class}</div>
-                        </div>
-                        <div class="card">
-                            <label>نقاط التميز</label>
-                            <div class="val points">${student.totalPoints}</div>
-                        </div>
-                         <div class="card">
-                            <label>تاريخ الانضمام</label>
-                            <div class="val">${student.joinedAt?.toDate ? student.joinedAt.toDate().toLocaleDateString('en-GB') : '-'}</div>
+                        <div class="student-banner-info">
+                            <h2>${student.name}</h2>
+                            <p>سجل تفصيلي معتمد لجميع المشاركات وبيانات نقاط التميز</p>
                         </div>
                     </div>
 
-                    <div style="margin-bottom: 30px;">
-                        <h3>التخصصات والفرق</h3>
-                        <div>${specsHtml || '<span style="color:#9ca3af">لا يوجد تخصيص</span>'}</div>
-                    </div>
-
-                    <h3>سجل النشاط الأخير</h3>
-                    <div class="table">
-                        <div class="row head">
-                            <div class="cell w-5">#</div>
-                            <div class="cell w-40">النشاط</div>
-                            <div class="cell w-20">النوع</div>
-                            <div class="cell w-20">التاريخ</div>
-                            <div class="cell w-15 center">الحالة</div>
+                    <div class="grid-cards">
+                        <div class="kpi-card">
+                            <label>الصف / الشعبة</label>
+                            <div class="val">${classDisplay}</div>
                         </div>
-                        ${historyHtml}
+                        <div class="kpi-card">
+                            <label>رصيد نقاط التميز</label>
+                            <div class="val points-val">${student.totalPoints || 0} نقطة</div>
+                        </div>
+                        <div class="kpi-card">
+                            <label>الأنشطة المسجلة</label>
+                            <div class="val">${history.length} نشاط</div>
+                        </div>
+                        <div class="kpi-card">
+                            <label>${includePoints ? 'حركات النقاط' : 'تاريخ الانضمام'}</label>
+                            <div class="val">${includePoints ? `${pointsLogs ? pointsLogs.length : 0} حركة` : joinDateStr}</div>
+                        </div>
                     </div>
 
-                    ${pointsPageHtml}
+                    <div class="specs-section">
+                        <span class="specs-label">التخصصات والفرق:</span>
+                        <div>${specsHtml}</div>
+                    </div>
+
+                    <div class="section-container">
+                        <div class="section-title">
+                            <h3>سجل الأنشطة والمشاركات (${history.length})</h3>
+                        </div>
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th style="width: 5%; text-align: center;">#</th>
+                                    <th style="width: 40%;">اسم النشاط</th>
+                                    <th style="width: 20%;">النوع / التصنيف</th>
+                                    <th style="width: 20%;">التاريخ والوقت</th>
+                                    <th style="width: 15%; text-align: center;">الحالة</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${historyRows}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    ${pointsSectionHtml}
+
+                    <div class="signatures">
+                        <div class="sig-box">
+                            <div class="sig-role">مشرف النشاط الطلابي</div>
+                            <div class="sig-line">التوقيع: .....................</div>
+                        </div>
+                        <div class="sig-box">
+                            <div class="sig-role">مدير المدرسة</div>
+                            <div class="sig-line">الختم والتوقيع: .....................</div>
+                        </div>
+                    </div>
                 </body>
                 </html>
             `);
             doc.close();
-            await new Promise(r => setTimeout(r, 200)); // Increased wait for rendering
 
-            const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
-                import('html2canvas'),
-                import('jspdf')
-            ]);
-
-            // 3. Dynamic Height Capture
-            const bodyHeight = doc.body.scrollHeight + 40; // Add padding
-            iframe.style.height = `${bodyHeight}px`;
-
-            const canvas = await html2canvas(doc.body, {
-                scale: 1.5, // Slightly lower scale for huge lists to safe memory
-                useCORS: true,
-                logging: false,
-                backgroundColor: '#ffffff',
-                height: bodyHeight,
-                windowHeight: bodyHeight
-            });
-            document.body.removeChild(iframe);
-
-            // PDF Logic (Smart Scaling with Alignment)
-            const imgData = canvas.toDataURL('image/jpeg', 0.85);
-            const pdf = new jsPDF('p', 'pt', 'a4');
-            const pageWidth = 595.28;
-            const pageHeight = 841.89;
-            const imgWidth = pageWidth; // Full width
-
-            // Calculate height proportional to width
-            const imgHeight = (canvas.height * imgWidth) / canvas.width;
-
-            let heightLeft = imgHeight;
-            let position = 0;
-
-            // First Page
-            pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
-            heightLeft -= pageHeight;
-
-            // Loop for subsequent pages
-            while (heightLeft > 0) {
-                position -= pageHeight;
-                pdf.addPage();
-                pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
-                heightLeft -= pageHeight;
-            }
-
-            pdf.save(`Profile_${student.name}.pdf`);
-            toast.success("تم طباعة الملف", { id: toastId });
+            setTimeout(() => {
+                toast.dismiss(toastId);
+                iframe.contentWindow.focus();
+                iframe.contentWindow.print();
+                setTimeout(() => {
+                    if (document.body.contains(iframe)) {
+                        document.body.removeChild(iframe);
+                    }
+                }, 2000);
+            }, 600);
 
         } catch (e) {
             console.error(e);
-            toast.error("فشل الطباعة", { id: toastId });
+            toast.error("فشل تجهيز الملف للطباعة", { id: toastId });
         }
     };
 
@@ -731,6 +927,7 @@ export default function StudentsPage() {
     };
 
     // 6. Bulk Export to Excel (.xlsx)
+    // 6. Bulk Export to Excel (.xlsx)
     const handleExportCSV = async () => {
         const selectedList = students.filter(s => selectedIds.includes(s.id));
         if (selectedList.length === 0) return;
@@ -739,16 +936,22 @@ export default function StudentsPage() {
         try {
             const XLSX = await import('xlsx');
             const headers = ["م", "اسم الطالب", "الصف", "الشعبة", "الفصل الكامل", "نقاط التميز", "التخصصات", "تاريخ الانضمام"];
-            const rows = selectedList.map((s, idx) => [
-                idx + 1,
-                s.name || '',
-                s.grade || '',
-                s.section || '',
-                (s.grade && s.section) ? `${s.grade} - ${s.section}` : (s.class || s.grade || ''),
-                s.totalPoints || 0,
-                (s.specializations || []).join('، ') || '-',
-                s.joinedAt?.toDate ? s.joinedAt.toDate().toLocaleDateString('ar-SA') : '-'
-            ]);
+            const rows = selectedList.map((s, idx) => {
+                const isUnknown = s.grade === 'غير معروف' || s.grade === 'Unknown' || !!s.isGradeUnknown || (s.class && String(s.class).startsWith('غير معروف'));
+                const gradeVal = isUnknown ? 'غير معروف' : (s.grade || '-');
+                const sectionVal = isUnknown ? '-' : (s.section || '-');
+                const classVal = cleanClassString(s);
+                return [
+                    idx + 1,
+                    s.name || '',
+                    gradeVal,
+                    sectionVal,
+                    classVal,
+                    s.totalPoints || 0,
+                    (s.specializations || []).join('، ') || '-',
+                    s.joinedAt?.toDate ? s.joinedAt.toDate().toLocaleDateString('ar-SA') : '-'
+                ];
+            });
 
             const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
 
@@ -802,7 +1005,7 @@ export default function StudentsPage() {
             <tr>
                 <td style="text-align: center; font-weight: bold;">${idx + 1}</td>
                 <td style="font-weight: bold;">${st.name}</td>
-                <td style="text-align: center;">${st.class || '-'}</td>
+                <td style="text-align: center;">${cleanClassString(st)}</td>
                 <td>${(st.specializations || []).join('، ') || 'عام'}</td>
                 <td style="text-align: center; font-weight: bold; color: #047857;">${st.totalPoints || 0}</td>
                 <td style="min-width: 120px;"></td>
@@ -816,19 +1019,22 @@ export default function StudentsPage() {
                 <meta charset="UTF-8">
                 <title>كشف مجمّع لبيانات الطلاب</title>
                 <style>
-                    @page { size: A4 portrait; margin: 15mm; }
+                    @page { size: A4 portrait; margin: 12mm 15mm; }
                     * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
                     body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; color: #111827; }
-                    .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #1e1b4b; padding-bottom: 12px; margin-bottom: 20px; }
+                    .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #1e1b4b; padding-bottom: 12px; margin-bottom: 20px; page-break-inside: avoid !important; break-inside: avoid !important; }
                     .header-side { font-size: 13px; line-height: 1.6; }
                     .header-title { text-align: center; }
                     .header-title h1 { margin: 0; font-size: 22px; color: #1e1b4b; }
                     .header-title p { margin: 4px 0 0 0; font-size: 13px; color: #4b5563; }
-                    table { width: 100%; border-collapse: collapse; margin-bottom: 30px; font-size: 13px; }
+                    table { width: 100%; border-collapse: collapse; margin-bottom: 30px; font-size: 13px; page-break-inside: auto; break-inside: auto; }
+                    thead { display: table-header-group !important; }
+                    tfoot { display: table-footer-group !important; }
                     th, td { border: 1px solid #d1d5db; padding: 8px 10px; }
-                    th { background-color: #f3f4f6; color: #1f2937; font-weight: bold; }
+                    th { background-color: #f3f4f6; color: #1f2937; font-weight: bold; text-align: right; }
                     tr:nth-child(even) { background-color: #f9fafb; }
-                    .signatures { display: flex; justify-content: space-between; margin-top: 40px; padding: 0 30px; font-size: 14px; }
+                    tr, th, td { page-break-inside: avoid !important; break-inside: avoid !important; }
+                    .signatures { display: flex; justify-content: space-between; margin-top: 40px; padding: 0 30px; font-size: 14px; page-break-inside: avoid !important; break-inside: avoid !important; }
                     .sig-box { text-align: center; width: 200px; }
                     .sig-role { font-weight: bold; margin-bottom: 40px; color: #1f2937; }
                     .sig-line { border-top: 1px dashed #9ca3af; padding-top: 5px; font-size: 12px; color: #6b7280; }
@@ -854,11 +1060,11 @@ export default function StudentsPage() {
                 <table>
                     <thead>
                         <tr>
-                            <th style="width: 5%;">#</th>
+                            <th style="width: 5%; text-align: center;">#</th>
                             <th style="width: 30%;">اسم الطالب</th>
-                            <th style="width: 20%;">الصف / الشعبة</th>
+                            <th style="width: 20%; text-align: center;">الصف / الشعبة</th>
                             <th style="width: 25%;">التخصصات والأنشطة</th>
-                            <th style="width: 10%;">نقاط التميز</th>
+                            <th style="width: 10%; text-align: center;">نقاط التميز</th>
                             <th style="width: 10%;">ملاحظات والتوقيع</th>
                         </tr>
                     </thead>
@@ -951,7 +1157,7 @@ export default function StudentsPage() {
                             <div class="student-meta">
                                 <h1>${st.name}</h1>
                                 <div class="meta-row">
-                                    <span>الفصل: <strong>${st.class || '-'}</strong></span>
+                                    <span>الصف: <strong>${cleanClassString(st)}</strong></span>
                                     <span>نقاط التميز: <strong class="points">${st.totalPoints || 0}</strong></span>
                                     <span>تاريخ الانضمام: <strong>${st.joinedAt?.toDate ? st.joinedAt.toDate().toLocaleDateString('ar-SA') : '-'}</strong></span>
                                 </div>
@@ -987,25 +1193,25 @@ export default function StudentsPage() {
                     <meta charset="UTF-8">
                     <title>سجلات تفصيلية للطلاب</title>
                     <style>
-                        @page { size: A4 portrait; margin: 12mm; }
+                        @page { size: A4 portrait; margin: 12mm 15mm; }
                         * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
                         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; color: #111827; }
-                        .student-page { page-break-after: always; min-height: 250mm; display: flex; flex-direction: column; }
-                        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #e5e7eb; padding-bottom: 10px; margin-bottom: 20px; }
+                        .student-page { page-break-after: always; break-after: page; page-break-inside: avoid !important; break-inside: avoid !important; min-height: 250mm; display: flex; flex-direction: column; }
+                        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #e5e7eb; padding-bottom: 10px; margin-bottom: 20px; page-break-inside: avoid !important; break-inside: avoid !important; }
                         .school-info { font-size: 12px; line-height: 1.5; }
                         .report-title { text-align: left; }
                         .report-title h2 { margin: 0; font-size: 18px; color: #1e1b4b; }
                         .report-title p { margin: 2px 0 0 0; font-size: 11px; color: #6b7280; }
-                        .profile-card { display: flex; align-items: center; gap: 15px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 12px; padding: 15px; margin-bottom: 20px; }
+                        .profile-card { display: flex; align-items: center; gap: 15px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 12px; padding: 15px; margin-bottom: 20px; page-break-inside: avoid !important; break-inside: avoid !important; }
                         .avatar { width: 50px; height: 50px; border-radius: 50%; background: #4f46e5; color: white; display: flex; align-items: center; justify-content: center; font-size: 22px; font-weight: bold; }
                         .student-meta h1 { margin: 0 0 6px 0; font-size: 20px; color: #111827; }
                         .meta-row { display: flex; gap: 20px; font-size: 13px; color: #4b5563; }
                         .points { color: #059669; }
-                        .section-box { margin-bottom: 20px; }
+                        .section-box { margin-bottom: 20px; page-break-inside: avoid !important; break-inside: avoid !important; }
                         .section-box h3 { font-size: 14px; border-bottom: 1px solid #e5e7eb; padding-bottom: 5px; margin-bottom: 10px; color: #374151; }
                         .badge { background: #e0e7ff; color: #4338ca; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin-left: 5px; }
-                        .table { border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; }
-                        .row { display: flex; border-bottom: 1px solid #e5e7eb; padding: 8px 10px; font-size: 12px; }
+                        .table { border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; page-break-inside: auto; break-inside: auto; }
+                        .row { display: flex; border-bottom: 1px solid #e5e7eb; padding: 8px 10px; font-size: 12px; page-break-inside: avoid !important; break-inside: avoid !important; }
                         .row.head { background: #f9fafb; font-weight: bold; color: #374151; }
                         .row:last-child { border-bottom: none; }
                         .cell { padding: 0 5px; }

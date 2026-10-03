@@ -946,8 +946,11 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                 ? customFields.map(f => `<td>${s.customValues?.[f.id] || (f.id === 'f_legacy' ? s.customFieldValue : '') || (customFields.length === 1 ? s.customFieldValue : '') || '-'}</td>`).join('')
                 : `<td>${s.customFieldValue || '-'}</td>`;
 
-            const isUnknown = s.grade === 'غير معروف' || !!s.isGradeUnknown;
-            const classDisplay = isUnknown ? 'غير معروف' : (s.grade && s.section ? `${s.grade} / ${s.section}` : (s.grade || '-'));
+            const isUnknown = s.grade === 'غير معروف' || s.grade === 'Unknown' || !!s.isGradeUnknown || (s.grade && String(s.grade).trim().startsWith('غير معروف')) || (s.class && String(s.class).trim().startsWith('غير معروف'));
+            const cleanG = s.grade ? String(s.grade).replace(/\s*-\s*$/, '').trim() : '';
+            const classDisplay = isUnknown 
+                ? 'غير معروف' 
+                : (cleanG && s.section ? `${cleanG} - ${s.section}` : (s.class || cleanG || '-')).replace(/\s*-\s*$/, '');
 
             return `
                 <tr>
@@ -969,19 +972,91 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                 <title>كشف حصر المشاركات - ${link.title}</title>
                 <style>
                     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap');
-                    body { font-family: 'Cairo', sans-serif; margin: 20px; color: #0f172a; }
-                    .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #0f172a; padding-bottom: 15px; margin-bottom: 20px; }
+                    @page {
+                        size: A4 portrait;
+                        margin: 12mm 15mm;
+                    }
+                    * {
+                        box-sizing: border-box;
+                        -webkit-print-color-adjust: exact !important;
+                        print-color-adjust: exact !important;
+                    }
+                    body {
+                        font-family: 'Cairo', sans-serif;
+                        margin: 0;
+                        padding: 0;
+                        color: #0f172a;
+                        background: #ffffff;
+                    }
+                    .header {
+                        display: flex;
+                        justify-content: space-between;
+                        align-items: center;
+                        border-bottom: 2px solid #0f172a;
+                        padding-bottom: 12px;
+                        margin-bottom: 15px;
+                        page-break-inside: avoid;
+                        break-inside: avoid;
+                    }
                     .header-title { text-align: center; }
                     .header-title h2 { margin: 0; font-size: 20px; font-weight: 900; }
                     .header-title p { margin: 4px 0 0; font-size: 13px; color: #475569; }
-                    .meta-bar { display: flex; justify-content: space-between; background: #f1f5f9; padding: 10px 16px; border-radius: 8px; margin-bottom: 20px; font-size: 13px; font-weight: 600; }
-                    table { width: 100%; border-collapse: collapse; margin-bottom: 30px; font-size: 12px; }
-                    th, td { border: 1px solid #cbd5e1; padding: 8px 10px; }
-                    th { background-color: #f8fafc; font-weight: bold; }
-                    .footer-signatures { display: flex; justify-content: space-around; margin-top: 40px; text-align: center; font-size: 13px; font-weight: 700; }
+                    .meta-bar {
+                        display: flex;
+                        justify-content: space-between;
+                        background: #f1f5f9;
+                        padding: 8px 14px;
+                        border-radius: 8px;
+                        margin-bottom: 18px;
+                        font-size: 12px;
+                        font-weight: 600;
+                        page-break-inside: avoid;
+                        break-inside: avoid;
+                    }
+                    table {
+                        width: 100%;
+                        border-collapse: collapse;
+                        margin-bottom: 25px;
+                        font-size: 12px;
+                        page-break-inside: auto;
+                        break-inside: auto;
+                    }
+                    thead {
+                        display: table-header-group !important;
+                    }
+                    tfoot {
+                        display: table-footer-group !important;
+                    }
+                    tr {
+                        page-break-inside: avoid !important;
+                        break-inside: avoid !important;
+                    }
+                    th, td {
+                        border: 1px solid #cbd5e1;
+                        padding: 7px 9px;
+                        page-break-inside: avoid !important;
+                        break-inside: avoid !important;
+                    }
+                    th {
+                        background-color: #f1f5f9 !important;
+                        color: #0f172a;
+                        font-weight: bold;
+                    }
+                    tr:nth-child(even) {
+                        background-color: #f8fafc;
+                    }
+                    .footer-signatures {
+                        display: flex;
+                        justify-content: space-around;
+                        margin-top: 30px;
+                        text-align: center;
+                        font-size: 13px;
+                        font-weight: 700;
+                        page-break-inside: avoid !important;
+                        break-inside: avoid !important;
+                    }
                     .sig-box { min-width: 180px; }
                     .sig-line { margin-top: 45px; border-top: 1px dashed #64748b; }
-                    @media print { body { margin: 10mm; } }
                 </style>
             </head>
             <body>

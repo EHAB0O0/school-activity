@@ -826,12 +826,17 @@ export default function ReportsPage() {
         } else if (activeTab === 'students') {
             exportData = previewData.map((s, i) => {
                 const history = studentParticipationMap[s.id] || studentParticipationMap[s.name] || [];
+                const isUnknown = s.grade === 'غير معروف' || s.grade === 'Unknown' || !!s.isGradeUnknown || (s.class && String(s.class).startsWith('غير معروف'));
+                const gradeVal = isUnknown ? 'غير معروف' : (s.grade || '');
+                const sectionVal = isUnknown ? '-' : (s.section || '');
+                const classVal = isUnknown ? 'غير معروف' : ((s.grade && s.section) ? `${s.grade} - ${s.section}` : (s.class || s.grade || '')).replace(/\s*-\s*$/, '');
+
                 const row = {
                     "م": i + 1,
                     "الاسم": s.name,
-                    "الصف": s.grade || '',
-                    "الشعبة": s.section || '',
-                    "الفصل": (s.grade && s.section) ? `${s.grade} - ${s.section}` : (s.class || ''),
+                    "الصف": gradeVal,
+                    "الشعبة": sectionVal,
+                    "الفصل": classVal,
                     "إجمالي النقاط": s.points,
                     "التخصصات": s.specializations?.join(', ') || '-'
                 };
@@ -857,15 +862,22 @@ export default function ReportsPage() {
             });
         } else if (activeTab === 'archive') {
             if (archiveSubTab === 'students') {
-                exportData = previewData.map((s, i) => ({
-                    "م": i + 1,
-                    "اسم الطالب": s.name,
-                    "الصف": s.grade || '',
-                    "الشعبة": s.section || '',
-                    "الفصل": (s.grade && s.section) ? `${s.grade} - ${s.section}` : (s.class || ''),
-                    "النقاط السابقة": s.points || 0,
-                    "التخصصات": (s.specializations || []).join('، ') || '-'
-                }));
+                exportData = previewData.map((s, i) => {
+                    const isUnknown = s.grade === 'غير معروف' || s.grade === 'Unknown' || !!s.isGradeUnknown || (s.class && String(s.class).startsWith('غير معروف'));
+                    const gradeVal = isUnknown ? 'غير معروف' : (s.grade || '');
+                    const sectionVal = isUnknown ? '-' : (s.section || '');
+                    const classVal = isUnknown ? 'غير معروف' : ((s.grade && s.section) ? `${s.grade} - ${s.section}` : (s.class || s.grade || '')).replace(/\s*-\s*$/, '');
+
+                    return {
+                        "م": i + 1,
+                        "اسم الطالب": s.name,
+                        "الصف": gradeVal,
+                        "الشعبة": sectionVal,
+                        "الفصل": classVal,
+                        "النقاط السابقة": s.points || 0,
+                        "التخصصات": (s.specializations || []).join('، ') || '-'
+                    };
+                });
             } else {
                 exportData = previewData.map(e => ({
                     "النشاط": e.title,
@@ -878,22 +890,29 @@ export default function ReportsPage() {
                 }));
             }
         } else if (activeTab === 'points') {
-            exportData = previewData.map((p, i) => ({
-                "م": i + 1,
-                "اسم الطالب": p.studentName,
-                "الصف": p.grade || '',
-                "الشعبة": p.section || '',
-                "الفصل": (p.grade && p.section) ? `${p.grade} - ${p.section}` : (p.class || ''),
-                "نوع الحركة": p.change > 0 ? `+${p.change} (إضافة)` : `${p.change} (خصم)`,
-                "التغيير": p.change,
-                "الرصيد السابق": p.previousTotalPoints,
-                "الرصيد الجديد": p.newTotalPoints,
-                "سبب الحركة": p.reason,
-                "النشاط المرتبط": p.eventTitle || '-',
-                "نوع النشاط": p.eventType || '-',
-                "المنفّذ": p.performedBy || 'النظام',
-                "التاريخ والوقت": p.formattedDate || p.date
-            }));
+            exportData = previewData.map((p, i) => {
+                const isUnknown = p.grade === 'غير معروف' || p.grade === 'Unknown' || (p.class && String(p.class).startsWith('غير معروف'));
+                const gradeVal = isUnknown ? 'غير معروف' : (p.grade || '');
+                const sectionVal = isUnknown ? '-' : (p.section || '');
+                const classVal = isUnknown ? 'غير معروف' : ((p.grade && p.section) ? `${p.grade} - ${p.section}` : (p.class || p.grade || '')).replace(/\s*-\s*$/, '');
+
+                return {
+                    "م": i + 1,
+                    "اسم الطالب": p.studentName,
+                    "الصف": gradeVal,
+                    "الشعبة": sectionVal,
+                    "الفصل": classVal,
+                    "نوع الحركة": p.change > 0 ? `+${p.change} (إضافة)` : `${p.change} (خصم)`,
+                    "التغيير": p.change,
+                    "الرصيد السابق": p.previousTotalPoints,
+                    "الرصيد الجديد": p.newTotalPoints,
+                    "سبب الحركة": p.reason,
+                    "النشاط المرتبط": p.eventTitle || '-',
+                    "نوع النشاط": p.eventType || '-',
+                    "المنفّذ": p.performedBy || 'النظام',
+                    "التاريخ والوقت": p.formattedDate || p.date
+                };
+            });
         }
 
         // 2. Create Workbook
@@ -1087,7 +1106,8 @@ export default function ReportsPage() {
                     const specs = item.specializations && item.specializations.length > 0
                         ? item.specializations.map(s => s === 'General' ? 'عام' : s).join(', ')
                         : '-';
-                    const className = (item.grade && item.section) ? `${item.grade} - ${item.section}` : (item.class || item.grade || '-');
+                    const isUnknown = item.grade === 'غير معروف' || item.grade === 'Unknown' || !!item.isGradeUnknown || (item.class && String(item.class).startsWith('غير معروف'));
+                    const className = isUnknown ? 'غير معروف' : ((item.grade && item.section) ? `${item.grade} - ${item.section}` : (item.class || item.grade || '-')).replace(/\s*-\s*$/, '');
                     const mainRow = `
                     <tr>
                          <td class="center dim">${i + 1}</td>
@@ -1280,18 +1300,22 @@ export default function ReportsPage() {
                 <html dir="rtl" lang="ar">
                 <head>
                     <style>
+                        @page { size: A4 portrait; margin: 12mm 15mm; }
+                        * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
                         body {
                             font-family: 'Arial', sans-serif;
                             background-color: #ffffff;
                             color: #1f2937;
                             margin: 0;
-                            padding: 40px;
+                            padding: 20px 0;
                         }
                         .header {
                             text-align: center;
-                            margin-bottom: 40px;
+                            margin-bottom: 30px;
                             border-bottom: 2px solid #e5e7eb;
                             padding-bottom: 20px;
+                            page-break-inside: avoid !important;
+                            break-inside: avoid !important;
                         }
                         h1 { margin: 0; font-size: 24px; color: #111827; }
                         p.subtitle { margin: 5px 0 0; color: #6b7280; font-size: 14px; }
@@ -1300,20 +1324,32 @@ export default function ReportsPage() {
                             width: 100%;
                             border-collapse: collapse;
                             margin-top: 20px;
-                            font-size: 14px; /* Increased from 12px */
+                            font-size: 13px;
+                            page-break-inside: auto;
+                            break-inside: auto;
+                        }
+                        thead {
+                            display: table-header-group !important;
+                        }
+                        tfoot {
+                            display: table-footer-group !important;
                         }
                         th {
                             background-color: #f3f4f6;
                             color: #374151;
                             text-align: right;
-                            padding: 14px; /* Increased padding */
+                            padding: 10px 12px;
                             border-bottom: 2px solid #e5e7eb;
                             font-weight: bold;
                         }
                         td {
-                            padding: 12px 14px; /* Increased padding */
+                            padding: 9px 12px;
                             border-bottom: 1px solid #e5e7eb;
                             vertical-align: middle;
+                        }
+                        tr, th, td {
+                            page-break-inside: avoid !important;
+                            break-inside: avoid !important;
                         }
                         tr:nth-child(even) { background-color: #f9fafb; }
                         
