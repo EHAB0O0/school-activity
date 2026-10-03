@@ -139,15 +139,73 @@ export const getOfficialReportHeaderHtml = ({
 };
 
 /**
- * Standard CSS for Printable Documents
- * Ensures clean page splitting, repeated table headers, no clipped cells, and exact colors.
+ * Standard Report Footer with Custom Signatures and Notes
  */
-export const getStandardPrintStyles = (extraCss = '') => `
+export const getOfficialReportFooterHtml = ({
+    signatures = [
+        { role: 'المعد / المسؤول', name: '________________' },
+        { role: 'رائد النشاط الطلابي', name: 'أ. ________________' },
+        { role: 'مدير المدرسة', name: 'أ. ________________' }
+    ],
+    footerNote = '',
+    showSignatures = true
+} = {}) => {
+    if (!showSignatures && !footerNote) return '';
+
+    const sigBoxesHtml = (showSignatures && Array.isArray(signatures)) ? signatures.map(sig => `
+        <div class="sig-box">
+            <div class="sig-role">${sig.role}</div>
+            <div class="sig-name">${sig.name || '________________'}</div>
+            <div class="sig-line">التوقيع / الختم</div>
+        </div>
+    `).join('') : '';
+
+    return `
+        <div class="report-footer-container">
+            ${footerNote ? `<div class="report-footer-note">${footerNote}</div>` : ''}
+            ${showSignatures ? `<div class="footer-signatures">${sigBoxesHtml}</div>` : ''}
+        </div>
+    `;
+};
+
+/**
+ * Standard CSS for Printable Documents
+ * Supports:
+ * - Themes: 'classic' (Official White), 'monochrome' (Ink-Saver B&W), 'dark' (Modern Dark Mode)
+ * - Orientation: 'portrait' | 'landscape'
+ * - Density: 'standard' | 'compact'
+ * - Extra CSS override
+ */
+export const getStandardPrintStyles = (options = {}) => {
+    let extraCss = '';
+    let theme = 'classic';
+    let orientation = 'portrait';
+    let density = 'standard';
+
+    if (typeof options === 'string') {
+        extraCss = options;
+    } else if (typeof options === 'object' && options !== null) {
+        extraCss = options.extraCss || '';
+        theme = options.theme || 'classic';
+        orientation = options.orientation || 'portrait';
+        density = options.density || 'standard';
+    }
+
+    const isDark = theme === 'dark';
+    const isMonochrome = theme === 'monochrome';
+    const isCompact = density === 'compact';
+
+    const pageMargin = isCompact ? '8mm 10mm' : '12mm 15mm';
+    const cellPadding = isCompact ? '4px 6px' : '8px 10px';
+    const tableFontSize = isCompact ? '10px' : '12px';
+    const titleFontSize = isCompact ? '18px' : '20px';
+
+    return `
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap');
     
     @page {
-        size: A4 portrait;
-        margin: 12mm 15mm;
+        size: A4 ${orientation};
+        margin: ${pageMargin};
     }
 
     * {
@@ -158,8 +216,8 @@ export const getStandardPrintStyles = (extraCss = '') => `
 
     body {
         font-family: 'Cairo', 'Segoe UI', Tahoma, sans-serif;
-        background: #ffffff !important;
-        color: #0f172a !important;
+        background: ${isDark ? '#090d16' : '#ffffff'} !important;
+        color: ${isDark ? '#f1f5f9' : isMonochrome ? '#000000' : '#0f172a'} !important;
         margin: 0;
         padding: 0;
         line-height: 1.5;
@@ -171,64 +229,64 @@ export const getStandardPrintStyles = (extraCss = '') => `
         display: flex;
         justify-content: space-between;
         align-items: center;
-        border-bottom: 2px solid #0f172a;
-        padding-bottom: 12px;
-        margin-bottom: 20px;
+        border-bottom: 2px solid ${isDark ? '#38bdf8' : isMonochrome ? '#000000' : '#0f172a'};
+        padding-bottom: ${isCompact ? '8px' : '12px'};
+        margin-bottom: ${isCompact ? '12px' : '20px'};
         page-break-inside: avoid !important;
         break-inside: avoid !important;
     }
 
     .official-header-right {
         text-align: right;
-        font-size: 13px;
+        font-size: ${isCompact ? '11px' : '13px'};
         font-weight: 700;
-        line-height: 1.6;
-        color: #1e293b;
-        min-width: 180px;
+        line-height: 1.5;
+        color: ${isDark ? '#e2e8f0' : isMonochrome ? '#000000' : '#1e293b'};
+        min-width: ${isCompact ? '140px' : '180px'};
     }
 
     .official-header-center {
         text-align: center;
         flex: 1;
-        padding: 0 15px;
+        padding: 0 10px;
     }
 
     .official-header-title {
         margin: 0;
-        font-size: 20px;
+        font-size: ${titleFontSize};
         font-weight: 900;
-        color: #0f172a;
+        color: ${isDark ? '#ffffff' : isMonochrome ? '#000000' : '#0f172a'};
         letter-spacing: -0.3px;
     }
 
     .official-header-sub {
-        margin: 3px 0 0;
-        font-size: 14px;
+        margin: 2px 0 0;
+        font-size: ${isCompact ? '12px' : '14px'};
         font-weight: 700;
-        color: #4338ca;
+        color: ${isDark ? '#38bdf8' : isMonochrome ? '#000000' : '#4338ca'};
     }
 
     .official-header-student {
-        margin: 4px 0 0;
-        font-size: 14px;
+        margin: 3px 0 0;
+        font-size: ${isCompact ? '12px' : '14px'};
         font-weight: 700;
-        color: #0f172a;
+        color: ${isDark ? '#ffffff' : isMonochrome ? '#000000' : '#0f172a'};
     }
 
     .official-header-details {
-        margin-top: 5px;
-        font-size: 11px;
+        margin-top: 4px;
+        font-size: ${isCompact ? '10px' : '11px'};
         font-weight: 600;
-        color: #64748b;
+        color: ${isDark ? '#94a3b8' : isMonochrome ? '#333333' : '#64748b'};
     }
 
     .official-header-left {
         text-align: left;
-        font-size: 12px;
+        font-size: ${isCompact ? '10.5px' : '12px'};
         font-weight: 600;
-        line-height: 1.6;
-        color: #334155;
-        min-width: 180px;
+        line-height: 1.5;
+        color: ${isDark ? '#cbd5e1' : isMonochrome ? '#000000' : '#334155'};
+        min-width: ${isCompact ? '140px' : '180px'};
         direction: rtl;
     }
 
@@ -236,9 +294,9 @@ export const getStandardPrintStyles = (extraCss = '') => `
     table {
         width: 100%;
         border-collapse: collapse;
-        margin-top: 15px;
-        margin-bottom: 20px;
-        font-size: 12px;
+        margin-top: ${isCompact ? '10px' : '15px'};
+        margin-bottom: ${isCompact ? '12px' : '20px'};
+        font-size: ${tableFontSize};
         page-break-inside: auto !important;
         break-inside: auto !important;
     }
@@ -257,88 +315,144 @@ export const getStandardPrintStyles = (extraCss = '') => `
     }
 
     th, td {
-        border: 1px solid #cbd5e1;
-        padding: 8px 10px;
+        border: 1px solid ${isDark ? '#1e293b' : isMonochrome ? '#000000' : '#cbd5e1'};
+        padding: ${cellPadding};
         text-align: right;
         vertical-align: middle;
         page-break-inside: avoid !important;
         break-inside: avoid !important;
+        color: ${isDark ? '#f1f5f9' : isMonochrome ? '#000000' : '#0f172a'};
     }
 
     th {
-        background-color: #f1f5f9 !important;
-        color: #0f172a !important;
+        background-color: ${isDark ? '#111827' : isMonochrome ? '#ffffff' : '#f1f5f9'} !important;
+        color: ${isDark ? '#38bdf8' : isMonochrome ? '#000000' : '#0f172a'} !important;
         font-weight: 800;
+        border-bottom: ${isMonochrome ? '2px solid #000000' : isDark ? '2px solid #38bdf8' : '1px solid #cbd5e1'};
     }
 
-    tr:nth-child(even) {
-        background-color: #f8fafc !important;
+    tr:nth-child(even) td {
+        background-color: ${isDark ? '#0d131f' : isMonochrome ? '#ffffff' : '#f8fafc'} !important;
+    }
+    tr:nth-child(odd) td {
+        background-color: ${isDark ? '#090d16' : '#ffffff'} !important;
     }
 
-    /* Cards & Containers */
+    /* Badges & Tags */
+    .badge, .status, .type-pill {
+        display: inline-block;
+        font-size: ${isCompact ? '9px' : '10px'};
+        font-weight: bold;
+        padding: 2px 6px;
+        border-radius: 4px;
+        border: 1px solid ${isDark ? '#334155' : isMonochrome ? '#000000' : '#cbd5e1'};
+        background: ${isDark ? '#1e293b' : isMonochrome ? 'transparent' : '#f1f5f9'};
+        color: ${isDark ? '#e2e8f0' : isMonochrome ? '#000000' : '#475569'};
+    }
+
+    .badge.success, .status.success {
+        background: ${isDark ? '#064e3b' : isMonochrome ? 'transparent' : '#ecfdf5'} !important;
+        color: ${isDark ? '#34d399' : isMonochrome ? '#000000' : '#059669'} !important;
+        border-color: ${isDark ? '#059669' : isMonochrome ? '#000000' : '#a7f3d0'} !important;
+    }
+
+    .badge.danger, .status.danger {
+        background: ${isDark ? '#4c0519' : isMonochrome ? 'transparent' : '#fef2f2'} !important;
+        color: ${isDark ? '#fb7185' : isMonochrome ? '#000000' : '#dc2626'} !important;
+        border-color: ${isDark ? '#e11d48' : isMonochrome ? '#000000' : '#fecaca'} !important;
+    }
+
+    /* KPI Cards & Containers */
     .kpi-grid {
         display: grid;
         grid-template-columns: repeat(4, 1fr);
-        gap: 12px;
-        margin-bottom: 20px;
+        gap: ${isCompact ? '8px' : '12px'};
+        margin-bottom: ${isCompact ? '12px' : '20px'};
         page-break-inside: avoid !important;
         break-inside: avoid !important;
     }
 
     .kpi-card {
-        background: #f8fafc;
-        border: 1px solid #e2e8f0;
-        border-radius: 10px;
-        padding: 12px 14px;
+        background: ${isDark ? '#111827' : isMonochrome ? '#ffffff' : '#f8fafc'};
+        border: 1px solid ${isDark ? '#1e293b' : isMonochrome ? '#000000' : '#e2e8f0'};
+        border-radius: 8px;
+        padding: ${isCompact ? '8px 10px' : '12px 14px'};
         text-align: center;
         page-break-inside: avoid !important;
         break-inside: avoid !important;
     }
 
     .kpi-label {
-        font-size: 11px;
-        color: #64748b;
+        font-size: ${isCompact ? '10px' : '11px'};
+        color: ${isDark ? '#94a3b8' : isMonochrome ? '#000000' : '#64748b'};
         font-weight: 700;
-        margin-bottom: 4px;
+        margin-bottom: 3px;
     }
 
     .kpi-value {
-        font-size: 16px;
+        font-size: ${isCompact ? '14px' : '16px'};
         font-weight: 900;
-        color: #0f172a;
+        color: ${isDark ? '#ffffff' : isMonochrome ? '#000000' : '#0f172a'};
     }
 
     .kpi-value.points {
-        color: #059669;
+        color: ${isDark ? '#34d399' : isMonochrome ? '#000000' : '#059669'};
     }
 
     /* Official Signatures Footer */
+    .report-footer-container {
+        margin-top: ${isCompact ? '20px' : '30px'};
+        page-break-inside: avoid !important;
+        break-inside: avoid !important;
+    }
+
+    .report-footer-note {
+        padding: 8px 12px;
+        background: ${isDark ? '#111827' : isMonochrome ? '#ffffff' : '#f8fafc'};
+        border: 1px dashed ${isDark ? '#334155' : isMonochrome ? '#000000' : '#cbd5e1'};
+        border-radius: 6px;
+        font-size: ${isCompact ? '10px' : '11px'};
+        color: ${isDark ? '#94a3b8' : isMonochrome ? '#000000' : '#64748b'};
+        margin-bottom: ${isCompact ? '15px' : '20px'};
+        text-align: center;
+    }
+
     .footer-signatures {
         display: flex;
         justify-content: space-around;
-        margin-top: 35px;
         text-align: center;
-        font-size: 13px;
+        font-size: ${isCompact ? '11px' : '13px'};
         font-weight: 700;
-        color: #1e293b;
+        color: ${isDark ? '#e2e8f0' : isMonochrome ? '#000000' : '#1e293b'};
         page-break-inside: avoid !important;
         break-inside: avoid !important;
     }
 
     .sig-box {
-        min-width: 180px;
+        min-width: ${isCompact ? '140px' : '180px'};
+    }
+
+    .sig-role {
+        font-weight: 800;
+    }
+
+    .sig-name {
+        margin-top: 4px;
+        font-size: ${isCompact ? '10.5px' : '12px'};
+        color: ${isDark ? '#94a3b8' : isMonochrome ? '#000000' : '#475569'};
     }
 
     .sig-line {
-        margin-top: 45px;
-        border-top: 1px dashed #64748b;
-        padding-top: 5px;
-        font-size: 11px;
-        color: #64748b;
+        margin-top: ${isCompact ? '25px' : '40px'};
+        border-top: 1px dashed ${isDark ? '#475569' : isMonochrome ? '#000000' : '#64748b'};
+        padding-top: 4px;
+        font-size: ${isCompact ? '9.5px' : '11px'};
+        color: ${isDark ? '#94a3b8' : isMonochrome ? '#000000' : '#64748b'};
     }
 
     ${extraCss}
-`;
+    `;
+};
 
 /**
  * Execute native vector printing via an isolated invisible iframe.

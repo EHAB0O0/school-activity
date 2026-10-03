@@ -16,10 +16,12 @@ import {
 import toast from 'react-hot-toast';
 import { useSettings } from '../../contexts/SettingsContext';
 import { logPointsChange } from '../../utils/pointsLedger';
-import { sortStudentsArabic, cleanClassString, getOfficialReportHeaderHtml, getStandardPrintStyles, printHtmlDocument } from '../../utils/reportUtils';
+import { sortStudentsArabic, cleanClassString, getOfficialReportHeaderHtml, getStandardPrintStyles, printHtmlDocument, getOfficialReportFooterHtml } from '../../utils/reportUtils';
+import AdvancedPrintModal from '../ui/AdvancedPrintModal';
 
 export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpdated, onEditLink }) {
     const { schoolInfo } = useSettings();
+    const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
     const [submissions, setSubmissions] = useState([]);
     const [students, setStudents] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -919,103 +921,215 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
         toast.success("تم تصدير ملف Excel بنجاح");
     };
 
-    // Official Print Sheet
-    const handlePrintSheet = async () => {
-        if (submissions.length === 0) {
-            toast.error("لا توجد بيانات للطباعة");
-            return;
+    // Dynamic Columns for Print
+    const printColumnsDefinition = useMemo(() => {
+        const cols = [
+            { id: 'index', label: '#', defaultVisible: true },
+            { id: 'studentName', label: 'اسم الطالب', defaultVisible: true },
+            { id: 'class', label: 'الصف والشعبة', defaultVisible: true }
+        ];
+
+        if (customFields.length > 0) {
+            customFields.forEach(f => {
+                cols.push({
+                    id: `custom_${f.id}`,
+                    label: f.label || 'بيان إضافي',
+                    defaultVisible: true
+                });
+            });
+        } else if (link?.customFieldLabel) {
+            cols.push({
+                id: 'custom_legacy',
+                label: link.customFieldLabel,
+                defaultVisible: true
+            });
         }
 
-        const sortedSubmissions = sortStudentsArabic(submissions, 'studentName');
+        cols.push({ id: 'phone', label: 'رقم الجوال', defaultVisible: false, badge: 'اتصال' });
+        cols.push({ id: 'status', label: 'حالة الاعتماد', defaultVisible: true });
+        cols.push({ id: 'date', label: 'تاريخ التسجيل', defaultVisible: false });
 
-        const customThs = customFields.length > 0
-            ? customFields.map(f => `<th>${f.label}</th>`).join('')
-            : `<th>${link.customFieldLabel || "البيان / المساهمة"}</th>`;
+        return cols;
+    }, [customFields, link?.customFieldLabel]);
 
-        const rowsHtml = sortedSubmissions.map((s, idx) => {
-            const customTds = customFields.length > 0
-                ? customFields.map(f => `<td>${s.customValues?.[f.id] || (f.id === 'f_legacy' ? s.customFieldValue : '') || (customFields.length === 1 ? s.customFieldValue : '') || '-'}</td>`).join('')
-                : `<td>${s.customFieldValue || '-'}</td>`;
+    // Advanced Print Execution
+    const handleExecuteAdvancedPrint = async (options) => {
+        const {
+            columns = [],
+            theme = 'classic',
+            orientation = 'portrait',
+            density = 'standard',
+            scope = 'all',
+            showHeader = true,
+            showKpis = true,
+            showSignatures = true,
+            showSignatureCol = false,
+            signatures = [],
+            customTitle = '',
+            footerNote = ''
+        } = options;
 
-            const classDisplay = cleanClassString(s);
+        const toastId = toast.loading('جاري تجهيز كشف المسجلين للطباعة...');
+        try {
+            let targetList = (scope === 'selected' && selectedIds.length > 0)
+                ? submissions.filter(s => selectedIds.includes(s.id))
+                : [...filteredSubmissions];
 
-            return `
-                <tr>
-                    <td style="text-align:center;">${idx + 1}</td>
-                    <td style="font-weight:bold;">${s.studentName || ''}</td>
-                    <td style="text-align:center;">${classDisplay}</td>
-                    ${customTds}
-                    <td style="text-align:center;">${s.status === 'approved' ? 'معتمد' : s.status === 'pending' ? 'بانتظار الاعتماد' : s.status === 'waitlist' ? 'انتظار' : 'مرفوض'}</td>
-                    <td style="width:120px; border-bottom: 1px dotted #94a3b8;"></td>
-                </tr>
+            if (targetList.length === 0) {
+                toast.error("لا توجد بيانات للطباعة", { id: toastId });
+                return;
+            }
+
+            const sortedList = sortStudentsArabic(targetList, 'studentName');
+
+            // Table Headers
+            const ths = [];
+            if (columns.includes('index')) ths.push('<th style="width: 40px; text-align: center;">#</th>');
+            if (columns.includes('studentName')) ths.push('<th>اسم الطالب</th>');
+            if (columns.includes('class')) ths.push('<th style="width: 120px; text-align: center;">الصف والشعبة</th>');
+
+            if (customFields.length > 0) {
+                customFields.forEach(f => {
+                    if (columns.includes(`custom_${f.id}`)) {
+                        ths.push(`<th>${f.label}</th>`);
+                    }
+                });
+            } else if (link?.customFieldLabel && columns.includes('custom_legacy')) {
+                ths.push(`<th>${link.customFieldLabel}</th>`);
+            }
+
+            if (columns.includes('phone')) ths.push('<th style="width: 110px; text-align: center;">رقم الجوال</th>');
+            if (columns.includes('status')) ths.push('<th style="width: 100px; text-align: center;">حالة الاعتماد</th>');
+            if (columns.includes('date')) ths.push('<th style="width: 110px; text-align: center;">تاريخ التسجيل</th>');
+            if (showSignatureCol) ths.push('<th style="width: 140px; text-align: center;">توقيع الاستلام / الحضور</th>');
+
+            // Table Rows
+            const rowsHtml = sortedList.map((s, idx) => {
+                const tds = [];
+                if (columns.includes('index')) tds.push(`<td style="text-align: center; font-weight: bold;">${idx + 1}</td>`);
+                if (columns.includes('studentName')) tds.push(`<td style="font-weight: bold;">${s.studentName || ''}</td>`);
+                if (columns.includes('class')) tds.push(`<td style="text-align: center;">${cleanClassString(s)}</td>`);
+
+                if (customFields.length > 0) {
+                    customFields.forEach(f => {
+                        if (columns.includes(`custom_${f.id}`)) {
+                            const val = s.customValues?.[f.id] || (f.id === 'f_legacy' ? s.customFieldValue : '') || (customFields.length === 1 ? s.customFieldValue : '') || '-';
+                            tds.push(`<td>${val}</td>`);
+                        }
+                    });
+                } else if (link?.customFieldLabel && columns.includes('custom_legacy')) {
+                    tds.push(`<td>${s.customFieldValue || '-'}</td>`);
+                }
+
+                if (columns.includes('phone')) tds.push(`<td style="text-align: center; direction: ltr;">${s.phone || '-'}</td>`);
+                if (columns.includes('status')) {
+                    const statusLabel = s.status === 'approved' ? 'معتمد' : s.status === 'pending' ? 'بانتظار الاعتماد' : s.status === 'waitlist' ? 'انتظار' : 'مرفوض';
+                    const statusClass = s.status === 'approved' ? 'success' : s.status === 'rejected' ? 'danger' : '';
+                    tds.push(`<td style="text-align: center;"><span class="status ${statusClass}">${statusLabel}</span></td>`);
+                }
+                if (columns.includes('date')) {
+                    const dateStr = s.createdAt?.toDate ? s.createdAt.toDate().toLocaleDateString('ar-SA') : '-';
+                    tds.push(`<td style="text-align: center; font-size: 11px;">${dateStr}</td>`);
+                }
+                if (showSignatureCol) tds.push('<td style="width: 130px; border-bottom: 1px dotted #94a3b8;"></td>');
+
+                return `<tr>${tds.join('')}</tr>`;
+            }).join('');
+
+            const pageTitle = customTitle.trim() || `كشف حصر المشاركات والتسليم - ${link.title}`;
+
+            // Header
+            let headerHtml = '';
+            if (showHeader) {
+                headerHtml = getOfficialReportHeaderHtml({
+                    schoolInfo,
+                    title: pageTitle,
+                    subTitle: link.title,
+                    centerDetails: [
+                        `المجال: ${specializationsDisplay}`,
+                        `إشراف الطالب المفوض: ${link.delegateName || '-'}`
+                    ],
+                    leftDetails: [
+                        { label: 'إجمالي المسجلين', value: `${sortedList.length} طالب` },
+                        { label: 'الحد الأقصى', value: link.maxCapacity ? `${link.maxCapacity} مقعد` : 'غير محدود (مفتوح)' }
+                    ]
+                });
+            }
+
+            // KPI Cards
+            let kpiHtml = '';
+            if (showKpis) {
+                const approvedCount = sortedList.filter(s => s.status === 'approved').length;
+                const pendingCount = sortedList.filter(s => s.status === 'pending').length;
+                const waitlistCount = sortedList.filter(s => s.status === 'waitlist').length;
+                kpiHtml = `
+                    <div class="kpi-grid">
+                        <div class="kpi-card">
+                            <div class="kpi-label">إجمالي الطلاب بالكشف</div>
+                            <div class="kpi-value">${sortedList.length}</div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-label">المعتمدون</div>
+                            <div class="kpi-value points">${approvedCount}</div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-label">بانتظار الاعتماد</div>
+                            <div class="kpi-value">${pendingCount}</div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-label">قائمة الانتظار</div>
+                            <div class="kpi-value">${waitlistCount}</div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            // Footer
+            let footerHtml = '';
+            if (showSignatures) {
+                footerHtml = getOfficialReportFooterHtml({
+                    signatures: signatures.length ? signatures : [
+                        { role: 'الطالب المفوض', name: link.delegateName || '' },
+                        { role: 'مشرف النشاط الطلابي', name: '' },
+                        { role: 'مدير المدرسة', name: schoolInfo?.principalName || '' }
+                    ],
+                    note: footerNote,
+                    systemCredit: 'نظام إدارة روابط التسجيل المدرسية'
+                });
+            }
+
+            const htmlContent = `
+                <!DOCTYPE html>
+                <html dir="rtl" lang="ar">
+                <head>
+                    <meta charset="utf-8">
+                    <title>${pageTitle}</title>
+                    <style>
+                        ${getStandardPrintStyles({ theme, orientation, density })}
+                    </style>
+                </head>
+                <body>
+                    ${headerHtml}
+                    ${kpiHtml}
+                    <table>
+                        <thead>
+                            <tr>${ths.join('')}</tr>
+                        </thead>
+                        <tbody>
+                            ${rowsHtml}
+                        </tbody>
+                    </table>
+                    ${footerHtml}
+                </body>
+                </html>
             `;
-        }).join('');
 
-        const headerHtml = getOfficialReportHeaderHtml({
-            schoolInfo,
-            title: 'كشف حصر المشاركات والتسليم',
-            subTitle: link.title,
-            centerDetails: [
-                `المجال: ${specializationsDisplay}`,
-                `إشراف الطالب المفوض: ${link.delegateName || '-'}`
-            ],
-            leftDetails: [
-                { label: 'إجمالي المسجلين', value: `${sortedSubmissions.length} طالب` },
-                { label: 'الحد الأقصى', value: link.maxCapacity ? `${link.maxCapacity} مقعد` : 'غير محدود (مفتوح)' }
-            ]
-        });
-
-        const htmlContent = `
-            <!DOCTYPE html>
-            <html dir="rtl" lang="ar">
-            <head>
-                <meta charset="utf-8">
-                <title>كشف حصر المشاركات - ${link.title}</title>
-                <style>
-                    ${getStandardPrintStyles()}
-                </style>
-            </head>
-            <body>
-                ${headerHtml}
-
-                <table>
-                    <thead>
-                        <tr>
-                            <th style="width:40px; text-align:center;">#</th>
-                            <th>اسم الطالب</th>
-                            <th style="width:120px; text-align:center;">الصف والشعبة</th>
-                            ${customThs}
-                            <th style="width:90px; text-align:center;">الحالة</th>
-                            <th style="width:140px; text-align:center;">توقيع الاستلام / الحضور</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${rowsHtml}
-                    </tbody>
-                </table>
-
-                <div class="footer-signatures">
-                    <div class="sig-box">
-                        <div>الطالب المفوض</div>
-                        <div>${link.delegateName || '....................'}</div>
-                        <div class="sig-line"></div>
-                    </div>
-                    <div class="sig-box">
-                        <div>رائد النشاط الطلابي</div>
-                        <div>أ. ....................</div>
-                        <div class="sig-line"></div>
-                    </div>
-                    <div class="sig-box">
-                        <div>مدير المدرسة</div>
-                        <div>أ. ....................</div>
-                        <div class="sig-line"></div>
-                    </div>
-                </div>
-            </body>
-            </html>
-        `;
-
-        await printHtmlDocument(htmlContent, `كشف_حصر_المشاركات_${link.title}`);
+            toast.dismiss(toastId);
+            await printHtmlDocument(htmlContent, pageTitle);
+        } catch (err) {
+            console.error("Print submissions sheet error:", err);
+            toast.error("فشل تجهيز الكشف للطباعة", { id: toastId });
+        }
     };
 
     return (
@@ -1168,7 +1282,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                             <span>تصدير Excel</span>
                         </button>
                         <button
-                            onClick={handlePrintSheet}
+                            onClick={() => setIsPrintModalOpen(true)}
                             className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors"
                         >
                             <Printer size={14} />
@@ -1195,6 +1309,13 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                 className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1"
                             >
                                 <XCircle size={14} /> رفض المحدد
+                            </button>
+                            <button
+                                onClick={() => setIsPrintModalOpen(true)}
+                                className="px-3 py-1.5 rounded-lg bg-indigo-600/40 hover:bg-indigo-600 border border-indigo-500/40 text-white text-xs font-bold flex items-center gap-1"
+                                title="طباعة كشف المسجلين المحددين"
+                            >
+                                <Printer size={14} /> طباعة المحدد
                             </button>
                             <button
                                 onClick={() => setSelectedIds([])}
@@ -2264,6 +2385,18 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                         </div>
                     </div>
                 )}
+
+                {/* Advanced Universal Print Modal */}
+                <AdvancedPrintModal
+                    isOpen={isPrintModalOpen}
+                    onClose={() => setIsPrintModalOpen(false)}
+                    reportType={`link_submissions_${link.id}`}
+                    availableColumns={printColumnsDefinition}
+                    defaultTitle={`كشف حصر المشاركات والتسليم - ${link.title}`}
+                    totalRecordsCount={filteredSubmissions.length}
+                    selectedRecordsCount={selectedIds.length}
+                    onPrint={handleExecuteAdvancedPrint}
+                />
             </div>
         </div>
     );

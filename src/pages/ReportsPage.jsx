@@ -19,9 +19,78 @@ import {
     sortStudentsArabic,
     cleanClassString,
     getOfficialReportHeaderHtml,
+    getOfficialReportFooterHtml,
     getStandardPrintStyles,
     printHtmlDocument
 } from '../utils/reportUtils';
+import AdvancedPrintModal from '../components/ui/AdvancedPrintModal';
+
+const getReportColumnsDefinition = (tab, archiveSub) => {
+    if (tab === 'activities') {
+        return [
+            { id: 'index', label: '#', defaultVisible: true },
+            { id: 'title', label: 'النشاط', defaultVisible: true },
+            { id: 'type', label: 'نوع النشاط', defaultVisible: true },
+            { id: 'date', label: 'التاريخ والوقت', defaultVisible: true },
+            { id: 'venue', label: 'المكان / المقر', defaultVisible: true },
+            { id: 'status', label: 'الحالة', defaultVisible: true },
+            { id: 'studentsCount', label: 'عدد الطلاب', defaultVisible: true },
+            { id: 'studentsList', label: 'قائمة الطلاب المشاركين', defaultVisible: false, badge: 'تفصيلي' },
+            { id: 'assetsList', label: 'الموارد المستخدمة', defaultVisible: false, badge: 'تفصيلي' },
+            { id: 'customData', label: 'البيانات الإضافية', defaultVisible: false, badge: 'تفصيلي' }
+        ];
+    } else if (tab === 'students') {
+        return [
+            { id: 'index', label: '#', defaultVisible: true },
+            { id: 'name', label: 'اسم الطالب', defaultVisible: true },
+            { id: 'class', label: 'الصف والشعبة', defaultVisible: true },
+            { id: 'specializations', label: 'التخصصات والفرق', defaultVisible: true },
+            { id: 'points', label: 'نقاط التميز', defaultVisible: true },
+            { id: 'history', label: 'سجل مشاركات الطالب في الأنشطة', defaultVisible: false, badge: 'تفصيلي' }
+        ];
+    } else if (tab === 'assets') {
+        return [
+            { id: 'index', label: '#', defaultVisible: true },
+            { id: 'name', label: 'اسم المورد', defaultVisible: true },
+            { id: 'type', label: 'النوع', defaultVisible: true },
+            { id: 'status', label: 'الحالة الحالية', defaultVisible: true },
+            { id: 'history', label: 'سجل استخدام المورد في الأنشطة', defaultVisible: false, badge: 'تفصيلي' }
+        ];
+    } else if (tab === 'points') {
+        return [
+            { id: 'index', label: '#', defaultVisible: true },
+            { id: 'studentName', label: 'اسم الطالب', defaultVisible: true },
+            { id: 'class', label: 'الصف / الشعبة', defaultVisible: true },
+            { id: 'reason', label: 'سبب الحركة / النشاط', defaultVisible: true },
+            { id: 'actionType', label: 'نوع العملية', defaultVisible: true },
+            { id: 'change', label: 'مقدار التغيير', defaultVisible: true },
+            { id: 'newTotalPoints', label: 'الرصيد بعد الحركة', defaultVisible: true },
+            { id: 'performedBy', label: 'المنفّذ', defaultVisible: true },
+            { id: 'date', label: 'التاريخ والوقت', defaultVisible: true }
+        ];
+    } else if (tab === 'archive') {
+        if (archiveSub === 'students') {
+            return [
+                { id: 'index', label: '#', defaultVisible: true },
+                { id: 'name', label: 'اسم الطالب', defaultVisible: true },
+                { id: 'class', label: 'الصف / الشعبة', defaultVisible: true },
+                { id: 'specializations', label: 'التخصصات', defaultVisible: true },
+                { id: 'points', label: 'النقاط السابقة', defaultVisible: true }
+            ];
+        } else {
+            return [
+                { id: 'index', label: '#', defaultVisible: true },
+                { id: 'title', label: 'النشاط', defaultVisible: true },
+                { id: 'type', label: 'نوع النشاط', defaultVisible: true },
+                { id: 'date', label: 'التاريخ والوقت', defaultVisible: true },
+                { id: 'venue', label: 'المكان', defaultVisible: true },
+                { id: 'status', label: 'الحالة', defaultVisible: true },
+                { id: 'studentsCount', label: 'عدد الطلاب', defaultVisible: true }
+            ];
+        }
+    }
+    return [];
+};
 
 const FIREBASE_RULES_SNIPPET = `rules_version = '2';
 service cloud.firestore {
@@ -151,6 +220,30 @@ export default function ReportsPage() {
     const [rawData, setRawData] = useState([]);
     const [previewData, setPreviewData] = useState([]);
     const [studentMap, setStudentMap] = useState({}); // id -> name
+
+    // --- Advanced Printing & Selection State ---
+    const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
+    const [selectedReportRowIds, setSelectedReportRowIds] = useState([]);
+
+    useEffect(() => {
+        setSelectedReportRowIds([]);
+    }, [activeTab, archiveSubTab]);
+
+    const toggleSelectReportRow = (id) => {
+        setSelectedReportRowIds(prev => 
+            prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+        );
+    };
+
+    const toggleSelectAllReportRows = () => {
+        const allIds = previewData.map(r => r.id || r.name);
+        const isAllSelected = allIds.length > 0 && allIds.every(id => selectedReportRowIds.includes(id));
+        if (isAllSelected) {
+            setSelectedReportRowIds(prev => prev.filter(id => !allIds.includes(id)));
+        } else {
+            setSelectedReportRowIds(Array.from(new Set([...selectedReportRowIds, ...allIds])));
+        }
+    };
 
     // --- Archive Hub State ---
     const [archiveSubTab, setArchiveSubTab] = useState('students'); // students | activities
@@ -930,24 +1023,45 @@ export default function ReportsPage() {
         toast.success("تم تصدير ملف Excel بنجاح");
     };
 
-    // --- Bulk PDF (Refactored for Arabic Support via Iframe Isolation) ---
-    const generateBulkPDF = async () => {
-        const toastId = toast.loading('جاري تحضير التقرير الشامل...');
+    // --- Advanced Universal Report Print Executor ---
+    const handleExecuteAdvancedPrint = async (options) => {
+        const {
+            columns = [],
+            theme = 'classic',
+            orientation = 'portrait',
+            density = 'standard',
+            scope = 'all',
+            showHeader = true,
+            showKpis = true,
+            showSignatures = true,
+            showSignatureCol = false,
+            signatures = [],
+            customTitle = '',
+            footerNote = ''
+        } = options;
+
+        const toastId = toast.loading('جاري تحضير ملف الطباعة المخصص...');
+
         try {
-            // 1. Create a hidden Iframe
-            const iframe = document.createElement('iframe');
-            iframe.style.left = '0';
-            iframe.style.width = '1200px'; // Wider for table
-            iframe.style.height = 'auto'; // Allow full height
-            iframe.style.position = 'absolute'; // Use absolute to allow expansion
-            iframe.style.visibility = 'hidden'; // Hide visual but keep render
-            iframe.style.border = 'none';
-            document.body.appendChild(iframe);
+            // 1. Filter Records by Scope
+            let targetData = [...previewData];
+            if (scope === 'selected' && selectedReportRowIds.length > 0) {
+                targetData = previewData.filter(r => selectedReportRowIds.includes(r.id || r.name));
+            }
 
-            const doc = iframe.contentWindow.document;
-            doc.open();
+            if (targetData.length === 0) {
+                toast.error("لا توجد سجلات مطابقة للطباعة", { id: toastId });
+                return;
+            }
 
-            // 2. Prepare Table Content Validation
+            // 2. Sort Records (Alphabetical for students)
+            if (activeTab === 'students' || (activeTab === 'archive' && archiveSubTab === 'students')) {
+                targetData = sortStudentsArabic(targetData, 'name');
+            } else if (activeTab === 'points' && pointsSortBy === 'student_name') {
+                targetData = sortStudentsArabic(targetData, 'studentName');
+            }
+
+            // 3. Document Title
             const titleMap = {
                 'activities': 'سجل الأنشطة المدرسي',
                 'students': 'قائمة الطلاب المتميزين',
@@ -955,349 +1069,267 @@ export default function ReportsPage() {
                 'points': 'سجل حركات نقاط التميز للطلاب',
                 'archive': archiveSubTab === 'students' ? 'أرشيف الطلاب المستبعدين' : 'أرشيف الأنشطة السابقة'
             };
-            let pageTitle = titleMap[activeTab] || 'تقرير شامل';
 
-            // Dynamic Title overrides
-            if (activeTab === 'students' && gradeFilter) {
+            let pageTitle = customTitle.trim() || titleMap[activeTab] || 'تقرير مدرسي شامل';
+            if (!customTitle.trim() && activeTab === 'students' && gradeFilter) {
                 pageTitle = `تقرير طلاب ${gradeFilter}`;
                 if (sectionFilter) pageTitle += ` - ${sectionFilter}`;
             }
-            if (activeTab === 'activities' && venueFilter !== 'All') {
-                const vLabel = getVenueLabel(venueFilter);
-                pageTitle = `تقرير أنشطة (مخصص): ${vLabel}`;
+
+            // 4. Header HTML
+            let headerHtml = '';
+            if (showHeader) {
+                headerHtml = getOfficialReportHeaderHtml({
+                    schoolInfo,
+                    title: pageTitle,
+                    subTitle: 'قسم النشاط الطلابي المدرسي',
+                    centerDetails: [
+                        `التصنيف: ${titleMap[activeTab] || 'تقرير عام'}`,
+                        gradeFilter && gradeFilter !== 'All' ? `الصف: ${gradeFilter}` : null,
+                        sectionFilter && sectionFilter !== 'All' ? `الشعبة: ${sectionFilter}` : null,
+                        scope === 'selected' ? `(سجلات محددة: ${targetData.length} من أصل ${previewData.length})` : null
+                    ].filter(Boolean),
+                    leftDetails: [
+                        { label: 'التاريخ', value: new Date().toLocaleDateString('ar-SA') },
+                        { label: 'الوقت', value: new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' }) },
+                        { label: 'إجمالي السجلات', value: `${targetData.length} سجل` }
+                    ]
+                });
             }
 
-            const dateStr = new Date().toLocaleDateString('ar-EG', { year: 'numeric', month: 'long', day: 'numeric' });
-
-            let tableHeader = '';
-            let tableRowsHtml = '';
-
-            if (activeTab === 'activities') {
-                tableHeader = `
-                    <tr>
-                        <th style="width: 30%">النشاط</th>
-                        <th style="width: 20%">التاريخ</th>
-                        <th style="width: 15%">المكان</th>
-                        <th style="width: 15%">الحالة</th>
-                        <th style="width: 10%">الطلاب</th>
-                    </tr>
-                `;
-                tableRowsHtml = previewData.map(item => {
-                    const mainRow = `
-                        <tr>
-                            <td class="bold">${item.title}</td>
-                            <td class="dim">${item.formattedDate || item.date}</td>
-                            <td>${item.venue}</td>
-                            <td>
-                                <span class="badge ${item.status === 'مكتمل' ? 'success' : 'neutral'}">
-                                    ${item.status}
-                                </span>
-                            </td>
-                            <td class="center">${item.studentsCount}</td>
-                        </tr>
-                    `;
-
-                    let detailsRow = '';
-                    let detailsContent = '';
-
-                    // 1. Students (Grouped by Class)
-                    if (reportOptions.showStudents && item.studentNames && item.studentNames.length > 0) {
-                        // Group by Class
-                        const studentsByClass = item.studentNames.reduce((acc, s) => {
-                            const className = (s.grade && s.section) ? `${s.grade} - ${s.section}` : (s.grade || 'أخرى');
-                            if (!acc[className]) acc[className] = [];
-                            acc[className].push(s);
-                            return acc;
-                        }, {});
-
-                        let groupsHtml = '';
-                        Object.entries(studentsByClass).forEach(([cls, studentsInClass]) => {
-                            const tags = studentsInClass.map(s => {
-                                const pDetails = item.participantDetails?.[s.id] || {};
-                                const detailEntries = Object.entries(pDetails);
-                                const detailsBadge = detailEntries.length > 0
-                                    ? `<span style="margin-right: 5px; color: #059669; font-weight: bold; font-size: 10px;">(${detailEntries.map(([k, v]) => `${k}: ${v}`).join(' | ')})</span>`
-                                    : '';
-                                return `<span class="student-tag">${s.name}${detailsBadge}</span>`;
-                            }).join('');
-                            groupsHtml += `
-                                <div class="class-group">
-                                    <div class="class-header">${cls} (${studentsInClass.length})</div>
-                                    <div class="tags-container">${tags}</div>
-                                </div>
-                             `;
-                        });
-
-                        detailsContent += `
-                            <div class="details-section">
-                                <div class="details-title">الطلاب المشاركون (${item.studentNames.length}):</div>
-                                ${groupsHtml}
+            // 5. KPI Cards HTML
+            let kpiHtml = '';
+            if (showKpis) {
+                if (activeTab === 'points') {
+                    const posPts = targetData.filter(p => (Number(p.change) || 0) > 0).reduce((sum, p) => sum + Number(p.change), 0);
+                    const negPts = targetData.filter(p => (Number(p.change) || 0) < 0).reduce((sum, p) => sum + Math.abs(Number(p.change)), 0);
+                    const netPts = targetData.reduce((sum, p) => sum + (Number(p.change) || 0), 0);
+                    kpiHtml = `
+                        <div class="kpi-grid">
+                            <div class="kpi-card">
+                                <div class="kpi-label">إجمالي الحركات</div>
+                                <div class="kpi-value">${targetData.length}</div>
                             </div>
-                        `;
-                    }
-
-                    // 2. Assets (mapped to human-readable names)
-                    if (reportOptions.showAssets && item.assets && item.assets.length > 0) {
-                        const assetTags = item.assets.map(a => {
-                            const name = assetMap[a] || a;
-                            return `<span class="asset-tag">${name}</span>`;
-                        }).join('');
-                        detailsContent += `
-                            <div class="details-section">
-                                <div class="details-title">الموارد المستخدمة (${item.assets.length}):</div>
-                                <div class="tags-container">${assetTags}</div>
+                            <div class="kpi-card">
+                                <div class="kpi-label">النقاط الممنوحة</div>
+                                <div class="kpi-value points">+${posPts} ن</div>
                             </div>
-                         `;
-                    }
-
-                    // 3. Custom Fields
-                    if (reportOptions.showCustomFields && item.customData && Object.keys(item.customData).length > 0) {
-                        const fieldTags = Object.entries(item.customData).map(([key, val]) =>
-                            `<div class="field-item"><strong>${key}:</strong> ${val}</div>`
-                        ).join('');
-
-                        detailsContent += `
-                            <div class="details-section">
-                                <div class="details-title">بيانات إضافية:</div>
-                                <div class="fields-container">${fieldTags}</div>
+                            <div class="kpi-card">
+                                <div class="kpi-label">النقاط المخصومة</div>
+                                <div class="kpi-value" style="color: #dc2626;">-${negPts} ن</div>
                             </div>
-                        `;
-                    }
-
-                    if (detailsContent) {
-                        detailsRow = `
-                            <tr class="details-row">
-                                <td colspan="5">
-                                    <div class="details-box">
-                                        ${detailsContent}
-                                    </div>
-                                </td>
-                            </tr>
-                         `;
-                    }
-
-                    return mainRow + detailsRow;
-                }).join('');
-
-            } else if (activeTab === 'students') {
-                tableHeader = `
-                    <tr>
-                        <th style="width: 5%">#</th>
-                        <th style="width: 35%">اسم الطالب</th>
-                        <th style="width: 25%">التخصصات</th>
-                        <th style="width: 20%">الصف والشعبة</th>
-                        <th style="width: 15%">النقاط</th>
-                    </tr>
-                `;
-                const sortedStudents = sortStudentsArabic(previewData, 'name');
-                tableRowsHtml = sortedStudents.map((item, i) => {
-                    const specs = item.specializations && item.specializations.length > 0
-                        ? item.specializations.map(s => s === 'General' ? 'عام' : s).join('، ')
-                        : '-';
-                    const className = cleanClassString(item);
-                    const mainRow = `
-                    <tr>
-                         <td class="center dim">${i + 1}</td>
-                        <td class="bold">${item.name}</td>
-                        <td>${specs}</td>
-                        <td class="center">${className}</td>
-                        <td class="center bold success-text">${item.points || 0}</td>
-                    </tr>
+                            <div class="kpi-card">
+                                <div class="kpi-label">صافي النقاط</div>
+                                <div class="kpi-value ${netPts >= 0 ? 'points' : ''}" style="${netPts < 0 ? 'color: #dc2626;' : ''}">
+                                    ${netPts > 0 ? '+' : ''}${netPts} ن
+                                </div>
+                            </div>
+                        </div>
                     `;
-
-                    let detailsRow = '';
-                    if (reportOptions.showStudentHistory) {
-                        const history = studentParticipationMap[item.id] || studentParticipationMap[item.name] || [];
-                        let historyContent = '';
-                        if (history.length > 0) {
-                            const tags = history.map(act => `
-                                <div class="history-tag">
-                                    <span class="history-title">${act.title}</span>
-                                    <span class="history-meta">${act.formattedDate} • ${act.venue}</span>
-                                    <span class="history-points">+${act.points} ن</span>
-                                </div>
-                            `).join('');
-                            historyContent = `
-                                <div class="history-container">
-                                    <div class="history-header">سجل الأنشطة المشارك فيها (${history.length}):</div>
-                                    <div class="history-items">${tags}</div>
-                                </div>
-                            `;
-                        } else {
-                            historyContent = `
-                                <div class="history-container">
-                                    <span class="dim" style="font-size: 11px;">لا توجد مشاركات سابقة مسجلة</span>
-                                </div>
-                            `;
-                        }
-
-                        detailsRow = `
-                            <tr class="details-row">
-                                <td colspan="5">
-                                    <div class="details-box">
-                                        ${historyContent}
-                                    </div>
-                                </td>
-                            </tr>
-                        `;
-                    }
-
-                    return mainRow + detailsRow;
-                }).join('');
-            } else if (activeTab === 'assets') {
-                tableHeader = `
-                    <tr>
-                        <th style="width: 40%">اسم المورد</th>
-                        <th style="width: 30%">النوع</th>
-                        <th style="width: 30%">الحالة</th>
-                    </tr>
-                `;
-                tableRowsHtml = previewData.map(item => {
-                    const mainRow = `
-                    <tr>
-                        <td class="bold">${item.name}</td>
-                        <td>${item.type}</td>
-                        <td>
-                           <span class="badge ${item.status === 'Available' ? 'success' : 'danger'}">
-                                ${item.status}
-                            </span>
-                        </td>
-                    </tr>
+                } else if (activeTab === 'activities' || (activeTab === 'archive' && archiveSubTab === 'activities')) {
+                    const completedCount = targetData.filter(a => a.rawStatus === 'Done' || a.status === 'مكتمل').length;
+                    const totalStudents = targetData.reduce((sum, a) => sum + (a.studentsCount || 0), 0);
+                    kpiHtml = `
+                        <div class="kpi-grid">
+                            <div class="kpi-card">
+                                <div class="kpi-label">إجمالي الأنشطة</div>
+                                <div class="kpi-value">${targetData.length}</div>
+                            </div>
+                            <div class="kpi-card">
+                                <div class="kpi-label">الأنشطة المكتملة</div>
+                                <div class="kpi-value points">${completedCount}</div>
+                            </div>
+                            <div class="kpi-card">
+                                <div class="kpi-label">مشاركات الطلاب</div>
+                                <div class="kpi-value">${totalStudents} طالب</div>
+                            </div>
+                            <div class="kpi-card">
+                                <div class="kpi-label">متوسط المشاركة</div>
+                                <div class="kpi-value">${targetData.length ? Math.round(totalStudents / targetData.length) : 0} لكل نشاط</div>
+                            </div>
+                        </div>
                     `;
-
-                    let detailsRow = '';
-                    if (reportOptions.showAssetHistory) {
-                        const history = assetUsageMap[item.id] || assetUsageMap[item.name] || [];
-                        let historyContent = '';
-                        if (history.length > 0) {
-                            const tags = history.map(act => `
-                                <div class="history-tag">
-                                    <span class="history-title">${act.title}</span>
-                                    <span class="history-meta">${act.formattedDate} • ${act.venue}</span>
-                                    <span class="badge ${act.rawStatus === 'Done' ? 'success' : 'neutral'}">${act.status}</span>
-                                </div>
-                            `).join('');
-                            historyContent = `
-                                <div class="history-container">
-                                    <div class="history-header">سجل استخدام المورد في الأنشطة (${history.length}):</div>
-                                    <div class="history-items">${tags}</div>
-                                </div>
-                            `;
-                        } else {
-                            historyContent = `
-                                <div class="history-container">
-                                    <span class="dim" style="font-size: 11px;">لم يُستخدم هذا المورد في أي نشاط سابق</span>
-                                </div>
-                            `;
-                        }
-
-                        detailsRow = `
-                            <tr class="details-row">
-                                <td colspan="3">
-                                    <div class="details-box">
-                                        ${historyContent}
-                                    </div>
-                                </td>
-                            </tr>
-                        `;
-                    }
-
-                    return mainRow + detailsRow;
-                }).join('');
-            } else if (activeTab === 'points') {
-                tableHeader = `
-                    <tr>
-                        <th style="width: 5%">#</th>
-                        <th style="width: 25%">اسم الطالب</th>
-                        <th style="width: 15%">الصف والشعبة</th>
-                        <th style="width: 25%">سبب الحركة / النشاط</th>
-                        <th style="width: 10%">مقدار التغيير</th>
-                        <th style="width: 10%">الرصيد بعد</th>
-                        <th style="width: 10%">التاريخ</th>
-                    </tr>
-                `;
-                const sortedPoints = sortStudentsArabic(previewData, 'studentName');
-                tableRowsHtml = sortedPoints.map((item, i) => {
-                    const isPos = (Number(item.change) || 0) > 0;
-                    const changeStr = isPos ? `+${item.change}` : `${item.change}`;
-                    const className = cleanClassString(item);
-                    return `
-                    <tr>
-                        <td class="center dim">${i + 1}</td>
-                        <td class="bold">${item.studentName}</td>
-                        <td class="center">${className}</td>
-                        <td>${item.reason || item.eventTitle || '-'}</td>
-                        <td class="center bold" style="${isPos ? 'color: #059669;' : 'color: #dc2626;'}">${changeStr}</td>
-                        <td class="center bold success-text">${item.newTotalPoints}</td>
-                        <td class="center dim" style="font-size: 11px;">${item.date}</td>
-                    </tr>
+                } else if (activeTab === 'students' || (activeTab === 'archive' && archiveSubTab === 'students')) {
+                    const totalPts = targetData.reduce((sum, s) => sum + (s.points || 0), 0);
+                    const avgPts = targetData.length ? Math.round(totalPts / targetData.length) : 0;
+                    kpiHtml = `
+                        <div class="kpi-grid">
+                            <div class="kpi-card">
+                                <div class="kpi-label">إجمالي الطلاب</div>
+                                <div class="kpi-value">${targetData.length}</div>
+                            </div>
+                            <div class="kpi-card">
+                                <div class="kpi-label">مجموع نقاط التميز</div>
+                                <div class="kpi-value points">${totalPts} نقطة</div>
+                            </div>
+                            <div class="kpi-card">
+                                <div class="kpi-label">متوسط نقاط الطالب</div>
+                                <div class="kpi-value points">${avgPts} نقطة</div>
+                            </div>
+                            <div class="kpi-card">
+                                <div class="kpi-label">أعلى رصيد نقاط</div>
+                                <div class="kpi-value points">${Math.max(0, ...targetData.map(s => s.points || 0))} نقطة</div>
+                            </div>
+                        </div>
                     `;
-                }).join('');
-            } else if (activeTab === 'archive') {
-                if (archiveSubTab === 'students') {
-                    tableHeader = `
-                        <tr>
-                            <th style="width: 5%">#</th>
-                            <th style="width: 35%">اسم الطالب</th>
-                            <th style="width: 25%">التخصصات</th>
-                            <th style="width: 20%">الصف والشعبة</th>
-                            <th style="width: 15%">النقاط السابقة</th>
-                        </tr>
+                } else if (activeTab === 'assets') {
+                    const availCount = targetData.filter(a => a.status === 'Available').length;
+                    kpiHtml = `
+                        <div class="kpi-grid" style="grid-template-columns: repeat(3, 1fr);">
+                            <div class="kpi-card">
+                                <div class="kpi-label">إجمالي الموارد</div>
+                                <div class="kpi-value">${targetData.length}</div>
+                            </div>
+                            <div class="kpi-card">
+                                <div class="kpi-label">المتاحة للاستخدام</div>
+                                <div class="kpi-value points">${availCount}</div>
+                            </div>
+                            <div class="kpi-card">
+                                <div class="kpi-label">صيانة / قيد الاستخدام</div>
+                                <div class="kpi-value">${targetData.length - availCount}</div>
+                            </div>
+                        </div>
                     `;
-                    const sortedArchiveStudents = sortStudentsArabic(previewData, 'name');
-                    tableRowsHtml = sortedArchiveStudents.map((item, i) => {
-                        const specs = item.specializations && item.specializations.length > 0
-                            ? item.specializations.map(s => s === 'General' ? 'عام' : s).join('، ')
-                            : '-';
-                        const className = cleanClassString(item);
-                        return `
-                        <tr>
-                            <td class="center dim">${i + 1}</td>
-                            <td class="bold">${item.name}</td>
-                            <td>${specs}</td>
-                            <td class="center">${className}</td>
-                            <td class="center bold success-text">${item.points || 0}</td>
-                        </tr>
-                        `;
-                    }).join('');
-                } else {
-                    tableHeader = `
-                        <tr>
-                            <th style="width: 30%">النشاط</th>
-                            <th style="width: 20%">التاريخ</th>
-                            <th style="width: 15%">المكان</th>
-                            <th style="width: 15%">الحالة</th>
-                            <th style="width: 10%">الطلاب</th>
-                        </tr>
-                    `;
-                    tableRowsHtml = previewData.map(item => `
-                        <tr>
-                            <td class="bold">${item.title}</td>
-                            <td class="dim">${item.formattedDate || item.date}</td>
-                            <td>${item.venue}</td>
-                            <td><span class="badge neutral">مؤرشف</span></td>
-                            <td class="center">${item.studentsCount}</td>
-                        </tr>
-                    `).join('');
                 }
             }
 
-            const headerHtml = getOfficialReportHeaderHtml({
-                schoolInfo,
-                title: pageTitle,
-                subTitle: 'التقرير الإداري الشامل',
-                centerDetails: [
-                    `التصنيف: ${titleMap[activeTab] || 'تقرير عام'}`,
-                    gradeFilter && gradeFilter !== 'All' ? `الصف: ${gradeFilter}` : null,
-                    sectionFilter && sectionFilter !== 'All' ? `الشعبة: ${sectionFilter}` : null
-                ].filter(Boolean),
-                leftDetails: [
-                    { label: 'التاريخ', value: new Date().toLocaleDateString('ar-SA') },
-                    { label: 'الوقت', value: new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' }) },
-                    { label: 'إجمالي السجلات', value: `${previewData.length} سجل` }
-                ]
+            // 6. Dynamic Table Columns & Rows
+            const colSet = new Set(columns);
+            let ths = [];
+
+            if (colSet.has('index')) ths.push('<th style="width: 35px; text-align: center;">#</th>');
+            if (colSet.has('title')) ths.push('<th>النشاط</th>');
+            if (colSet.has('name') || colSet.has('studentName')) ths.push('<th>اسم الطالب</th>');
+            if (colSet.has('type')) ths.push('<th>النوع والتصنيف</th>');
+            if (colSet.has('date')) ths.push('<th>التاريخ والوقت</th>');
+            if (colSet.has('venue')) ths.push('<th>المكان / المقر</th>');
+            if (colSet.has('class')) ths.push('<th style="text-align: center;">الصف والشعبة</th>');
+            if (colSet.has('specializations')) ths.push('<th>التخصصات</th>');
+            if (colSet.has('status')) ths.push('<th style="text-align: center;">الحالة</th>');
+            if (colSet.has('studentsCount')) ths.push('<th style="text-align: center;">عدد الطلاب</th>');
+            if (colSet.has('points')) ths.push('<th style="text-align: center;">نقاط التميز</th>');
+            if (colSet.has('reason')) ths.push('<th>سبب الحركة / النشاط</th>');
+            if (colSet.has('actionType')) ths.push('<th style="text-align: center;">نوع العملية</th>');
+            if (colSet.has('change')) ths.push('<th style="text-align: center;">مقدار التغيير</th>');
+            if (colSet.has('newTotalPoints')) ths.push('<th style="text-align: center;">الرصيد بعد</th>');
+            if (colSet.has('performedBy')) ths.push('<th>المنفّذ</th>');
+
+            if (showSignatureCol) {
+                ths.push('<th style="width: 120px; text-align: center;">التوقيع / الحضور</th>');
+            }
+
+            const tableHeaderHtml = `<tr>${ths.join('')}</tr>`;
+            const mainColSpan = ths.length || 1;
+
+            const tableRowsHtml = targetData.map((item, i) => {
+                let tds = [];
+
+                if (colSet.has('index')) tds.push(`<td style="text-align: center;">${i + 1}</td>`);
+                if (colSet.has('title')) tds.push(`<td style="font-weight: bold;">${item.title || '-'}</td>`);
+                if (colSet.has('name')) tds.push(`<td style="font-weight: bold;">${item.name || '-'}</td>`);
+                if (colSet.has('studentName')) tds.push(`<td style="font-weight: bold;">${item.studentName || '-'}</td>`);
+                if (colSet.has('type')) tds.push(`<td>${item.type || '-'}</td>`);
+                if (colSet.has('date')) tds.push(`<td>${item.formattedDate || item.date || '-'}</td>`);
+                if (colSet.has('venue')) tds.push(`<td>${item.venue || '-'}</td>`);
+                if (colSet.has('class')) tds.push(`<td style="text-align: center;">${cleanClassString(item)}</td>`);
+                if (colSet.has('specializations')) {
+                    const specs = (item.specializations && item.specializations.length > 0)
+                        ? item.specializations.map(s => s === 'General' ? 'عام' : s).join('، ')
+                        : '-';
+                    tds.push(`<td>${specs}</td>`);
+                }
+                if (colSet.has('status')) {
+                    const isSuccess = item.status === 'مكتمل' || item.status === 'Available';
+                    tds.push(`<td style="text-align: center;"><span class="badge ${isSuccess ? 'success' : ''}">${item.status || '-'}</span></td>`);
+                }
+                if (colSet.has('studentsCount')) tds.push(`<td style="text-align: center; font-weight: bold;">${item.studentsCount ?? 0}</td>`);
+                if (colSet.has('points')) tds.push(`<td style="text-align: center; font-weight: bold; color: #047857;">${item.points ?? 0}</td>`);
+                if (colSet.has('reason')) tds.push(`<td>${item.reason || item.eventTitle || '-'}</td>`);
+                if (colSet.has('actionType')) {
+                    const actionLabel = item.actionType === 'activity_award' ? 'اعتماد نشاط' :
+                        item.actionType === 'activity_deduct' ? 'إلغاء نشاط' :
+                        item.actionType === 'bulk_adjustment' ? 'تعديل جماعي' :
+                        item.actionType === 'link_registration' ? 'رابط تسجيل' :
+                        item.actionType === 'duplicate_merge' ? 'دمج مكرر' : 'تعديل يدوي';
+                    tds.push(`<td style="text-align: center;"><span class="badge">${actionLabel}</span></td>`);
+                }
+                if (colSet.has('change')) {
+                    const isPos = (Number(item.change) || 0) > 0;
+                    const changeStr = isPos ? `+${item.change}` : `${item.change}`;
+                    tds.push(`<td style="text-align: center; font-weight: bold; ${isPos ? 'color: #059669;' : 'color: #dc2626;'} direction: ltr;">${changeStr} ن</td>`);
+                }
+                if (colSet.has('newTotalPoints')) tds.push(`<td style="text-align: center; font-weight: bold; color: #047857;">${item.newTotalPoints ?? '-'}</td>`);
+                if (colSet.has('performedBy')) tds.push(`<td>${item.performedBy || 'النظام'}</td>`);
+
+                if (showSignatureCol) {
+                    tds.push('<td style="width: 120px; border-bottom: 1px dotted #94a3b8;"></td>');
+                }
+
+                const mainRow = `<tr>${tds.join('')}</tr>`;
+
+                // Sub-details rows (if checked)
+                let detailSections = [];
+
+                // 1. Students in activity
+                if (colSet.has('studentsList') && item.studentNames && item.studentNames.length > 0) {
+                    const tags = item.studentNames.map(s => {
+                        const cls = cleanClassString(s);
+                        return `<span class="badge" style="margin: 2px;">${s.name} (${cls})</span>`;
+                    }).join(' ');
+                    detailSections.push(`<div><strong>الطلاب المشاركون (${item.studentNames.length}):</strong> ${tags}</div>`);
+                }
+
+                // 2. Assets in activity
+                if (colSet.has('assetsList') && item.assets && item.assets.length > 0) {
+                    const tags = item.assets.map(a => `<span class="badge" style="margin: 2px;">${assetMap[a] || a}</span>`).join(' ');
+                    detailSections.push(`<div><strong>الموارد المستخدمة (${item.assets.length}):</strong> ${tags}</div>`);
+                }
+
+                // 3. Custom data in activity
+                if (colSet.has('customData') && item.customData && Object.keys(item.customData).length > 0) {
+                    const tags = Object.entries(item.customData).map(([k, v]) => `<span><strong>${k}:</strong> ${v}</span>`).join(' • ');
+                    detailSections.push(`<div><strong>بيانات إضافية:</strong> ${tags}</div>`);
+                }
+
+                // 4. Student or Asset History
+                if (colSet.has('history')) {
+                    if (activeTab === 'students') {
+                        const history = studentParticipationMap[item.id] || studentParticipationMap[item.name] || [];
+                        if (history.length > 0) {
+                            const tags = history.map(h => `<span class="badge" style="margin: 2px;">${h.title} (${h.formattedDate}) +${h.points}ن</span>`).join(' ');
+                            detailSections.push(`<div><strong>سجل مشاركات الطالب (${history.length}):</strong> ${tags}</div>`);
+                        }
+                    } else if (activeTab === 'assets') {
+                        const history = assetUsageMap[item.id] || assetUsageMap[item.name] || [];
+                        if (history.length > 0) {
+                            const tags = history.map(h => `<span class="badge" style="margin: 2px;">${h.title} (${h.formattedDate})</span>`).join(' ');
+                            detailSections.push(`<div><strong>سجل استخدام المورد (${history.length}):</strong> ${tags}</div>`);
+                        }
+                    }
+                }
+
+                let subRow = '';
+                if (detailSections.length > 0) {
+                    subRow = `
+                        <tr>
+                            <td colspan="${mainColSpan}" style="padding: 6px 12px; background: rgba(0,0,0,0.02); font-size: 10.5px; line-height: 1.6;">
+                                ${detailSections.join('<div style="height: 4px;"></div>')}
+                            </td>
+                        </tr>
+                    `;
+                }
+
+                return mainRow + subRow;
+            }).join('');
+
+            // 7. Footer Signatures & Notes HTML
+            const footerHtml = getOfficialReportFooterHtml({
+                signatures,
+                footerNote,
+                showSignatures
             });
 
+            // 8. Full Document Assembly
             const fullHtml = `
                 <!DOCTYPE html>
                 <html dir="rtl" lang="ar">
@@ -1305,38 +1337,25 @@ export default function ReportsPage() {
                     <meta charset="UTF-8">
                     <title>${pageTitle}</title>
                     <style>
-                        ${getStandardPrintStyles()}
+                        ${getStandardPrintStyles({
+                            theme,
+                            orientation,
+                            density
+                        })}
                     </style>
                 </head>
                 <body>
                     ${headerHtml}
-
+                    ${kpiHtml}
                     <table>
                         <thead>
-                            ${tableHeader}
+                            ${tableHeaderHtml}
                         </thead>
                         <tbody>
                             ${tableRowsHtml}
                         </tbody>
                     </table>
-
-                    <div class="footer-signatures">
-                        <div class="sig-box">
-                            <div>المعد / المسؤول</div>
-                            <div>________________</div>
-                            <div class="sig-line"></div>
-                        </div>
-                        <div class="sig-box">
-                            <div>رائد النشاط الطلابي</div>
-                            <div>أ. ________________</div>
-                            <div class="sig-line"></div>
-                        </div>
-                        <div class="sig-box">
-                            <div>مدير المدرسة</div>
-                            <div>أ. ________________</div>
-                            <div class="sig-line"></div>
-                        </div>
-                    </div>
+                    ${footerHtml}
                 </body>
                 </html>
             `;
@@ -1345,9 +1364,13 @@ export default function ReportsPage() {
             await printHtmlDocument(fullHtml, pageTitle);
             toast.success("تم فتح نافذة الطباعة / حفظ PDF بنجاح");
         } catch (error) {
-            console.error(error);
-            toast.error("فشل في إنشاء التقرير الشامل", { id: toastId });
+            console.error("Print generation error:", error);
+            toast.error("فشل في إنشاء التقرير", { id: toastId });
         }
+    };
+
+    const generateBulkPDF = () => {
+        setIsPrintModalOpen(true);
     };
 
     // --- 4. Single Event Print / PDF (Official 3-Column Header, Alphabetical Sorting & Vector Printing) ---
@@ -2174,12 +2197,45 @@ export default function ReportsPage() {
                         <span className="animate-pulse font-bold text-sm">⟵</span>
                     </div>
 
+                    {/* Selected Rows Action Banner */}
+                    {selectedReportRowIds.length > 0 && (
+                        <div className="flex items-center justify-between p-3 mb-3 bg-indigo-600/20 border border-indigo-500/40 rounded-xl text-white text-xs animate-fade-in shrink-0">
+                            <div className="flex items-center gap-2">
+                                <span className="w-2.5 h-2.5 rounded-full bg-indigo-400 animate-pulse" />
+                                <span className="font-bold">تم تحديد {selectedReportRowIds.length} سجل من أصل {previewData.length}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={() => setIsPrintModalOpen(true)}
+                                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-bold flex items-center gap-1.5 shadow transition-all"
+                                >
+                                    <Printer size={14} /> طباعة السجلات المحددة
+                                </button>
+                                <button
+                                    onClick={() => setSelectedReportRowIds([])}
+                                    className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-gray-300 rounded-lg font-medium transition-all"
+                                >
+                                    إلغاء التحديد
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
                     <div className="flex-1 overflow-auto custom-scrollbar bg-black/20 rounded-xl border border-white/5 relative">
                         {/* Edge fade indicator on mobile */}
                         <div className="pointer-events-none absolute left-0 top-0 bottom-0 w-4 bg-gradient-to-r from-black/40 to-transparent z-20 md:hidden" />
                         <table className="w-full min-w-[700px] text-right text-sm">
                             <thead className="bg-[#1a1a20] text-gray-400 sticky top-0 backdrop-blur-md shadow-md z-10">
                                 <tr>
+                                    <th className="p-4 w-12 text-center">
+                                        <input
+                                            type="checkbox"
+                                            checked={previewData.length > 0 && previewData.every(r => selectedReportRowIds.includes(r.id || r.name))}
+                                            onChange={toggleSelectAllReportRows}
+                                            className="w-4 h-4 rounded text-indigo-600 bg-white/10 border-white/20 focus:ring-0 cursor-pointer"
+                                            title="تحديد كل السجلات المعروضة"
+                                        />
+                                    </th>
                                     {activeTab === 'activities' && (
                                         <>
                                             <th className="p-4">النشاط</th>
@@ -2245,7 +2301,7 @@ export default function ReportsPage() {
                                 {previewData.length === 0 ? (
                                     <tr>
                                         <td
-                                            colSpan={activeTab === 'points' ? 9 : (activeTab === 'archive' ? (archiveSubTab === 'students' ? 6 : 5) : 6)}
+                                            colSpan={activeTab === 'points' ? 10 : (activeTab === 'archive' ? (archiveSubTab === 'students' ? 7 : 6) : (activeTab === 'activities' ? 8 : (activeTab === 'students' ? 6 : 4)))}
                                             className="p-12 text-center text-gray-400"
                                         >
                                             {activeTab === 'archive' ? 'لا توجد عناصر مؤرشفة حالياً' : 'لا توجد بيانات للعرض حالياً'}
@@ -2256,8 +2312,16 @@ export default function ReportsPage() {
                                     <Fragment key={row.id || idx}>
                                         <tr
                                             onClick={() => (activeTab === 'activities' || (activeTab === 'archive' && archiveSubTab === 'activities')) && setSelectedEvent(row)}
-                                            className={`hover:bg-white/5 transition-colors ${(activeTab === 'activities' || (activeTab === 'archive' && archiveSubTab === 'activities')) ? 'cursor-pointer' : ''}`}
+                                            className={`hover:bg-white/5 transition-colors ${(activeTab === 'activities' || (activeTab === 'archive' && archiveSubTab === 'activities')) ? 'cursor-pointer' : ''} ${selectedReportRowIds.includes(row.id || row.name) ? 'bg-indigo-600/10' : ''}`}
                                         >
+                                            <td className="p-4 w-12 text-center" onClick={(e) => e.stopPropagation()}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={selectedReportRowIds.includes(row.id || row.name)}
+                                                    onChange={() => toggleSelectReportRow(row.id || row.name)}
+                                                    className="w-4 h-4 rounded text-indigo-600 bg-white/10 border-white/20 focus:ring-0 cursor-pointer"
+                                                />
+                                            </td>
                                             {activeTab === 'activities' && (
                                                 <>
                                                     <td className="p-4 font-bold text-white max-w-[150px] truncate flex items-center gap-2">
@@ -2489,7 +2553,7 @@ export default function ReportsPage() {
                                             const studentHistory = studentParticipationMap[row.id] || studentParticipationMap[row.name] || [];
                                             return (
                                                 <tr className="bg-black/30 border-b border-white/5">
-                                                    <td colSpan={5} className="p-4 pt-1 pr-10">
+                                                    <td colSpan={6} className="p-4 pt-1 pr-10">
                                                         <div className="bg-white/5 rounded-xl p-3 border border-white/10 space-y-2">
                                                             <div className="text-xs font-bold text-emerald-400 flex items-center gap-2">
                                                                 <Calendar size={14} />
@@ -2523,7 +2587,7 @@ export default function ReportsPage() {
                                             const assetHistory = assetUsageMap[row.id] || assetUsageMap[row.name] || [];
                                             return (
                                                 <tr className="bg-black/30 border-b border-white/5">
-                                                    <td colSpan={3} className="p-4 pt-1 pr-10">
+                                                    <td colSpan={4} className="p-4 pt-1 pr-10">
                                                         <div className="bg-white/5 rounded-xl p-3 border border-white/10 space-y-2">
                                                             <div className="text-xs font-bold text-amber-400 flex items-center gap-2">
                                                                 <Box size={14} />
@@ -2811,6 +2875,24 @@ export default function ReportsPage() {
                     </div>
                 </div>
             )}
+
+            {/* Universal Advanced Print Modal */}
+            <AdvancedPrintModal
+                isOpen={isPrintModalOpen}
+                onClose={() => setIsPrintModalOpen(false)}
+                title={`خيارات طباعة ${activeTab === 'activities' ? 'سجل الأنشطة' : activeTab === 'students' ? 'قائمة الطلاب' : activeTab === 'assets' ? 'جرد الموارد' : activeTab === 'points' ? 'سجل النقاط' : 'الأرشيف'}`}
+                reportType={`reports_${activeTab}_${activeTab === 'archive' ? archiveSubTab : ''}`}
+                availableColumns={getReportColumnsDefinition(activeTab, archiveSubTab)}
+                totalRecordsCount={previewData.length}
+                selectedRecordsCount={selectedReportRowIds.length}
+                hasSelectionSupport={true}
+                initialCustomTitle={
+                    activeTab === 'students' && gradeFilter
+                        ? `تقرير طلاب ${gradeFilter}${sectionFilter ? ` - ${sectionFilter}` : ''}`
+                        : ''
+                }
+                onPrint={handleExecuteAdvancedPrint}
+            />
         </div>
     );
 }

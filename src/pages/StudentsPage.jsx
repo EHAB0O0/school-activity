@@ -13,7 +13,8 @@ import BulkPrintCertificatesModal from '../components/students/BulkPrintCertific
 import DuplicateResolverModal from '../components/students/DuplicateResolverModal';
 import { findDuplicateGroups, enrichDuplicateGroupsWithEvents, normalizeArabic } from '../utils/studentDuplicates';
 import { logPointsChange, clampPoints, sanitizeNegativePoints, fetchStudentPointsLogs } from '../utils/pointsLedger';
-import { sortStudentsArabic, cleanClassString, getOfficialReportHeaderHtml, getStandardPrintStyles, printHtmlDocument } from '../utils/reportUtils';
+import { sortStudentsArabic, cleanClassString, getOfficialReportHeaderHtml, getStandardPrintStyles, printHtmlDocument, getOfficialReportFooterHtml } from '../utils/reportUtils';
+import AdvancedPrintModal from '../components/ui/AdvancedPrintModal';
 
 export default function StudentsPage() {
     const [students, setStudents] = useState([]);
@@ -35,6 +36,17 @@ export default function StudentsPage() {
     const [operationsInitialTab, setOperationsInitialTab] = useState('transfer');
     const [isCertificatesModalOpen, setIsCertificatesModalOpen] = useState(false);
     const [isProcessingBulk, setIsProcessingBulk] = useState(false);
+
+    // Advanced Universal Print Modal State
+    const [printModalConfig, setPrintModalConfig] = useState({
+        isOpen: false,
+        reportType: 'students_consolidated_sheet',
+        title: 'كشف مجمّع لبيانات الطلاب',
+        columns: [],
+        scopeTotalCount: 0,
+        selectedCount: 0,
+        onExecute: null
+    });
 
     const { eventTypes, grades, settings, schoolInfo } = useSettings();
     const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -249,10 +261,25 @@ export default function StudentsPage() {
     };
 
     // --- Student Profile PDF / Print ---
-    const generateStudentProfilePDF = async (student, history = [], includePoints = false, pointsLogs = []) => {
+    const generateStudentProfilePDF = async (student, history = [], includePoints = false, pointsLogs = [], options = {}) => {
+        const {
+            columns = ['banner', 'kpis', 'specs', 'activities', includePoints ? 'points' : null, 'notes'].filter(Boolean),
+            theme = 'classic',
+            orientation = 'portrait',
+            density = 'standard',
+            showHeader = true,
+            showKpis = true,
+            showSignatures = true,
+            signatures = [],
+            customTitle = '',
+            footerNote = ''
+        } = options;
+
         const toastId = toast.loading('جاري تجهيز ملف الطالب للطباعة...');
         try {
             const classDisplay = cleanClassString(student);
+            const isDark = theme === 'dark';
+            const isMonochrome = theme === 'monochrome';
 
             // Specializations HTML
             const specsHtml = (student.specializations && student.specializations.length > 0)
@@ -272,7 +299,7 @@ export default function StudentsPage() {
                         <td style="text-align: center; font-weight: bold;">${i + 1}</td>
                         <td style="font-weight: bold;">${evt.title || '-'}</td>
                         <td>${evt.typeName || '-'}</td>
-                        <td style="color: #64748b; font-size: 12px;">${evt.date || (evt.startTime?.toDate ? evt.startTime.toDate().toLocaleDateString('ar-SA') : '-')}</td>
+                        <td style="color: ${isDark ? '#94a3b8' : isMonochrome ? '#000000' : '#64748b'}; font-size: 12px;">${evt.date || (evt.startTime?.toDate ? evt.startTime.toDate().toLocaleDateString('ar-SA') : '-')}</td>
                         <td style="text-align: center;">
                             <span class="status ${evt.status === 'Done' ? 'success' : ''}">
                                 ${evt.status === 'Done' ? 'مكتمل' : (evt.status || 'مسجّل')}
@@ -282,8 +309,9 @@ export default function StudentsPage() {
                 `).join('')
                 : `<tr><td colspan="5" style="text-align: center; color: #94a3b8; padding: 20px;">لا توجد مشاركات مسجلة لهذا الطالب حتى الآن</td></tr>`;
 
+            const shouldIncludePoints = columns.includes('points') || includePoints;
             let pointsSectionHtml = '';
-            if (includePoints) {
+            if (shouldIncludePoints) {
                 // Ensure points logs are sorted descending
                 const sortedLogs = [...(pointsLogs || [])].sort((a, b) => {
                     const timeA = a.createdAt?.toMillis ? a.createdAt.toMillis() : (a.createdAt?.seconds ? a.createdAt.seconds * 1000 : 0);
@@ -300,15 +328,15 @@ export default function StudentsPage() {
                         return `
                             <tr>
                                 <td style="text-align: center; font-weight: bold;">${i + 1}</td>
-                                <td style="color: #64748b; font-size: 12px;">${logDate} ${logTime ? `• ${logTime}` : ''}</td>
+                                <td style="color: ${isDark ? '#94a3b8' : isMonochrome ? '#000000' : '#64748b'}; font-size: 12px;">${logDate} ${logTime ? `• ${logTime}` : ''}</td>
                                 <td style="font-weight: bold;">${log.reason || log.eventTitle || 'حركة نقاط'}</td>
                                 <td style="text-align: center;">
                                     <span class="type-pill">${log.eventType || (log.actionType === 'manual_add' || log.actionType === 'manual_deduct' ? 'يدوي' : 'نشاط')}</span>
                                 </td>
-                                <td style="text-align: center; font-weight: bold; ${isPos ? 'color: #059669;' : 'color: #dc2626;'} direction: ltr;">
+                                <td style="text-align: center; font-weight: bold; ${isPos ? (isDark ? 'color: #34d399;' : isMonochrome ? 'color: #000;' : 'color: #059669;') : (isDark ? 'color: #fb7185;' : isMonochrome ? 'color: #000;' : 'color: #dc2626;')} direction: ltr;">
                                     ${changeStr} ن
                                 </td>
-                                <td style="text-align: center; font-weight: bold; color: #047857;">${log.newTotalPoints ?? '-'}</td>
+                                <td style="text-align: center; font-weight: bold; color: ${isDark ? '#34d399' : isMonochrome ? '#000;' : '#047857;'}">${log.newTotalPoints ?? '-'}</td>
                             </tr>
                         `;
                     }).join('')
@@ -340,196 +368,199 @@ export default function StudentsPage() {
 
             const joinDateStr = student.joinedAt?.toDate ? student.joinedAt.toDate().toLocaleDateString('ar-SA') : '-';
 
-            const headerHtml = getOfficialReportHeaderHtml({
-                schoolInfo,
-                title: includePoints ? 'تقرير السجل الشامل ونقاط التميز' : 'تقرير الملف الفردي للطالب',
-                subTitle: 'قسم النشاط الطلابي المدرسي',
-                studentName: student.name,
-                centerDetails: [
-                    `الصف / الشعبة: ${classDisplay}`
-                ],
-                leftDetails: [
-                    { label: 'حالة القيد', value: student.active !== false ? 'طالب منتظم' : 'مؤرشف' },
-                    { label: 'رصيد النقاط', value: `${student.totalPoints || 0} نقطة` }
-                ]
-            });
+            const defaultTitle = shouldIncludePoints ? 'تقرير السجل الشامل ونقاط التميز' : 'تقرير الملف الفردي للطالب';
+            const pageTitle = customTitle.trim() || defaultTitle;
+
+            let headerHtml = '';
+            if (showHeader) {
+                headerHtml = getOfficialReportHeaderHtml({
+                    schoolInfo,
+                    title: pageTitle,
+                    subTitle: 'قسم النشاط الطلابي المدرسي',
+                    studentName: student.name,
+                    centerDetails: [
+                        `الصف / الشعبة: ${classDisplay}`
+                    ],
+                    leftDetails: [
+                        { label: 'حالة القيد', value: student.active !== false ? 'طالب منتظم' : 'مؤرشف' },
+                        { label: 'رصيد النقاط', value: `${student.totalPoints || 0} نقطة` }
+                    ]
+                });
+            }
+
+            const bannerHtml = columns.includes('banner') ? `
+                <div class="student-banner">
+                    <div class="avatar">${student.name.charAt(0)}</div>
+                    <div class="student-banner-info">
+                        <h2>${student.name}</h2>
+                        <p>سجل تفصيلي معتمد لجميع المشاركات وبيانات نقاط التميز</p>
+                    </div>
+                </div>
+            ` : '';
+
+            const kpiHtml = (columns.includes('kpis') && showKpis) ? `
+                <div class="kpi-grid">
+                    <div class="kpi-card">
+                        <div class="kpi-label">الصف / الشعبة</div>
+                        <div class="kpi-value">${classDisplay}</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-label">رصيد نقاط التميز</div>
+                        <div class="kpi-value points">${student.totalPoints || 0} نقطة</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-label">الأنشطة المسجلة</div>
+                        <div class="kpi-value">${history.length} نشاط</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-label">${shouldIncludePoints ? 'حركات النقاط' : 'تاريخ الانضمام'}</div>
+                        <div class="kpi-value">${shouldIncludePoints ? `${pointsLogs ? pointsLogs.length : 0} حركة` : joinDateStr}</div>
+                    </div>
+                </div>
+            ` : '';
+
+            const specsSectionHtml = columns.includes('specs') ? `
+                <div class="specs-section">
+                    <span class="specs-label">التخصصات والفرق:</span>
+                    <div>${specsHtml}</div>
+                </div>
+            ` : '';
+
+            const activitiesSectionHtml = columns.includes('activities') ? `
+                <div class="section-container">
+                    <div class="section-title">
+                        <h3>سجل الأنشطة والمشاركات (${history.length})</h3>
+                    </div>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th style="width: 5%; text-align: center;">#</th>
+                                <th style="width: 40%;">اسم النشاط</th>
+                                <th style="width: 20%;">النوع / التصنيف</th>
+                                <th style="width: 20%;">التاريخ والوقت</th>
+                                <th style="width: 15%; text-align: center;">الحالة</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${historyRows}
+                        </tbody>
+                    </table>
+                </div>
+            ` : '';
+
+            const notesSectionHtml = (columns.includes('notes') && student.notes) ? `
+                <div class="section-container">
+                    <div class="section-title">
+                        <h3>ملاحظات المرشد والمشرف</h3>
+                    </div>
+                    <div style="padding: 12px 16px; background: ${isDark ? '#111827' : isMonochrome ? '#ffffff' : '#f8fafc'}; border: 1px solid ${isDark ? '#1e293b' : isMonochrome ? '#000000' : '#e2e8f0'}; border-radius: 8px; font-size: 12px; color: ${isDark ? '#f1f5f9' : isMonochrome ? '#000000' : '#334155'};">
+                        ${student.notes}
+                    </div>
+                </div>
+            ` : '';
+
+            let footerHtml = '';
+            if (showSignatures) {
+                footerHtml = getOfficialReportFooterHtml({
+                    signatures: signatures.length ? signatures : [
+                        { role: 'مشرف النشاط الطلابي', name: '' },
+                        { role: 'مدير المدرسة', name: schoolInfo?.principalName || '' }
+                    ],
+                    note: footerNote,
+                    systemCredit: 'نظام إدارة النشاط الطلابي المدرسي'
+                });
+            }
 
             const htmlContent = `
                 <!DOCTYPE html>
                 <html dir="rtl" lang="ar">
                 <head>
                     <meta charset="UTF-8">
-                    <title>ملف الطالب - ${student.name}</title>
+                    <title>${pageTitle} - ${student.name}</title>
                     <style>
-                        ${getStandardPrintStyles(`
-                            .avatar {
-                                width: 52px;
-                                height: 52px;
-                                background: linear-gradient(135deg, #4f46e5, #7c3aed);
-                                color: #ffffff;
-                                border-radius: 50%;
-                                font-size: 22px;
-                                font-weight: bold;
-                                display: flex;
-                                align-items: center;
-                                justify-content: center;
-                                flex-shrink: 0;
-                            }
-                            .student-banner {
-                                display: flex;
-                                align-items: center;
-                                gap: 16px;
-                                background: #f8fafc;
-                                border: 1px solid #e2e8f0;
-                                border-radius: 12px;
-                                padding: 14px 18px;
-                                margin-bottom: 20px;
-                                page-break-inside: avoid !important;
-                                break-inside: avoid !important;
-                            }
-                            .student-banner-info { flex: 1; }
-                            .student-banner-info h2 { margin: 0 0 3px 0; font-size: 19px; color: #0f172a; }
-                            .student-banner-info p { margin: 0; font-size: 12px; color: #64748b; }
-                            .specs-section {
-                                background: #f8fafc;
-                                border: 1px solid #e2e8f0;
-                                border-radius: 10px;
-                                padding: 10px 14px;
-                                margin-bottom: 20px;
-                                display: flex;
-                                align-items: center;
-                                gap: 12px;
-                                page-break-inside: avoid !important;
-                                break-inside: avoid !important;
-                            }
-                            .specs-label { font-size: 12px; font-weight: bold; color: #334155; white-space: nowrap; }
-                            .badge {
-                                background: #ede9fe;
-                                color: #5b21b6;
-                                border: 1px solid #ddd6fe;
-                                padding: 3px 10px;
-                                border-radius: 6px;
-                                font-size: 11px;
-                                font-weight: 600;
-                                display: inline-block;
-                            }
-                            .section-container {
-                                margin-bottom: 25px;
-                                page-break-inside: auto;
-                                break-inside: auto;
-                            }
-                            .section-title {
-                                border-bottom: 2px solid #e2e8f0;
-                                padding-bottom: 6px;
-                                margin-bottom: 12px;
-                                page-break-inside: avoid !important;
-                                break-inside: avoid !important;
-                            }
-                            .section-title h3 {
-                                margin: 0;
-                                font-size: 15px;
-                                color: #1e293b;
-                                font-weight: bold;
-                            }
-                            .status {
-                                display: inline-block;
-                                font-size: 10px;
-                                font-weight: bold;
-                                padding: 2px 8px;
-                                border-radius: 4px;
-                                background: #f1f5f9;
-                                color: #475569;
-                                border: 1px solid #cbd5e1;
-                            }
-                            .status.success {
-                                background: #ecfdf5;
-                                color: #059669;
-                                border-color: #a7f3d0;
-                            }
-                            .type-pill {
-                                font-size: 10px;
-                                background: #f1f5f9;
-                                color: #475569;
-                                padding: 2px 6px;
-                                border-radius: 4px;
-                                border: 1px solid #e2e8f0;
-                            }
-                        `)}
+                        ${getStandardPrintStyles({
+                            theme,
+                            orientation,
+                            density,
+                            extraCss: `
+                                .avatar {
+                                    width: 52px;
+                                    height: 52px;
+                                    background: ${isMonochrome ? '#000000' : 'linear-gradient(135deg, #4f46e5, #7c3aed)'};
+                                    color: #ffffff;
+                                    border-radius: 50%;
+                                    font-size: 22px;
+                                    font-weight: bold;
+                                    display: flex;
+                                    align-items: center;
+                                    justify-content: center;
+                                    flex-shrink: 0;
+                                }
+                                .student-banner {
+                                    display: flex;
+                                    align-items: center;
+                                    gap: 16px;
+                                    background: ${isDark ? '#111827' : isMonochrome ? '#ffffff' : '#f8fafc'};
+                                    border: 1px solid ${isDark ? '#1e293b' : isMonochrome ? '#000000' : '#e2e8f0'};
+                                    border-radius: 12px;
+                                    padding: 14px 18px;
+                                    margin-bottom: 20px;
+                                    page-break-inside: avoid !important;
+                                    break-inside: avoid !important;
+                                }
+                                .student-banner-info { flex: 1; }
+                                .student-banner-info h2 { margin: 0 0 3px 0; font-size: 19px; color: ${isDark ? '#f8fafc' : isMonochrome ? '#000000' : '#0f172a'}; }
+                                .student-banner-info p { margin: 0; font-size: 12px; color: ${isDark ? '#94a3b8' : isMonochrome ? '#000000' : '#64748b'}; }
+                                .specs-section {
+                                    background: ${isDark ? '#111827' : isMonochrome ? '#ffffff' : '#f8fafc'};
+                                    border: 1px solid ${isDark ? '#1e293b' : isMonochrome ? '#000000' : '#e2e8f0'};
+                                    border-radius: 10px;
+                                    padding: 10px 14px;
+                                    margin-bottom: 20px;
+                                    display: flex;
+                                    align-items: center;
+                                    gap: 12px;
+                                    page-break-inside: avoid !important;
+                                    break-inside: avoid !important;
+                                }
+                                .specs-label { font-size: 12px; font-weight: bold; color: ${isDark ? '#cbd5e1' : isMonochrome ? '#000000' : '#334155'}; white-space: nowrap; }
+                                .section-container {
+                                    margin-bottom: 25px;
+                                    page-break-inside: auto;
+                                    break-inside: auto;
+                                }
+                                .section-title {
+                                    border-bottom: 2px solid ${isDark ? '#1e293b' : isMonochrome ? '#000000' : '#e2e8f0'};
+                                    padding-bottom: 6px;
+                                    margin-bottom: 12px;
+                                    page-break-inside: avoid !important;
+                                    break-inside: avoid !important;
+                                }
+                                .section-title h3 {
+                                    margin: 0;
+                                    font-size: 15px;
+                                    color: ${isDark ? '#38bdf8' : isMonochrome ? '#000000' : '#1e293b'};
+                                    font-weight: bold;
+                                }
+                            `
+                        })}
                     </style>
                 </head>
                 <body>
                     ${headerHtml}
-
-                    <div class="student-banner">
-                        <div class="avatar">${student.name.charAt(0)}</div>
-                        <div class="student-banner-info">
-                            <h2>${student.name}</h2>
-                            <p>سجل تفصيلي معتمد لجميع المشاركات وبيانات نقاط التميز</p>
-                        </div>
-                    </div>
-
-                    <div class="kpi-grid">
-                        <div class="kpi-card">
-                            <div class="kpi-label">الصف / الشعبة</div>
-                            <div class="kpi-value">${classDisplay}</div>
-                        </div>
-                        <div class="kpi-card">
-                            <div class="kpi-label">رصيد نقاط التميز</div>
-                            <div class="kpi-value points">${student.totalPoints || 0} نقطة</div>
-                        </div>
-                        <div class="kpi-card">
-                            <div class="kpi-label">الأنشطة المسجلة</div>
-                            <div class="kpi-value">${history.length} نشاط</div>
-                        </div>
-                        <div class="kpi-card">
-                            <div class="kpi-label">${includePoints ? 'حركات النقاط' : 'تاريخ الانضمام'}</div>
-                            <div class="kpi-value">${includePoints ? `${pointsLogs ? pointsLogs.length : 0} حركة` : joinDateStr}</div>
-                        </div>
-                    </div>
-
-                    <div class="specs-section">
-                        <span class="specs-label">التخصصات والفرق:</span>
-                        <div>${specsHtml}</div>
-                    </div>
-
-                    <div class="section-container">
-                        <div class="section-title">
-                            <h3>سجل الأنشطة والمشاركات (${history.length})</h3>
-                        </div>
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th style="width: 5%; text-align: center;">#</th>
-                                    <th style="width: 40%;">اسم النشاط</th>
-                                    <th style="width: 20%;">النوع / التصنيف</th>
-                                    <th style="width: 20%;">التاريخ والوقت</th>
-                                    <th style="width: 15%; text-align: center;">الحالة</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                ${historyRows}
-                            </tbody>
-                        </table>
-                    </div>
-
+                    ${bannerHtml}
+                    ${kpiHtml}
+                    ${specsSectionHtml}
+                    ${activitiesSectionHtml}
                     ${pointsSectionHtml}
-
-                    <div class="footer-signatures">
-                        <div class="sig-box">
-                            <div>مشرف النشاط الطلابي</div>
-                            <div class="sig-line">التوقيع: .....................</div>
-                        </div>
-                        <div class="sig-box">
-                            <div>مدير المدرسة</div>
-                            <div class="sig-line">الختم والتوقيع: .....................</div>
-                        </div>
-                    </div>
+                    ${notesSectionHtml}
+                    ${footerHtml}
                 </body>
                 </html>
             `;
 
             toast.dismiss(toastId);
-            await printHtmlDocument(htmlContent, `ملف الطالب - ${student.name}`);
+            await printHtmlDocument(htmlContent, `${pageTitle} - ${student.name}`);
         } catch (e) {
             console.error(e);
             toast.error("فشل تجهيز الملف للطباعة", { id: toastId });
@@ -874,96 +905,226 @@ export default function StudentsPage() {
         }
     };
 
-    // 7. Bulk Consolidated Sheet Print
-    const handlePrintConsolidated = async () => {
-        const rawList = students.filter(s => selectedIds.includes(s.id));
-        if (rawList.length === 0) return;
-        const selectedList = sortStudentsArabic(rawList, 'name');
-
-        const currentDate = new Date().toLocaleDateString('ar-SA');
-
-        const rowsHtml = selectedList.map((st, idx) => `
-            <tr>
-                <td style="text-align: center; font-weight: bold;">${idx + 1}</td>
-                <td style="font-weight: bold;">${st.name}</td>
-                <td style="text-align: center;">${cleanClassString(st)}</td>
-                <td>${(st.specializations || []).join('، ') || 'عام'}</td>
-                <td style="text-align: center; font-weight: bold; color: #047857;">${st.totalPoints || 0}</td>
-                <td style="min-width: 120px;"></td>
-            </tr>
-        `).join('');
-
-        const headerHtml = getOfficialReportHeaderHtml({
-            schoolInfo,
-            title: 'كشف بيانات الطلاب المشاركين',
-            subTitle: 'قسم النشاط الطلابي المدرسي',
-            centerDetails: [
-                `العدد الإجمالي: ${selectedList.length} طالب`
+    // 7. Universal Consolidated Student Sheet Print
+    const handleOpenConsolidatedPrintModal = () => {
+        setPrintModalConfig({
+            isOpen: true,
+            reportType: 'students_consolidated_sheet',
+            title: gradeFilter ? `كشف طلاب ${gradeFilter}${sectionFilter ? ` - ${sectionFilter}` : ''}` : 'كشف مجمّع لبيانات الطلاب',
+            columns: [
+                { id: 'index', label: '#', defaultVisible: true },
+                { id: 'name', label: 'اسم الطالب', defaultVisible: true },
+                { id: 'class', label: 'الصف والشعبة', defaultVisible: true },
+                { id: 'specializations', label: 'التخصصات والفرق', defaultVisible: true },
+                { id: 'points', label: 'نقاط التميز', defaultVisible: true },
+                { id: 'activitiesCount', label: 'الأنشطة المسجلة', defaultVisible: false, badge: 'إحصائي' },
+                { id: 'notes', label: 'ملاحظات', defaultVisible: true }
             ],
-            leftDetails: [
-                `تاريخ الاستخراج: ${currentDate}`
-            ]
+            scopeTotalCount: displayedStudents.length,
+            selectedCount: selectedIds.length,
+            onExecute: executeConsolidatedPrint
         });
+    };
 
-        const htmlContent = `
-            <!DOCTYPE html>
-            <html dir="rtl" lang="ar">
-            <head>
-                <meta charset="UTF-8">
-                <title>كشف مجمّع لبيانات الطلاب</title>
-                <style>
-                    ${getStandardPrintStyles()}
-                </style>
-            </head>
-            <body>
-                ${headerHtml}
+    const executeConsolidatedPrint = async (options) => {
+        const {
+            columns = [],
+            theme = 'classic',
+            orientation = 'portrait',
+            density = 'standard',
+            scope = 'all',
+            showHeader = true,
+            showKpis = true,
+            showSignatures = true,
+            showSignatureCol = false,
+            signatures = [],
+            customTitle = '',
+            footerNote = ''
+        } = options;
 
-                <table>
-                    <thead>
-                        <tr>
-                            <th style="width: 5%; text-align: center;">#</th>
-                            <th style="width: 30%;">اسم الطالب</th>
-                            <th style="width: 20%; text-align: center;">الصف / الشعبة</th>
-                            <th style="width: 25%;">التخصصات والأنشطة</th>
-                            <th style="width: 10%; text-align: center;">نقاط التميز</th>
-                            <th style="width: 10%;">ملاحظات والتوقيع</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${rowsHtml}
-                    </tbody>
-                </table>
+        const toastId = toast.loading('جاري تجهيز كشف الطلاب للطباعة...');
+        try {
+            let targetList = (scope === 'selected' && selectedIds.length > 0)
+                ? students.filter(s => selectedIds.includes(s.id))
+                : [...displayedStudents];
 
-                <div class="footer-signatures">
-                    <div class="sig-box">
-                        <div>مشرف النشاط الطلابي</div>
-                        <div class="sig-line">التوقيع: .....................</div>
+            if (targetList.length === 0) {
+                toast.error("لا يوجد طلاب للطباعة", { id: toastId });
+                return;
+            }
+
+            const sortedList = sortStudentsArabic(targetList, 'name');
+
+            // Construct Table Headers
+            const ths = [];
+            if (columns.includes('index')) ths.push('<th style="width: 5%; text-align: center;">#</th>');
+            if (columns.includes('name')) ths.push('<th style="width: 28%;">اسم الطالب</th>');
+            if (columns.includes('class')) ths.push('<th style="width: 18%; text-align: center;">الصف / الشعبة</th>');
+            if (columns.includes('specializations')) ths.push('<th>التخصصات والأنشطة</th>');
+            if (columns.includes('points')) ths.push('<th style="width: 12%; text-align: center;">نقاط التميز</th>');
+            if (columns.includes('activitiesCount')) ths.push('<th style="width: 12%; text-align: center;">الأنشطة</th>');
+            if (columns.includes('notes')) ths.push('<th style="width: 15%;">ملاحظات</th>');
+            if (showSignatureCol) ths.push('<th style="width: 120px; text-align: center;">التوقيع / الحضور</th>');
+
+            // Construct Table Rows
+            const rowsHtml = sortedList.map((st, idx) => {
+                const tds = [];
+                if (columns.includes('index')) tds.push(`<td style="text-align: center; font-weight: bold;">${idx + 1}</td>`);
+                if (columns.includes('name')) tds.push(`<td style="font-weight: bold;">${st.name}</td>`);
+                if (columns.includes('class')) tds.push(`<td style="text-align: center;">${cleanClassString(st)}</td>`);
+                if (columns.includes('specializations')) tds.push(`<td>${(st.specializations || []).map(s => s === 'General' ? 'عام' : s).join('، ') || 'عام'}</td>`);
+                if (columns.includes('points')) tds.push(`<td style="text-align: center; font-weight: bold; color: #047857;">${st.totalPoints || 0}</td>`);
+                if (columns.includes('activitiesCount')) {
+                    const stEventsCount = allEvents.filter(e => e.participatingStudents?.includes(st.id)).length;
+                    tds.push(`<td style="text-align: center; font-weight: 600;">${stEventsCount}</td>`);
+                }
+                if (columns.includes('notes')) tds.push(`<td style="font-size: 11px; color: #64748b;">${st.notes || ''}</td>`);
+                if (showSignatureCol) tds.push('<td style="min-width: 100px; border-bottom: 1px dotted #94a3b8;"></td>');
+
+                return `<tr>${tds.join('')}</tr>`;
+            }).join('');
+
+            // Document Title
+            const defaultTitle = gradeFilter ? `كشف طلاب ${gradeFilter}${sectionFilter ? ` - ${sectionFilter}` : ''}` : 'كشف مجمّع لبيانات الطلاب';
+            const pageTitle = customTitle.trim() || defaultTitle;
+
+            // Header
+            let headerHtml = '';
+            if (showHeader) {
+                headerHtml = getOfficialReportHeaderHtml({
+                    schoolInfo,
+                    title: pageTitle,
+                    subTitle: 'قسم النشاط الطلابي المدرسي',
+                    centerDetails: [
+                        gradeFilter && gradeFilter !== 'All' ? `الصف: ${gradeFilter}` : null,
+                        sectionFilter && sectionFilter !== 'All' ? `الشعبة: ${sectionFilter}` : null,
+                        scope === 'selected' ? `(طلاب محددون: ${sortedList.length} من أصل ${displayedStudents.length})` : null
+                    ].filter(Boolean),
+                    leftDetails: [
+                        { label: 'تاريخ الاستخراج', value: new Date().toLocaleDateString('ar-SA') },
+                        { label: 'إجمالي الطلاب', value: `${sortedList.length} طالب` }
+                    ]
+                });
+            }
+
+            // KPI Cards
+            let kpiHtml = '';
+            if (showKpis) {
+                const totalPts = sortedList.reduce((acc, s) => acc + (Number(s.totalPoints) || 0), 0);
+                const avgPts = sortedList.length ? Math.round(totalPts / sortedList.length) : 0;
+                kpiHtml = `
+                    <div class="kpi-grid">
+                        <div class="kpi-card">
+                            <div class="kpi-label">إجمالي الطلاب بالكشف</div>
+                            <div class="kpi-value">${sortedList.length}</div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-label">مجموع نقاط التميز</div>
+                            <div class="kpi-value points">${totalPts}</div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-label">متوسط النقاط لكل طالب</div>
+                            <div class="kpi-value">${avgPts}</div>
+                        </div>
                     </div>
-                    <div class="sig-box">
-                        <div>مدير المدرسة</div>
-                        <div class="sig-line">الختم والتوقيع: .....................</div>
-                    </div>
-                </div>
-            </body>
-            </html>
-        `;
+                `;
+            }
 
-        await printHtmlDocument(htmlContent, 'كشف مجمّع لبيانات الطلاب');
+            // Footer
+            let footerHtml = '';
+            if (showSignatures) {
+                footerHtml = getOfficialReportFooterHtml({
+                    signatures: signatures.length ? signatures : [
+                        { role: 'مشرف النشاط الطلابي', name: '' },
+                        { role: 'مدير المدرسة', name: schoolInfo?.principalName || '' }
+                    ],
+                    note: footerNote,
+                    systemCredit: 'نظام إدارة النشاط الطلابي المدرسي'
+                });
+            }
+
+            const htmlContent = `
+                <!DOCTYPE html>
+                <html dir="rtl" lang="ar">
+                <head>
+                    <meta charset="UTF-8">
+                    <title>${pageTitle}</title>
+                    <style>
+                        ${getStandardPrintStyles({ theme, orientation, density })}
+                    </style>
+                </head>
+                <body>
+                    ${headerHtml}
+                    ${kpiHtml}
+                    <table>
+                        <thead>
+                            <tr>${ths.join('')}</tr>
+                        </thead>
+                        <tbody>
+                            ${rowsHtml}
+                        </tbody>
+                    </table>
+                    ${footerHtml}
+                </body>
+                </html>
+            `;
+
+            toast.dismiss(toastId);
+            await printHtmlDocument(htmlContent, pageTitle);
+        } catch (err) {
+            console.error("Print consolidated error:", err);
+            toast.error("فشل تجهيز كشف الطلاب للطباعة", { id: toastId });
+        }
     };
 
     // 8. Bulk Detailed Records Print
-    const handlePrintDetailed = async () => {
-        const rawList = students.filter(s => selectedIds.includes(s.id));
-        if (rawList.length === 0) return;
-        const selectedList = sortStudentsArabic(rawList, 'name');
+    const handleOpenDetailedBatchPrintModal = () => {
+        setPrintModalConfig({
+            isOpen: true,
+            reportType: 'students_detailed_batch',
+            title: 'سجلات تفصيلية للطلاب',
+            columns: [
+                { id: 'banner', label: 'بيانات وهوية الطالب', defaultVisible: true },
+                { id: 'specs', label: 'التخصصات والفرق المسجل بها', defaultVisible: true },
+                { id: 'activities', label: 'سجل الأنشطة والمشاركات', defaultVisible: true }
+            ],
+            scopeTotalCount: displayedStudents.length,
+            selectedCount: selectedIds.length,
+            onExecute: executeDetailedBatchPrint
+        });
+    };
+
+    const executeDetailedBatchPrint = async (options) => {
+        const {
+            columns = ['banner', 'specs', 'activities'],
+            theme = 'classic',
+            orientation = 'portrait',
+            density = 'standard',
+            scope = 'all',
+            showHeader = true,
+            showSignatures = true,
+            signatures = [],
+            customTitle = '',
+            footerNote = ''
+        } = options;
+
+        let targetList = (scope === 'selected' && selectedIds.length > 0)
+            ? students.filter(s => selectedIds.includes(s.id))
+            : [...displayedStudents];
+
+        if (targetList.length === 0) return;
+        const selectedList = sortStudentsArabic(targetList, 'name');
 
         const toastId = toast.loading(`جاري تجهيز سجلات ${selectedList.length} طالب للطباعة...`);
         try {
             const eventsSnap = await getDocs(query(collection(db, 'events'), orderBy('startTime', 'desc'), limit(150)));
-            const allEvents = eventsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+            const allEvts = eventsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+            const isDark = theme === 'dark';
+            const isMonochrome = theme === 'monochrome';
 
             const pagesHtml = selectedList.map(st => {
-                const studentEvents = allEvents.filter(e => e.participatingStudents && e.participatingStudents.includes(st.id));
+                const studentEvents = allEvts.filter(e => e.participatingStudents && e.participatingStudents.includes(st.id));
                 const eventsRows = studentEvents.length > 0 ? studentEvents.map((evt, idx) => `
                     <tr>
                         <td style="text-align: center; font-weight: bold;">${idx + 1}</td>
@@ -976,162 +1137,163 @@ export default function StudentsPage() {
 
                 const specsHtml = (st.specializations || []).map(sp => `<span class="badge">${sp === 'General' ? 'عام' : sp}</span>`).join(' ') || '<span style="color:#9ca3af">لا يوجد تخصيص</span>';
 
-                const studentHeaderHtml = getOfficialReportHeaderHtml({
-                    schoolInfo,
-                    title: 'الملف الفردي للطالب',
-                    subTitle: 'قسم النشاط الطلابي المدرسي',
-                    studentName: st.name,
-                    centerDetails: [
-                        `الصف / الشعبة: ${cleanClassString(st)}`
-                    ],
-                    leftDetails: [
-                        { label: 'حالة القيد', value: st.active !== false ? 'طالب منتظم' : 'مؤرشف' },
-                        { label: 'نقاط التميز', value: `${st.totalPoints || 0} نقطة` }
-                    ]
-                });
+                let studentHeaderHtml = '';
+                if (showHeader) {
+                    studentHeaderHtml = getOfficialReportHeaderHtml({
+                        schoolInfo,
+                        title: customTitle.trim() || 'الملف الفردي للطالب',
+                        subTitle: 'قسم النشاط الطلابي المدرسي',
+                        studentName: st.name,
+                        centerDetails: [
+                            `الصف / الشعبة: ${cleanClassString(st)}`
+                        ],
+                        leftDetails: [
+                            { label: 'حالة القيد', value: st.active !== false ? 'طالب منتظم' : 'مؤرشف' },
+                            { label: 'نقاط التميز', value: `${st.totalPoints || 0} نقطة` }
+                        ]
+                    });
+                }
+
+                const bannerHtml = columns.includes('banner') ? `
+                    <div class="student-banner">
+                        <div class="avatar">${st.name.charAt(0)}</div>
+                        <div class="student-banner-info">
+                            <h2>${st.name}</h2>
+                            <p>الصف: <strong>${cleanClassString(st)}</strong> • رصيد النقاط: <strong style="color: #059669;">${st.totalPoints || 0} نقطة</strong></p>
+                        </div>
+                    </div>
+                ` : '';
+
+                const specsSectionHtml = columns.includes('specs') ? `
+                    <div class="specs-section">
+                        <span class="specs-label">التخصصات والفرق المسجل بها:</span>
+                        <div>${specsHtml}</div>
+                    </div>
+                ` : '';
+
+                const activitiesSectionHtml = columns.includes('activities') ? `
+                    <div class="section-container">
+                        <div class="section-title">
+                            <h3>سجل الأنشطة والمشاركات (${studentEvents.length})</h3>
+                        </div>
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th style="width: 5%; text-align: center;">#</th>
+                                    <th style="width: 45%;">اسم النشاط</th>
+                                    <th style="width: 20%;">النوع / التصنيف</th>
+                                    <th style="width: 15%;">التاريخ</th>
+                                    <th style="width: 15%; text-align: center;">الحالة</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${eventsRows}
+                            </tbody>
+                        </table>
+                    </div>
+                ` : '';
+
+                let footerHtml = '';
+                if (showSignatures) {
+                    footerHtml = getOfficialReportFooterHtml({
+                        signatures: signatures.length ? signatures : [
+                            { role: 'مشرف النشاط الطلابي', name: '' },
+                            { role: 'مدير المدرسة', name: schoolInfo?.principalName || '' }
+                        ],
+                        note: footerNote,
+                        systemCredit: 'نظام إدارة النشاط الطلابي المدرسي'
+                    });
+                }
 
                 return `
                     <div class="student-page">
                         ${studentHeaderHtml}
-
-                        <div class="student-banner">
-                            <div class="avatar">${st.name.charAt(0)}</div>
-                            <div class="student-banner-info">
-                                <h2>${st.name}</h2>
-                                <p>الصف: <strong>${cleanClassString(st)}</strong> • رصيد النقاط: <strong style="color: #059669;">${st.totalPoints || 0} نقطة</strong></p>
-                            </div>
-                        </div>
-
-                        <div class="specs-section">
-                            <span class="specs-label">التخصصات والفرق المسجل بها:</span>
-                            <div>${specsHtml}</div>
-                        </div>
-
-                        <div class="section-container">
-                            <div class="section-title">
-                                <h3>سجل الأنشطة والمشاركات (${studentEvents.length})</h3>
-                            </div>
-                            <table>
-                                <thead>
-                                    <tr>
-                                        <th style="width: 5%; text-align: center;">#</th>
-                                        <th style="width: 45%;">اسم النشاط</th>
-                                        <th style="width: 20%;">النوع / التصنيف</th>
-                                        <th style="width: 15%;">التاريخ</th>
-                                        <th style="width: 15%; text-align: center;">الحالة</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    ${eventsRows}
-                                </tbody>
-                            </table>
-                        </div>
-
-                        <div class="footer-signatures">
-                            <div class="sig-box">
-                                <div>مشرف النشاط الطلابي</div>
-                                <div class="sig-line">التوقيع: .....................</div>
-                            </div>
-                            <div class="sig-box">
-                                <div>مدير المدرسة</div>
-                                <div class="sig-line">الختم والتوقيع: .....................</div>
-                            </div>
-                        </div>
+                        ${bannerHtml}
+                        ${specsSectionHtml}
+                        ${activitiesSectionHtml}
+                        ${footerHtml}
                     </div>
                 `;
             }).join('');
+
+            const pageTitle = customTitle.trim() || 'سجلات تفصيلية للطلاب';
 
             const htmlContent = `
                 <!DOCTYPE html>
                 <html dir="rtl" lang="ar">
                 <head>
                     <meta charset="UTF-8">
-                    <title>سجلات تفصيلية للطلاب</title>
+                    <title>${pageTitle}</title>
                     <style>
-                        ${getStandardPrintStyles(`
-                            .student-page {
-                                page-break-after: always;
-                                break-after: page;
-                                min-height: 250mm;
-                                display: flex;
-                                flex-direction: column;
-                            }
-                            .student-banner {
-                                display: flex;
-                                align-items: center;
-                                gap: 14px;
-                                background: #f8fafc;
-                                border: 1px solid #e2e8f0;
-                                border-radius: 10px;
-                                padding: 12px 16px;
-                                margin-bottom: 16px;
-                                page-break-inside: avoid !important;
-                                break-inside: avoid !important;
-                            }
-                            .avatar {
-                                width: 44px;
-                                height: 44px;
-                                border-radius: 50%;
-                                background: linear-gradient(135deg, #4f46e5, #7c3aed);
-                                color: white;
-                                display: flex;
-                                align-items: center;
-                                justify-content: center;
-                                font-size: 20px;
-                                font-weight: bold;
-                                flex-shrink: 0;
-                            }
-                            .student-banner-info h2 { margin: 0 0 3px 0; font-size: 17px; color: #0f172a; }
-                            .student-banner-info p { margin: 0; font-size: 12px; color: #475569; }
-                            .specs-section {
-                                background: #f8fafc;
-                                border: 1px solid #e2e8f0;
-                                border-radius: 8px;
-                                padding: 10px 14px;
-                                margin-bottom: 16px;
-                                display: flex;
-                                align-items: center;
-                                gap: 10px;
-                                page-break-inside: avoid !important;
-                                break-inside: avoid !important;
-                            }
-                            .specs-label { font-size: 12px; font-weight: bold; color: #334155; white-space: nowrap; }
-                            .badge {
-                                background: #ede9fe;
-                                color: #5b21b6;
-                                border: 1px solid #ddd6fe;
-                                padding: 2px 8px;
-                                border-radius: 4px;
-                                font-size: 11px;
-                                font-weight: 600;
-                            }
-                            .section-container {
-                                margin-bottom: 20px;
-                                flex: 1;
-                            }
-                            .section-title {
-                                border-bottom: 2px solid #e2e8f0;
-                                padding-bottom: 5px;
-                                margin-bottom: 10px;
-                            }
-                            .section-title h3 {
-                                margin: 0;
-                                font-size: 14px;
-                                color: #1e293b;
-                                font-weight: bold;
-                            }
-                            .status {
-                                font-size: 10px;
-                                padding: 2px 6px;
-                                border-radius: 4px;
-                                background: #f3f4f6;
-                                color: #4b5563;
-                            }
-                            .status.success {
-                                background: #ecfdf5;
-                                color: #059669;
-                            }
-                        `)}
+                        ${getStandardPrintStyles({
+                            theme,
+                            orientation,
+                            density,
+                            extraCss: `
+                                .student-page {
+                                    page-break-after: always;
+                                    break-after: page;
+                                    min-height: 250mm;
+                                    display: flex;
+                                    flex-direction: column;
+                                }
+                                .student-banner {
+                                    display: flex;
+                                    align-items: center;
+                                    gap: 14px;
+                                    background: ${isDark ? '#111827' : isMonochrome ? '#ffffff' : '#f8fafc'};
+                                    border: 1px solid ${isDark ? '#1e293b' : isMonochrome ? '#000000' : '#e2e8f0'};
+                                    border-radius: 10px;
+                                    padding: 12px 16px;
+                                    margin-bottom: 16px;
+                                    page-break-inside: avoid !important;
+                                    break-inside: avoid !important;
+                                }
+                                .avatar {
+                                    width: 44px;
+                                    height: 44px;
+                                    border-radius: 50%;
+                                    background: ${isMonochrome ? '#000000' : 'linear-gradient(135deg, #4f46e5, #7c3aed)'};
+                                    color: white;
+                                    display: flex;
+                                    align-items: center;
+                                    justify-content: center;
+                                    font-size: 20px;
+                                    font-weight: bold;
+                                    flex-shrink: 0;
+                                }
+                                .student-banner-info h2 { margin: 0 0 3px 0; font-size: 17px; color: ${isDark ? '#f8fafc' : isMonochrome ? '#000000' : '#0f172a'}; }
+                                .student-banner-info p { margin: 0; font-size: 12px; color: ${isDark ? '#94a3b8' : isMonochrome ? '#000000' : '#475569'}; }
+                                .specs-section {
+                                    background: ${isDark ? '#111827' : isMonochrome ? '#ffffff' : '#f8fafc'};
+                                    border: 1px solid ${isDark ? '#1e293b' : isMonochrome ? '#000000' : '#e2e8f0'};
+                                    border-radius: 8px;
+                                    padding: 10px 14px;
+                                    margin-bottom: 16px;
+                                    display: flex;
+                                    align-items: center;
+                                    gap: 10px;
+                                    page-break-inside: avoid !important;
+                                    break-inside: avoid !important;
+                                }
+                                .specs-label { font-size: 12px; font-weight: bold; color: ${isDark ? '#cbd5e1' : isMonochrome ? '#000000' : '#334155'}; white-space: nowrap; }
+                                .section-container {
+                                    margin-bottom: 20px;
+                                    flex: 1;
+                                }
+                                .section-title {
+                                    border-bottom: 2px solid ${isDark ? '#1e293b' : isMonochrome ? '#000000' : '#e2e8f0'};
+                                    padding-bottom: 5px;
+                                    margin-bottom: 10px;
+                                }
+                                .section-title h3 {
+                                    margin: 0;
+                                    font-size: 14px;
+                                    color: ${isDark ? '#38bdf8' : isMonochrome ? '#000000' : '#1e293b'};
+                                    font-weight: bold;
+                                }
+                            `
+                        })}
                     </style>
                 </head>
                 <body>
@@ -1141,11 +1303,32 @@ export default function StudentsPage() {
             `;
 
             toast.dismiss(toastId);
-            await printHtmlDocument(htmlContent, 'سجلات تفصيلية للطلاب');
+            await printHtmlDocument(htmlContent, pageTitle);
         } catch (err) {
             console.error("Print detailed error:", err);
             toast.error("فشل تجهيز السجلات للطباعة", { id: toastId });
         }
+    };
+
+    // 9. Single Student Profile Print Modal Opener
+    const handleOpenStudentProfilePrintModal = (student, withPoints = false) => {
+        if (!student) return;
+        setPrintModalConfig({
+            isOpen: true,
+            reportType: 'student_individual_profile',
+            title: withPoints ? `تقرير السجل الشامل ونقاط التميز - ${student.name}` : `تقرير الملف الفردي - ${student.name}`,
+            columns: [
+                { id: 'banner', label: 'بيانات وهوية الطالب الأساسية', defaultVisible: true },
+                { id: 'kpis', label: 'بطاقات المؤشرات الإحصائية (الصف، النقاط، الأنشطة)', defaultVisible: true },
+                { id: 'specs', label: 'التخصصات والفرق المسجل بها', defaultVisible: true },
+                { id: 'activities', label: 'جدول سجل الأنشطة والمشاركات', defaultVisible: true },
+                { id: 'points', label: 'جدول سجل وتفاصيل حركات النقاط', defaultVisible: Boolean(withPoints) },
+                { id: 'notes', label: 'ملاحظات المرشد والمشرف', defaultVisible: Boolean(student.notes) }
+            ],
+            scopeTotalCount: 1,
+            selectedCount: 0,
+            onExecute: (options) => generateStudentProfilePDF(student, studentHistory, options.columns?.includes('points') ?? withPoints, studentPointsLogs, options)
+        });
     };
 
 
@@ -1168,6 +1351,14 @@ export default function StudentsPage() {
                             حالات التكرار ({duplicateGroups.length})
                         </button>
                     )}
+                    <button
+                        onClick={handleOpenConsolidatedPrintModal}
+                        className="bg-white/10 hover:bg-white/20 text-white px-5 py-3 rounded-xl border border-white/10 shadow-lg transition-all flex items-center gap-2 font-bold text-sm"
+                        title="خيارات طباعة كشف الطلاب"
+                    >
+                        <Printer size={18} className="text-indigo-400" />
+                        <span>طباعة الكشف</span>
+                    </button>
                     <button
                         onClick={() => setIsAddModalOpen(true)}
                         className="bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-white px-6 py-3 rounded-xl shadow-lg transition-all flex items-center shadow-emerald-500/20 font-bold"
@@ -1557,10 +1748,10 @@ export default function StudentsPage() {
                                         <span>تضمين سجل النقاط</span>
                                     </label>
                                     <button
-                                        onClick={() => generateStudentProfilePDF(selectedStudent, studentHistory, includePointsInPrint, studentPointsLogs)}
-                                        aria-label="طباعة الملف"
+                                        onClick={() => handleOpenStudentProfilePrintModal(selectedStudent, includePointsInPrint)}
+                                        aria-label="خيارات طباعة الملف"
                                         className="bg-white/10 hover:bg-white/20 text-white p-2 rounded-lg flex items-center transition-all border border-white/5 shadow-sm"
-                                        title="طباعة الملف"
+                                        title="خيارات طباعة الملف"
                                     >
                                         <Printer size={20} />
                                     </button>
@@ -1724,7 +1915,7 @@ export default function StudentsPage() {
                                         <div className="flex justify-between items-center bg-white/5 p-3 rounded-xl border border-white/5">
                                             <h3 className="text-white font-bold m-0 border-none">سجل الأنشطة الكامل ({studentHistory.length})</h3>
                                             <button
-                                                onClick={() => generateStudentProfilePDF(selectedStudent, studentHistory)}
+                                                onClick={() => handleOpenStudentProfilePrintModal(selectedStudent, false)}
                                                 className="text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-lg flex items-center transition-all"
                                             >
                                                 <Printer size={14} className="ml-1" /> طباعة السجل
@@ -1786,7 +1977,7 @@ export default function StudentsPage() {
                                                 <h3 className="text-white font-bold m-0 text-sm">سجل حركات نقاط التميز ({studentPointsLogs.length})</h3>
                                             </div>
                                             <button
-                                                onClick={() => generateStudentProfilePDF(selectedStudent, studentHistory, true, studentPointsLogs)}
+                                                onClick={() => handleOpenStudentProfilePrintModal(selectedStudent, true)}
                                                 className="text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-lg flex items-center transition-all"
                                             >
                                                 <Printer size={14} className="ml-1" /> طباعة سجل النقاط
@@ -1879,8 +2070,8 @@ export default function StudentsPage() {
                 onClearSelection={handleClearSelection}
                 onOpenOperationsModal={handleOpenOperationsModal}
                 onOpenCertificatesModal={() => setIsCertificatesModalOpen(true)}
-                onPrintConsolidated={handlePrintConsolidated}
-                onPrintDetailed={handlePrintDetailed}
+                onPrintConsolidated={handleOpenConsolidatedPrintModal}
+                onPrintDetailed={handleOpenDetailedBatchPrintModal}
                 onExportCSV={handleExportCSV}
                 onBulkArchive={handleBulkArchive}
                 isProcessing={isProcessingBulk}
@@ -1916,6 +2107,18 @@ export default function StudentsPage() {
                 onResolved={() => {
                     // onSnapshot updates students and events automatically
                 }}
+            />
+
+            {/* Advanced Universal Print Modal */}
+            <AdvancedPrintModal
+                isOpen={printModalConfig.isOpen}
+                onClose={() => setPrintModalConfig(prev => ({ ...prev, isOpen: false }))}
+                reportType={printModalConfig.reportType}
+                availableColumns={printModalConfig.columns}
+                defaultTitle={printModalConfig.title}
+                totalRecordsCount={printModalConfig.scopeTotalCount}
+                selectedRecordsCount={printModalConfig.selectedCount}
+                onPrint={printModalConfig.onExecute}
             />
         </div>
     );
