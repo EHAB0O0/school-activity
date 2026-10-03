@@ -221,6 +221,11 @@ export default function ReportsPage() {
     const [previewData, setPreviewData] = useState([]);
     const [studentMap, setStudentMap] = useState({}); // id -> name
 
+    // --- Archive Hub State ---
+    const [archiveSubTab, setArchiveSubTab] = useState('students'); // students | activities
+    const [archiveCounts, setArchiveCounts] = useState({ students: 0, activities: 0 });
+    const [archiveSearchTerm, setArchiveSearchTerm] = useState('');
+
     // --- Advanced Printing & Selection State ---
     const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
     const [selectedReportRowIds, setSelectedReportRowIds] = useState([]);
@@ -244,11 +249,6 @@ export default function ReportsPage() {
             setSelectedReportRowIds(Array.from(new Set([...selectedReportRowIds, ...allIds])));
         }
     };
-
-    // --- Archive Hub State ---
-    const [archiveSubTab, setArchiveSubTab] = useState('students'); // students | activities
-    const [archiveCounts, setArchiveCounts] = useState({ students: 0, activities: 0 });
-    const [archiveSearchTerm, setArchiveSearchTerm] = useState('');
 
     // --- Advanced Filters State ---
     const [dateRange, setDateRange] = useState({ start: '', end: '' });
