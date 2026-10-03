@@ -305,6 +305,37 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
         return submissions.filter(s => !s.grade || s.grade === 'غير معروف' || !!s.isGradeUnknown).length;
     }, [submissions]);
 
+    // Dynamic Columns for Print
+    const printColumnsDefinition = useMemo(() => {
+        const cols = [
+            { id: 'index', label: '#', defaultVisible: true },
+            { id: 'studentName', label: 'اسم الطالب', defaultVisible: true },
+            { id: 'class', label: 'الصف والشعبة', defaultVisible: true }
+        ];
+
+        if (customFields.length > 0) {
+            customFields.forEach(f => {
+                cols.push({
+                    id: `custom_${f.id}`,
+                    label: f.label || 'بيان إضافي',
+                    defaultVisible: true
+                });
+            });
+        } else if (link?.customFieldLabel) {
+            cols.push({
+                id: 'custom_legacy',
+                label: link.customFieldLabel,
+                defaultVisible: true
+            });
+        }
+
+        cols.push({ id: 'phone', label: 'رقم الجوال', defaultVisible: false, badge: 'اتصال' });
+        cols.push({ id: 'status', label: 'حالة الاعتماد', defaultVisible: true });
+        cols.push({ id: 'date', label: 'تاريخ التسجيل', defaultVisible: false });
+
+        return cols;
+    }, [customFields, link?.customFieldLabel]);
+
     if (!isOpen || !link) return null;
 
     // Filtered Submissions
@@ -921,36 +952,6 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
         toast.success("تم تصدير ملف Excel بنجاح");
     };
 
-    // Dynamic Columns for Print
-    const printColumnsDefinition = useMemo(() => {
-        const cols = [
-            { id: 'index', label: '#', defaultVisible: true },
-            { id: 'studentName', label: 'اسم الطالب', defaultVisible: true },
-            { id: 'class', label: 'الصف والشعبة', defaultVisible: true }
-        ];
-
-        if (customFields.length > 0) {
-            customFields.forEach(f => {
-                cols.push({
-                    id: `custom_${f.id}`,
-                    label: f.label || 'بيان إضافي',
-                    defaultVisible: true
-                });
-            });
-        } else if (link?.customFieldLabel) {
-            cols.push({
-                id: 'custom_legacy',
-                label: link.customFieldLabel,
-                defaultVisible: true
-            });
-        }
-
-        cols.push({ id: 'phone', label: 'رقم الجوال', defaultVisible: false, badge: 'اتصال' });
-        cols.push({ id: 'status', label: 'حالة الاعتماد', defaultVisible: true });
-        cols.push({ id: 'date', label: 'تاريخ التسجيل', defaultVisible: false });
-
-        return cols;
-    }, [customFields, link?.customFieldLabel]);
 
     // Advanced Print Execution
     const handleExecuteAdvancedPrint = async (options) => {

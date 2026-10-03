@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useLocation } from 'react-router-dom';
 import { db } from '../firebase';
-import { collection, query, orderBy, getDocs, doc, getDoc, updateDoc, deleteDoc, runTransaction, increment } from 'firebase/firestore';
+import { collection, query, where, orderBy, getDocs, doc, getDoc, updateDoc, deleteDoc, runTransaction, increment } from 'firebase/firestore';
 
 import { FileText, Download, Calendar, Users, Box, Filter, Printer, Search, X, Eye, Trash2, RefreshCw, Pen, Hash, Table, Archive, RotateCcw, TrendingUp, ArrowUpRight, ArrowDownLeft, Layers, Sparkles, AlertCircle, Copy, ExternalLink } from 'lucide-react';
 import { Menu, Transition } from '@headlessui/react';
@@ -316,6 +316,59 @@ export default function ReportsPage() {
     const [editEventData, setEditEventData] = useState(null);
     const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: '', message: '', onConfirm: null, isDestructive: false });
 
+    // --- Dedicated Single Event Print State ---
+    const [isSingleEventPrintModalOpen, setIsSingleEventPrintModalOpen] = useState(false);
+    const [singleEventPrintEvent, setSingleEventPrintEvent] = useState(null);
+    const [singleEventPointsMap, setSingleEventPointsMap] = useState({});
+
+    // Automatically load points logs & link points for selected event
+    useEffect(() => {
+        const targetId = selectedEvent?.id;
+        if (!targetId) {
+            setSingleEventPointsMap({});
+            return;
+        }
+        let isSubscribed = true;
+        (async () => {
+            const pointsMap = {};
+            try {
+                const snap = await getDocs(query(collection(db, 'points_logs'), where('eventId', '==', targetId)));
+                snap.docs.forEach(docSnap => {
+                    const data = docSnap.data();
+                    if (data.studentId && data.change !== undefined) {
+                        pointsMap[data.studentId] = (pointsMap[data.studentId] || 0) + (Number(data.change) || 0);
+                    }
+                });
+            } catch (e) {
+                console.warn("Could not query points_logs for selectedEvent:", e);
+            }
+
+            try {
+                const linksSnap = await getDocs(query(collection(db, 'registration_links'), where('eventId', '==', targetId)));
+                linksSnap.docs.forEach(lDoc => {
+                    const lData = lDoc.data();
+                    const linkPts = Number(lData.pointsPerStudent);
+                    if (!isNaN(linkPts) && linkPts > 0) {
+                        (selectedEvent?.linkStudentIds || []).forEach(sid => {
+                            if (pointsMap[sid] === undefined) {
+                                pointsMap[sid] = linkPts;
+                            }
+                        });
+                    }
+                });
+            } catch (e) {
+                console.warn("Could not query registration_links for selectedEvent:", e);
+            }
+
+            if (isSubscribed) {
+                setSingleEventPointsMap(pointsMap);
+            }
+        })();
+        return () => {
+            isSubscribed = false;
+        };
+    }, [selectedEvent?.id]);
+
     const [assetMap, setAssetMap] = useState({});
     const [studentParticipationMap, setStudentParticipationMap] = useState({});
     const [assetUsageMap, setAssetUsageMap] = useState({});
@@ -587,6 +640,9 @@ export default function ReportsPage() {
                         rawStatus: pd.status || 'Draft',
                         rawParticipatingStudents: pd.participatingStudents || [],
                         linkStudentIds: pd.linkStudentIds || [],
+                        deferredLinkStudents: pd.deferredLinkStudents || {},
+                        participantPoints: pd.participantPoints || {},
+                        combineLinkStudents: pd.combineLinkStudents || {},
                         studentsCount: participatingStudents.length,
                         studentNames: participatingStudents, // Now Array of Objects {name, grade, section}
                         type: pd.typeName || 'عام',
@@ -666,6 +722,9 @@ export default function ReportsPage() {
                                 rawStatus: pd.status || 'archived',
                                 rawParticipatingStudents: pd.participatingStudents || [],
                                 linkStudentIds: pd.linkStudentIds || [],
+                                deferredLinkStudents: pd.deferredLinkStudents || {},
+                                participantPoints: pd.participantPoints || {},
+                                combineLinkStudents: pd.combineLinkStudents || {},
                                 studentsCount: participatingStudents.length,
                                 studentNames: participatingStudents,
                                 type: pd.typeName || 'عام',
@@ -1373,78 +1432,236 @@ export default function ReportsPage() {
         setIsPrintModalOpen(true);
     };
 
-    // --- 4. Single Event Print / PDF (Official 3-Column Header, Alphabetical Sorting & Vector Printing) ---
-    const generateSingleEventPDF = async (event) => {
-        const toastId = toast.loading('جاري تحضير ملف الطباعة...');
+    // --- 4. Dedicated Single Event Print & Reporting Engine ---
+
+    // Dynamic Columns Definition for Single Event Print Modal (Includes Points Column)
+    const singleEventPrintColumnsDefinition = useMemo(() => {
+        const evt = singleEventPrintEvent || selectedEvent;
+        const cols = [
+            { id: 'index', label: '#', defaultVisible: true },
+            { id: 'studentName', label: 'اسم الطالب', defaultVisible: true },
+            { id: 'class', label: 'الصف والشعبة', defaultVisible: true },
+            { id: 'points', label: 'نقاط المشاركة في النشاط', defaultVisible: true, badge: 'نقاط' }
+        ];
+
+        // Custom fields from participant details if any
+        if (evt?.participantDetails && typeof evt.participantDetails === 'object') {
+            const customFieldLabels = new Set();
+            Object.values(evt.participantDetails).forEach(pMap => {
+                if (pMap && typeof pMap === 'object') {
+                    Object.keys(pMap).forEach(k => {
+                        if (!/^نقاط|^النقاط|points|point/i.test(k.trim())) {
+                            customFieldLabels.add(k);
+                        }
+                    });
+                }
+            });
+            customFieldLabels.forEach(label => {
+                cols.push({
+                    id: `custom_${label}`,
+                    label: label,
+                    defaultVisible: true
+                });
+            });
+        }
+
+        return cols;
+    }, [singleEventPrintEvent, selectedEvent]);
+
+    // Helper to resolve exact points earned by a student in an activity
+    const getStudentActivityPoints = (event, studentId, pointsMap = {}) => {
+        if (!event) return 0;
+
+        // 1. Direct from pre-queried points_logs or registration_links
+        if (pointsMap && pointsMap[studentId] !== undefined) {
+            return Number(pointsMap[studentId]) || 0;
+        }
+
+        // 2. Specific deferred link points recorded on the event
+        if (event.deferredLinkStudents && event.deferredLinkStudents[studentId] !== undefined) {
+            return Number(event.deferredLinkStudents[studentId]) || 0;
+        }
+
+        // 3. Direct participant points override on event object
+        if (event.participantPoints && event.participantPoints[studentId] !== undefined) {
+            return Number(event.participantPoints[studentId]) || 0;
+        }
+
+        // 4. Custom participant details field (e.g. 'النقاط', 'نقاط', 'points')
+        const pDetails = event.participantDetails?.[studentId];
+        if (pDetails && typeof pDetails === 'object') {
+            for (const [k, v] of Object.entries(pDetails)) {
+                if (/^نقاط|^النقاط|points|point/i.test(k.trim()) && !isNaN(Number(v))) {
+                    return Number(v);
+                }
+            }
+        }
+
+        // 5. Fallback to event base points
+        return Number(event.points) || 10;
+    };
+
+    // Open Single Event Advanced Print Modal
+    const openSingleEventPrintModal = async (event) => {
+        const targetEvent = event || selectedEvent;
+        if (!targetEvent) return;
+        setSingleEventPrintEvent(targetEvent);
+
+        if (targetEvent.id) {
+            const pointsMap = { ...(singleEventPointsMap || {}) };
+            try {
+                const snap = await getDocs(query(collection(db, 'points_logs'), where('eventId', '==', targetEvent.id)));
+                snap.docs.forEach(docSnap => {
+                    const data = docSnap.data();
+                    if (data.studentId && data.change !== undefined) {
+                        pointsMap[data.studentId] = (pointsMap[data.studentId] || 0) + (Number(data.change) || 0);
+                    }
+                });
+            } catch (err) {
+                console.warn("Could not query points_logs for single event print:", err);
+            }
+
+            try {
+                const linksSnap = await getDocs(query(collection(db, 'registration_links'), where('eventId', '==', targetEvent.id)));
+                linksSnap.docs.forEach(lDoc => {
+                    const lData = lDoc.data();
+                    const linkPts = Number(lData.pointsPerStudent);
+                    if (!isNaN(linkPts) && linkPts > 0) {
+                        (targetEvent.linkStudentIds || []).forEach(sid => {
+                            if (pointsMap[sid] === undefined) {
+                                pointsMap[sid] = linkPts;
+                            }
+                        });
+                    }
+                });
+            } catch (err) {
+                console.warn("Could not query registration_links for single event print:", err);
+            }
+
+            setSingleEventPointsMap(pointsMap);
+        }
+
+        setIsSingleEventPrintModalOpen(true);
+    };
+
+    // Keep alias for compatibility
+    const generateSingleEventPDF = openSingleEventPrintModal;
+
+    // Execute Single Event Advanced Print
+    const handleExecuteSingleEventPrint = async (options) => {
+        const event = singleEventPrintEvent || selectedEvent;
+        if (!event) return;
+
+        const toastId = toast.loading('جاري تحضير ملف طباعة التقرير...');
 
         try {
-            // Extract all participant field labels present in this event
-            const customFieldLabels = new Set();
+            const {
+                columns = [],
+                theme = 'classic',
+                orientation = 'portrait',
+                density = 'standard',
+                showHeader = true,
+                showKpis = true,
+                showSignatures = true,
+                showSignatureCol = false,
+                signatures = [],
+                customTitle = '',
+                footerNote = ''
+            } = options;
+
+            const colSet = new Set(columns);
+            const isDark = theme === 'dark';
+            const isMonochrome = theme === 'monochrome';
+
+            // Extract custom fields from event
+            const customFieldLabels = [];
             if (event.participantDetails && typeof event.participantDetails === 'object') {
+                const seen = new Set();
                 Object.values(event.participantDetails).forEach(pMap => {
                     if (pMap && typeof pMap === 'object') {
-                        Object.keys(pMap).forEach(k => customFieldLabels.add(k));
+                        Object.keys(pMap).forEach(k => {
+                            if (!/^نقاط|^النقاط|points|point/i.test(k.trim()) && !seen.has(k)) {
+                                seen.add(k);
+                                customFieldLabels.push(k);
+                            }
+                        });
                     }
                 });
             }
-            const activeCustomCols = Array.from(customFieldLabels);
+
+            const activeCustomCols = customFieldLabels.filter(label => colSet.has(`custom_${label}`));
 
             // Sort students alphabetically (أبجدي)
             const sortedStudents = sortStudentsArabic(event.studentNames || []);
 
-            let studentsListHtml = '';
-            if (sortedStudents.length > 0) {
-                const theadThs = activeCustomCols.map(col => `<th style="padding: 8px 12px; text-align: right; font-size: 11px;">${col}</th>`).join('');
-                const tbodyTrs = sortedStudents.map((s, i) => {
-                    const pDetails = event.participantDetails?.[s.id] || {};
-                    const colTds = activeCustomCols.map(col => {
-                        const val = pDetails[col] || '-';
-                        return `<td style="padding: 8px 12px; font-size: 11px; text-align: right;">${val}</td>`;
-                    }).join('');
-
-                    const cls = cleanClassString(s);
-
-                    return `
-                        <tr>
-                            <td style="padding: 8px 10px; font-size: 11px; text-align: center; width: 35px;">${i + 1}</td>
-                            <td style="padding: 8px 12px; font-size: 12px; font-weight: bold; color: #0f172a;">${s.name}</td>
-                            <td style="padding: 8px 12px; font-size: 11px; text-align: center;">${cls}</td>
-                            ${colTds}
-                            <td style="padding: 8px 12px; width: 120px; border-bottom: 1px dotted #94a3b8;"></td>
-                        </tr>
-                    `;
-                }).join('');
-
-                studentsListHtml = `
-                    <table>
-                        <thead>
-                            <tr>
-                                <th style="width: 35px; text-align: center;">#</th>
-                                <th style="text-align: right;">اسم الطالب</th>
-                                <th style="width: 140px; text-align: center;">الصف والشعبة</th>
-                                ${theadThs}
-                                <th style="width: 120px; text-align: center;">التوقيع / الحضور</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${tbodyTrs}
-                        </tbody>
-                    </table>
-                `;
-            } else {
-                studentsListHtml = '<div style="padding: 20px; text-align: center; color: #94a3b8; font-size: 13px;">لا يوجد طلاب مشاركون مسجلون لهذا النشاط</div>';
+            // Table Header THs
+            let ths = [];
+            if (colSet.has('index')) ths.push('<th style="width: 35px; text-align: center;">#</th>');
+            if (colSet.has('studentName')) ths.push('<th style="text-align: right;">اسم الطالب</th>');
+            if (colSet.has('class')) ths.push('<th style="width: 130px; text-align: center;">الصف والشعبة</th>');
+            if (colSet.has('points')) ths.push('<th style="width: 110px; text-align: center;">نقاط المشاركة</th>');
+            activeCustomCols.forEach(col => {
+                ths.push(`<th style="padding: 8px 12px; text-align: right;">${col}</th>`);
+            });
+            if (showSignatureCol) {
+                ths.push('<th style="width: 120px; text-align: center;">التوقيع / الحضور</th>');
             }
 
+            const tableHeaderHtml = `<tr>${ths.join('')}</tr>`;
+
+            // Table Body TRs
+            let tableRowsHtml = '';
+            if (sortedStudents.length > 0) {
+                tableRowsHtml = sortedStudents.map((s, i) => {
+                    const pDetails = event.participantDetails?.[s.id] || {};
+                    const cls = cleanClassString(s);
+                    const studentPts = getStudentActivityPoints(event, s.id, singleEventPointsMap);
+
+                    let tds = [];
+                    if (colSet.has('index')) tds.push(`<td style="text-align: center; width: 35px;">${i + 1}</td>`);
+                    if (colSet.has('studentName')) tds.push(`<td style="font-weight: bold; color: ${isDark ? '#f8fafc' : isMonochrome ? '#000' : '#0f172a'};">${s.name}</td>`);
+                    if (colSet.has('class')) tds.push(`<td style="text-align: center;">${cls}</td>`);
+                    if (colSet.has('points')) {
+                        const ptsStyle = isDark ? 'color: #38bdf8;' : isMonochrome ? 'color: #000;' : 'color: #059669;';
+                        tds.push(`<td style="text-align: center; font-weight: bold; font-family: monospace; ${ptsStyle} direction: ltr;">+${studentPts} ن</td>`);
+                    }
+                    activeCustomCols.forEach(col => {
+                        const val = pDetails[col] || '-';
+                        tds.push(`<td style="text-align: right;">${val}</td>`);
+                    });
+                    if (showSignatureCol) {
+                        tds.push(`<td style="width: 120px; border-bottom: 1px dotted ${isDark ? '#475569' : isMonochrome ? '#000' : '#94a3b8'};"></td>`);
+                    }
+
+                    return `<tr>${tds.join('')}</tr>`;
+                }).join('');
+            }
+
+            let studentsListHtml = '';
+            if (sortedStudents.length > 0 && ths.length > 0) {
+                studentsListHtml = `
+                    <table>
+                        <thead>${tableHeaderHtml}</thead>
+                        <tbody>${tableRowsHtml}</tbody>
+                    </table>
+                `;
+            } else if (sortedStudents.length === 0) {
+                studentsListHtml = `<div style="padding: 20px; text-align: center; color: ${isDark ? '#94a3b8' : '#64748b'}; font-size: 13px;">لا يوجد طلاب مشاركون مسجلون لهذا النشاط</div>`;
+            }
+
+            // Assets List HTML
             const assetsListHtml = (event.assets && event.assets.length > 0)
                 ? event.assets.map(a => {
                     const name = assetMap[a] || a;
-                    return `<span style="display: inline-block; background: #fffbeb; color: #92400e; border: 1px solid #fcd34d; padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 600;">${name}</span>`;
+                    return `<span class="asset-pill">${name}</span>`;
                 }).join(' ')
-                : `<div style="color: #64748b; font-size: 12px;">لا توجد موارد أو أدوات مسجلة لهذا النشاط</div>`;
+                : `<div style="color: ${isDark ? '#94a3b8' : '#64748b'}; font-size: 12px;">لا توجد موارد أو أدوات مسجلة لهذا النشاط</div>`;
 
-            const headerHtml = getOfficialReportHeaderHtml({
+            // Official Header HTML
+            const reportTitle = customTitle || 'تقرير النشاط الطلابي';
+            const headerHtml = showHeader ? getOfficialReportHeaderHtml({
                 schoolInfo,
-                title: 'تقرير النشاط الطلابي',
+                title: reportTitle,
                 subTitle: event.title,
                 centerDetails: [
                     `المجال / النوع: ${event.type || 'عام'}`,
@@ -1453,112 +1670,142 @@ export default function ReportsPage() {
                 leftDetails: [
                     { label: 'التاريخ', value: event.formattedDate || event.date || new Date().toLocaleDateString('ar-SA') },
                     { label: 'الوقت', value: event.time || '-' },
-                    { label: 'إجمالي المشاركين', value: `${event.studentsCount || sortedStudents.length} طالب` },
+                    { label: 'إجمالي المشاركين', value: `${sortedStudents.length} طالب` },
                     { label: 'حالة النشاط', value: event.status || 'مكتمل' }
                 ]
+            }) : '';
+
+            // KPI Summary HTML
+            const kpiHtml = showKpis ? `
+                <div class="event-summary">
+                    <div class="event-summary-item">
+                        <div class="event-summary-label">تاريخ النشاط</div>
+                        <div class="event-summary-val">${event.formattedDate || event.date || '-'}</div>
+                    </div>
+                    <div class="event-summary-item">
+                        <div class="event-summary-label">الوقت المحدد</div>
+                        <div class="event-summary-val">${event.time || '-'}</div>
+                    </div>
+                    <div class="event-summary-item">
+                        <div class="event-summary-label">المقر / المكان</div>
+                        <div class="event-summary-val">${event.venue || '-'}</div>
+                    </div>
+                    <div class="event-summary-item">
+                        <div class="event-summary-label">نقاط الفعالية الأساسية</div>
+                        <div class="event-summary-val" style="color: ${isDark ? '#38bdf8' : isMonochrome ? '#000' : '#059669'}">${event.points || 10} نقطة</div>
+                    </div>
+                    <div class="event-summary-item">
+                        <div class="event-summary-label">حالة الفعالية</div>
+                        <div class="event-summary-val" style="color: ${event.status === 'مكتمل' ? (isDark ? '#4ade80' : '#059669') : (isDark ? '#fcd34d' : '#d97706')}">${event.status || 'مكتمل'}</div>
+                    </div>
+                    <div class="event-summary-item">
+                        <div class="event-summary-label">إجمالي المسجلين</div>
+                        <div class="event-summary-val">${sortedStudents.length} طالب</div>
+                    </div>
+                </div>
+            ` : '';
+
+            // Signatures & Notes HTML
+            const footerHtml = getOfficialReportFooterHtml({
+                signatures,
+                footerNote,
+                showSignatures
             });
 
-            const html = `
+            const extraCss = `
+                .event-summary {
+                    display: grid;
+                    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+                    gap: 8px;
+                    margin-bottom: 16px;
+                    page-break-inside: avoid !important;
+                    break-inside: avoid !important;
+                }
+                .event-summary-item {
+                    background: ${isDark ? 'rgba(255, 255, 255, 0.04)' : isMonochrome ? '#ffffff' : '#f8fafc'};
+                    border: 1px solid ${isDark ? 'rgba(56, 189, 248, 0.25)' : isMonochrome ? '#000000' : '#e2e8f0'};
+                    border-radius: 8px;
+                    padding: 8px 10px;
+                    text-align: center;
+                }
+                .event-summary-label {
+                    font-size: 11px;
+                    color: ${isDark ? '#94a3b8' : isMonochrome ? '#222222' : '#64748b'};
+                    font-weight: 700;
+                    margin-bottom: 3px;
+                }
+                .event-summary-val {
+                    font-size: 13px;
+                    font-weight: 800;
+                    color: ${isDark ? '#ffffff' : isMonochrome ? '#000000' : '#0f172a'};
+                }
+                .event-assets-box {
+                    background: ${isDark ? 'rgba(255, 255, 255, 0.03)' : isMonochrome ? '#ffffff' : '#f8fafc'};
+                    border: 1px solid ${isDark ? 'rgba(255, 255, 255, 0.1)' : isMonochrome ? '#000000' : '#e2e8f0'};
+                    border-radius: 8px;
+                    padding: 10px 12px;
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 8px;
+                }
+                .asset-pill {
+                    display: inline-block;
+                    background: ${isDark ? 'rgba(245, 158, 11, 0.15)' : isMonochrome ? '#ffffff' : '#fffbeb'};
+                    color: ${isDark ? '#fcd34d' : isMonochrome ? '#000000' : '#92400e'};
+                    border: 1px solid ${isDark ? 'rgba(245, 158, 11, 0.3)' : isMonochrome ? '#000000' : '#fcd34d'};
+                    padding: 3px 8px;
+                    border-radius: 6px;
+                    font-size: 11px;
+                    font-weight: 600;
+                }
+            `;
+
+            const fullHtml = `
                 <!DOCTYPE html>
                 <html dir="rtl" lang="ar">
                 <head>
                     <meta charset="UTF-8">
-                    <title>تقرير النشاط - ${event.title}</title>
+                    <title>${reportTitle} - ${event.title}</title>
                     <style>
-                        ${getStandardPrintStyles(`
-                            .event-summary {
-                                display: grid;
-                                grid-template-columns: repeat(4, 1fr);
-                                gap: 12px;
-                                margin-bottom: 20px;
-                                page-break-inside: avoid !important;
-                                break-inside: avoid !important;
-                            }
-                            .event-summary-item {
-                                background: #f8fafc;
-                                border: 1px solid #e2e8f0;
-                                border-radius: 8px;
-                                padding: 10px 12px;
-                                text-align: center;
-                            }
-                            .event-summary-label {
-                                font-size: 11px;
-                                color: #64748b;
-                                font-weight: 700;
-                                margin-bottom: 4px;
-                            }
-                            .event-summary-val {
-                                font-size: 14px;
-                                font-weight: 800;
-                                color: #0f172a;
-                            }
-                        `)}
+                        ${getStandardPrintStyles({
+                            theme,
+                            orientation,
+                            density,
+                            extraCss
+                        })}
                     </style>
                 </head>
                 <body>
                     ${headerHtml}
+                    ${kpiHtml}
 
-                    <div class="event-summary">
-                        <div class="event-summary-item">
-                            <div class="event-summary-label">تاريخ النشاط</div>
-                            <div class="event-summary-val">${event.formattedDate || event.date}</div>
-                        </div>
-                        <div class="event-summary-item">
-                            <div class="event-summary-label">الوقت المحدد</div>
-                            <div class="event-summary-val">${event.time || '-'}</div>
-                        </div>
-                        <div class="event-summary-item">
-                            <div class="event-summary-label">المقر / المكان</div>
-                            <div class="event-summary-val">${event.venue || '-'}</div>
-                        </div>
-                        <div class="event-summary-item">
-                            <div class="event-summary-label">حالة الفعالية</div>
-                            <div class="event-summary-val" style="color: ${event.status === 'مكتمل' ? '#059669' : '#d97706'}">${event.status || 'مكتمل'}</div>
-                        </div>
-                    </div>
-
-                    <div style="margin-bottom: 25px;">
-                        <h3 style="font-size: 14px; font-weight: 800; color: #1e293b; margin: 0 0 10px 0;">
+                    <div style="margin-bottom: 20px;">
+                        <h3 style="font-size: 13px; font-weight: 800; color: ${isDark ? '#f1f5f9' : isMonochrome ? '#000000' : '#1e293b'}; margin: 0 0 10px 0;">
                             كشف بأسماء الطلاب المشاركين (${sortedStudents.length} طالب - مرتبين أبجدياً):
                         </h3>
                         ${studentsListHtml}
                     </div>
 
-                    <div style="margin-bottom: 25px; page-break-inside: avoid !important; break-inside: avoid !important;">
-                        <h3 style="font-size: 13px; font-weight: 800; color: #1e293b; margin: 0 0 8px 0;">
+                    <div style="margin-bottom: 20px; page-break-inside: avoid !important; break-inside: avoid !important;">
+                        <h3 style="font-size: 13px; font-weight: 800; color: ${isDark ? '#f1f5f9' : isMonochrome ? '#000000' : '#1e293b'}; margin: 0 0 8px 0;">
                             الموارد والأدوات المستخدمة (${event.assets?.length || 0}):
                         </h3>
-                        <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; display: flex; flex-wrap: wrap; gap: 8px;">
+                        <div class="event-assets-box">
                             ${assetsListHtml}
                         </div>
                     </div>
 
-                    <div class="footer-signatures">
-                        <div class="sig-box">
-                            <div>المشرف على النشاط</div>
-                            <div>أ. ________________</div>
-                            <div class="sig-line"></div>
-                        </div>
-                        <div class="sig-box">
-                            <div>رائد النشاط الطلابي</div>
-                            <div>أ. ________________</div>
-                            <div class="sig-line"></div>
-                        </div>
-                        <div class="sig-box">
-                            <div>مدير المدرسة</div>
-                            <div>أ. ________________</div>
-                            <div class="sig-line"></div>
-                        </div>
-                    </div>
+                    ${footerHtml}
                 </body>
                 </html>
             `;
 
             toast.dismiss(toastId);
-            await printHtmlDocument(html, `تقرير_${event.title}`);
+            await printHtmlDocument(fullHtml, `تقرير_${event.title}`);
+            toast.success("تم فتح نافذة الطباعة بنجاح");
         } catch (error) {
-            console.error("Print fail:", error);
-            toast.error("فشل في تجهيز ملف الطباعة", { id: toastId });
+            console.error("Print generation error:", error);
+            toast.error("فشل في إنشاء التقرير", { id: toastId });
         }
     };
 
@@ -2672,7 +2919,7 @@ export default function ReportsPage() {
                                     <div className="bg-black/20 rounded-xl border border-white/5 overflow-hidden">
                                         {selectedEvent.studentNames.length > 0 ? (
                                             <div className="max-h-[300px] overflow-y-auto custom-scrollbar divide-y divide-white/5">
-                                                {selectedEvent.studentNames.map((s, idx) => (
+                                                {sortStudentsArabic(selectedEvent.studentNames).map((s, idx) => (
                                                     <div key={idx} className="p-3 text-sm text-gray-300 flex flex-col sm:flex-row sm:items-center justify-between hover:bg-white/5 gap-2">
                                                         <div className="flex items-center gap-3">
                                                             <span className="w-6 text-center text-gray-400 text-xs">{idx + 1}</span>
@@ -2682,6 +2929,9 @@ export default function ReportsPage() {
                                                                     {s.grade} - {s.section}
                                                                 </span>
                                                             )}
+                                                            <span className="text-[11px] bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-mono font-bold px-2 py-0.5 rounded">
+                                                                +{getStudentActivityPoints(selectedEvent, s.id, singleEventPointsMap)} ن
+                                                            </span>
                                                         </div>
                                                         {(() => {
                                                             const pDetails = selectedEvent.participantDetails?.[s.id] || {};
@@ -2757,7 +3007,7 @@ export default function ReportsPage() {
                                         </>
                                     )}
 
-                                    <PrintControls event={selectedEvent} onPrint={generateSingleEventPDF} />
+                                    <PrintControls event={selectedEvent} onPrint={openSingleEventPrintModal} />
 
                                     <button
                                         onClick={() => setSelectedEvent(null)}
@@ -2892,6 +3142,24 @@ export default function ReportsPage() {
                         : ''
                 }
                 onPrint={handleExecuteAdvancedPrint}
+            />
+
+            {/* Dedicated Single Activity Advanced Print Modal */}
+            <AdvancedPrintModal
+                isOpen={isSingleEventPrintModalOpen}
+                onClose={() => setIsSingleEventPrintModalOpen(false)}
+                title={`خيارات طباعة تقرير: ${singleEventPrintEvent?.title || selectedEvent?.title || 'النشاط'}`}
+                reportType="single_event_report"
+                availableColumns={singleEventPrintColumnsDefinition}
+                totalRecordsCount={(singleEventPrintEvent?.studentNames || selectedEvent?.studentNames || []).length}
+                hasSelectionSupport={false}
+                initialCustomTitle={singleEventPrintEvent?.title ? `تقرير نشاط: ${singleEventPrintEvent.title}` : 'تقرير النشاط الطلابي'}
+                initialSignatures={[
+                    { role: 'المشرف على النشاط', name: 'أ. ________________' },
+                    { role: 'رائد النشاط الطلابي', name: 'أ. ________________' },
+                    { role: 'مدير المدرسة', name: 'أ. ________________' }
+                ]}
+                onPrint={handleExecuteSingleEventPrint}
             />
         </div>
     );
