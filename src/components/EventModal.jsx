@@ -68,6 +68,17 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
     const [selectedSection, setSelectedSection] = useState('');
     const { weekends, holidays, grades, settings } = useSettings(); // Use Global Settings directly
 
+    // Participant-Specific Custom Fields Search & Filter
+    const [participantSearch, setParticipantSearch] = useState('');
+    const [participantFilter, setParticipantFilter] = useState('all'); // 'all' | 'completed' | 'uncompleted'
+
+    useEffect(() => {
+        if (!isOpen) {
+            setParticipantSearch('');
+            setParticipantFilter('all');
+        }
+    }, [isOpen]);
+
     // Load Default Reminders for NEW events
     useEffect(() => {
         if (!initialData?.id && settings?.notifications?.defaultReminders) {
@@ -302,6 +313,141 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
             };
         });
     }, [studentsList, activeType, selectedGrade, selectedSection, grades, formData.studentIds, formData.linkStudentIds]);
+
+    // --- Helper: Ultra-smart Arabic search normalizer ---
+    const normalizeArabicSearch = (text) => {
+        if (!text) return '';
+        return String(text)
+            .trim()
+            .toLowerCase()
+            .replace(/[\u064B-\u065F\u0670]/g, '') // Tashkeel (diacritics)
+            .replace(/[أإآٱ]/g, 'ا') // Hamzas
+            .replace(/ة/g, 'ه')     // Taa Marbuta
+            .replace(/ى/g, 'ي')     // Alif Maqsura
+            .replace(/\u0640/g, '') // Tatweel
+            .replace(/عبد\s+/g, 'عبد') // Normalize "عبد الله" to "عبدالله"
+            .replace(/ابو\s+/g, 'ابو')  // Normalize "أبو فلان" to "ابوفلان"
+            .replace(/ابن\s+/g, 'بن ')  // Normalize "ابن فلان" to "بن فلان"
+            .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d)) // Eastern Arabic digits to 0-9
+            .replace(/\s+/g, ' ');  // Collapse spaces
+    };
+
+    // --- Helper: Multi-strategy token matching ---
+    const smartTokenMatches = (token, normCorpus, rawCorpus) => {
+        if (!token) return true;
+        if (normCorpus.includes(token)) return true;
+        if (rawCorpus.includes(token)) return true;
+
+        // Strip leading 'ال' (e.g. searching "عيسى" matches "العيسى")
+        if (token.startsWith('ال') && token.length > 2) {
+            const withoutAl = token.slice(2);
+            if (normCorpus.includes(withoutAl)) return true;
+        } else if (token.length >= 2) {
+            // Or if corpus has 'ال' prefix
+            if (normCorpus.includes(`ال${token}`)) return true;
+        }
+
+        // Handle "عبد " with/without space
+        if (token.includes('عبد')) {
+            const splitAbd = token.replace('عبد', 'عبد ');
+            if (normCorpus.includes(splitAbd) || rawCorpus.includes(splitAbd)) return true;
+        }
+
+        return false;
+    };
+
+    // --- Participant Fields Stats (Total / Completed / Uncompleted) ---
+    const participantStats = useMemo(() => {
+        if (!activeType?.participantFields?.length || !formData.studentIds?.length) {
+            return { total: 0, completed: 0, uncompleted: 0 };
+        }
+        let completed = 0;
+        let uncompleted = 0;
+        formData.studentIds.forEach(studentId => {
+            const currentStudentDetails = formData.participantDetails?.[studentId] || {};
+            const isComplete = activeType.participantFields.every(field => {
+                const val = currentStudentDetails[field.label];
+                return val !== undefined && val !== null && String(val).trim() !== '';
+            });
+            if (isComplete) completed++;
+            else uncompleted++;
+        });
+        return {
+            total: formData.studentIds.length,
+            completed,
+            uncompleted
+        };
+    }, [formData.studentIds, formData.participantDetails, activeType]);
+
+    // --- Participant Fields Search & Filter Engine ---
+    const filteredParticipantIds = useMemo(() => {
+        if (!formData.studentIds || formData.studentIds.length === 0) return [];
+        if (!activeType?.participantFields || activeType.participantFields.length === 0) return formData.studentIds;
+
+        const rawQuery = participantSearch.trim();
+        const normQuery = normalizeArabicSearch(rawQuery);
+        const tokens = normQuery.split(/\s+/).filter(Boolean);
+        const rawTokens = rawQuery.toLowerCase().split(/\s+/).filter(Boolean);
+
+        return formData.studentIds.filter(studentId => {
+            const currentStudentDetails = formData.participantDetails?.[studentId] || {};
+
+            // 1. Completion filter
+            if (participantFilter === 'completed' || participantFilter === 'uncompleted') {
+                const isComplete = activeType.participantFields.every(field => {
+                    const val = currentStudentDetails[field.label];
+                    return val !== undefined && val !== null && String(val).trim() !== '';
+                });
+                if (participantFilter === 'completed' && !isComplete) return false;
+                if (participantFilter === 'uncompleted' && isComplete) return false;
+            }
+
+            // 2. Search query filter
+            if (tokens.length === 0) return true;
+
+            const stuObj = studentsList.find(s => s.id === studentId || s.value === studentId);
+            const studentName = stuObj?.name || stuObj?.label || '';
+            const studentClass = stuObj?.class || '';
+            const studentGrade = stuObj?.grade || '';
+            const studentSection = stuObj?.section || '';
+            const detailValues = Object.values(currentStudentDetails).map(v => String(v || ''));
+            const detailLabels = Object.keys(currentStudentDetails);
+
+            const corpusParts = [
+                studentName,
+                studentClass,
+                studentGrade,
+                studentSection,
+                ...detailValues,
+                ...detailLabels
+            ];
+
+            const normCorpus = corpusParts.map(p => normalizeArabicSearch(p)).join(' ');
+            const rawCorpus = corpusParts.join(' ').toLowerCase();
+
+            // Every token must match somewhere in the student's corpus
+            return tokens.every((tok) => {
+                return smartTokenMatches(tok, normCorpus, rawCorpus);
+            });
+        });
+    }, [formData.studentIds, formData.participantDetails, activeType, participantSearch, participantFilter, studentsList]);
+
+    // --- Autocomplete Suggestions for participant custom fields from previous entries ---
+    const participantFieldSuggestions = useMemo(() => {
+        if (!activeType?.participantFields) return {};
+        const suggestions = {};
+        activeType.participantFields.forEach(field => {
+            const values = new Set();
+            Object.values(formData.participantDetails || {}).forEach(details => {
+                const val = details?.[field.label];
+                if (val && typeof val === 'string' && val.trim()) {
+                    values.add(val.trim());
+                }
+            });
+            suggestions[field.label] = Array.from(values);
+        });
+        return suggestions;
+    }, [formData.participantDetails, activeType]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -858,85 +1004,197 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                                         </span>
                                     </div>
 
-                                    <div className="max-h-72 overflow-y-auto custom-scrollbar space-y-3 pr-1">
-                                        {formData.studentIds.map((studentId) => {
-                                            const stuObj = studentsList.find(s => s.id === studentId || s.value === studentId);
-                                            const studentName = stuObj?.name || stuObj?.label || 'طالب مشارك';
-                                            const currentStudentDetails = formData.participantDetails?.[studentId] || {};
+                                    {/* Ultra-Smart Search & Quick Filter Bar */}
+                                    <div className="space-y-2 pt-1">
+                                        <div className="flex items-center gap-2">
+                                            <div className="relative flex-1">
+                                                <input
+                                                    type="text"
+                                                    value={participantSearch}
+                                                    onChange={e => setParticipantSearch(e.target.value)}
+                                                    placeholder="بحث ذكي: بالاسم، الصف، الشعبة، أو الدور / البيانات..."
+                                                    className="w-full bg-black/50 border border-emerald-500/30 rounded-xl py-2 pr-9 pl-8 text-xs text-white placeholder-emerald-300/40 focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400/40 outline-none transition-all font-medium"
+                                                />
+                                                <Search size={15} className="absolute right-3 top-1/2 -translate-y-1/2 text-emerald-400 pointer-events-none" />
+                                                {participantSearch && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setParticipantSearch('')}
+                                                        className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white p-0.5 rounded-full hover:bg-white/10 transition-colors cursor-pointer"
+                                                        title="مسح البحث"
+                                                    >
+                                                        <X size={14} />
+                                                    </button>
+                                                )}
+                                            </div>
 
-                                            return (
-                                                <div key={studentId} className="bg-black/40 border border-white/5 rounded-xl p-3 space-y-2">
-                                                    <div className="flex items-center justify-between text-xs">
-                                                        <span className="font-bold text-white flex items-center gap-1.5">
-                                                            <div className="w-1.5 h-1.5 rounded-full bg-emerald-400"></div>
-                                                            {studentName}
-                                                        </span>
-                                                        {(stuObj?.class || stuObj?.grade) && (
-                                                            <span className="text-[10px] text-gray-400 bg-white/5 px-2 py-0.5 rounded">
-                                                                {stuObj.class || `${stuObj.grade} / ${stuObj.section}`}
-                                                            </span>
-                                                        )}
-                                                    </div>
+                                            {/* Results Count Badge */}
+                                            <div className="shrink-0 bg-emerald-900/40 border border-emerald-500/30 px-2.5 py-2 rounded-xl text-[11px] font-bold text-emerald-300 flex items-center gap-1 whitespace-nowrap shadow-sm">
+                                                <span>{filteredParticipantIds.length}</span>
+                                                <span className="text-emerald-400/60 font-normal">من</span>
+                                                <span>{formData.studentIds.length}</span>
+                                                <span className="hidden sm:inline text-emerald-400/70 mr-0.5">طالب</span>
+                                            </div>
+                                        </div>
 
-                                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-                                                        {activeType.participantFields.map((field, fIdx) => (
-                                                            <div key={fIdx}>
-                                                                <label className="text-[11px] text-emerald-300/80 block mb-1">
-                                                                    {field.label}
-                                                                </label>
-                                                                {field.type === 'select' ? (
-                                                                    <select
-                                                                        disabled={isReadOnly}
-                                                                        value={currentStudentDetails[field.label] || ''}
-                                                                        onChange={(e) => {
-                                                                            const val = e.target.value;
-                                                                            setFormData(prev => ({
-                                                                                ...prev,
-                                                                                participantDetails: {
-                                                                                    ...prev.participantDetails,
-                                                                                    [studentId]: {
-                                                                                        ...(prev.participantDetails?.[studentId] || {}),
-                                                                                        [field.label]: val
-                                                                                    }
-                                                                                }
-                                                                            }));
-                                                                        }}
-                                                                        className="w-full bg-black/50 border border-emerald-500/30 rounded-lg px-2.5 py-1.5 text-xs text-white outline-none focus:border-emerald-400"
-                                                                    >
-                                                                        <option value="">اختر...</option>
-                                                                        {(field.options || []).map((opt, oIdx) => (
-                                                                            <option key={oIdx} value={opt}>{opt}</option>
-                                                                        ))}
-                                                                    </select>
-                                                                ) : (
-                                                                    <input
-                                                                        type="text"
-                                                                        disabled={isReadOnly}
-                                                                        placeholder={`أدخل ${field.label}...`}
-                                                                        value={currentStudentDetails[field.label] || ''}
-                                                                        onChange={(e) => {
-                                                                            const val = e.target.value;
-                                                                            setFormData(prev => ({
-                                                                                ...prev,
-                                                                                participantDetails: {
-                                                                                    ...prev.participantDetails,
-                                                                                    [studentId]: {
-                                                                                        ...(prev.participantDetails?.[studentId] || {}),
-                                                                                        [field.label]: val
-                                                                                    }
-                                                                                }
-                                                                            }));
-                                                                        }}
-                                                                        className="w-full bg-black/50 border border-emerald-500/30 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-gray-500 outline-none focus:border-emerald-400"
-                                                                    />
-                                                                )}
-                                                            </div>
-                                                        ))}
-                                                    </div>
-                                                </div>
-                                            );
-                                        })}
+                                        {/* Filter Pills */}
+                                        <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 custom-scrollbar text-[11px]">
+                                            <button
+                                                type="button"
+                                                onClick={() => setParticipantFilter('all')}
+                                                className={`px-2.5 py-1 rounded-lg font-bold transition-all whitespace-nowrap border flex items-center gap-1 cursor-pointer ${
+                                                    participantFilter === 'all'
+                                                        ? 'bg-emerald-500 text-black border-emerald-400 shadow-sm'
+                                                        : 'bg-black/30 text-gray-300 border-white/5 hover:border-emerald-500/30 hover:text-white'
+                                                }`}
+                                            >
+                                                <span>الكل</span>
+                                                <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${participantFilter === 'all' ? 'bg-black/20 text-black' : 'bg-white/10 text-gray-300'}`}>
+                                                    {participantStats.total}
+                                                </span>
+                                            </button>
+
+                                            <button
+                                                type="button"
+                                                onClick={() => setParticipantFilter('completed')}
+                                                className={`px-2.5 py-1 rounded-lg font-bold transition-all whitespace-nowrap border flex items-center gap-1 cursor-pointer ${
+                                                    participantFilter === 'completed'
+                                                        ? 'bg-emerald-500 text-black border-emerald-400 shadow-sm'
+                                                        : 'bg-black/30 text-gray-300 border-white/5 hover:border-emerald-500/30 hover:text-white'
+                                                }`}
+                                            >
+                                                <span>مكتمل</span>
+                                                <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${participantFilter === 'completed' ? 'bg-black/20 text-black' : 'bg-emerald-500/20 text-emerald-300'}`}>
+                                                    {participantStats.completed}
+                                                </span>
+                                            </button>
+
+                                            <button
+                                                type="button"
+                                                onClick={() => setParticipantFilter('uncompleted')}
+                                                className={`px-2.5 py-1 rounded-lg font-bold transition-all whitespace-nowrap border flex items-center gap-1 cursor-pointer ${
+                                                    participantFilter === 'uncompleted'
+                                                        ? 'bg-amber-500 text-black border-amber-400 shadow-sm'
+                                                        : 'bg-black/30 text-gray-300 border-white/5 hover:border-amber-500/30 hover:text-white'
+                                                }`}
+                                            >
+                                                <span>بحاجة لتعبئة</span>
+                                                <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${participantFilter === 'uncompleted' ? 'bg-black/20 text-black' : 'bg-amber-500/20 text-amber-300'}`}>
+                                                    {participantStats.uncompleted}
+                                                </span>
+                                            </button>
+                                        </div>
                                     </div>
+
+                                    {/* Datalists for input suggestions across event */}
+                                    {activeType.participantFields.map((field, fIdx) => (
+                                        (participantFieldSuggestions[field.label]?.length > 0) && (
+                                            <datalist key={`dl-${fIdx}`} id={`suggestions-${field.label.replace(/[^a-zA-Z0-9_\u0600-\u06FF]/g, '-')}`}>
+                                                {participantFieldSuggestions[field.label].map((sVal, sIdx) => (
+                                                    <option key={sIdx} value={sVal} />
+                                                ))}
+                                            </datalist>
+                                        )
+                                    ))}
+
+                                    {/* Cards List or Empty Search Result */}
+                                    {filteredParticipantIds.length > 0 ? (
+                                        <div className="max-h-72 overflow-y-auto custom-scrollbar space-y-3 pr-1">
+                                            {filteredParticipantIds.map((studentId) => {
+                                                const stuObj = studentsList.find(s => s.id === studentId || s.value === studentId);
+                                                const studentName = stuObj?.name || stuObj?.label || 'طالب مشارك';
+                                                const currentStudentDetails = formData.participantDetails?.[studentId] || {};
+
+                                                return (
+                                                    <div key={studentId} className="bg-black/40 border border-white/5 rounded-xl p-3 space-y-2">
+                                                        <div className="flex items-center justify-between text-xs">
+                                                            <span className="font-bold text-white flex items-center gap-1.5">
+                                                                <div className="w-1.5 h-1.5 rounded-full bg-emerald-400"></div>
+                                                                {studentName}
+                                                            </span>
+                                                            {(stuObj?.class || stuObj?.grade) && (
+                                                                <span className="text-[10px] text-gray-400 bg-white/5 px-2 py-0.5 rounded">
+                                                                    {stuObj.class || `${stuObj.grade} / ${stuObj.section}`}
+                                                                </span>
+                                                            )}
+                                                        </div>
+
+                                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                                                            {activeType.participantFields.map((field, fIdx) => (
+                                                                <div key={fIdx}>
+                                                                    <label className="text-[11px] text-emerald-300/80 block mb-1">
+                                                                        {field.label}
+                                                                    </label>
+                                                                    {field.type === 'select' ? (
+                                                                        <select
+                                                                            disabled={isReadOnly}
+                                                                            value={currentStudentDetails[field.label] || ''}
+                                                                            onChange={(e) => {
+                                                                                const val = e.target.value;
+                                                                                setFormData(prev => ({
+                                                                                    ...prev,
+                                                                                    participantDetails: {
+                                                                                        ...prev.participantDetails,
+                                                                                        [studentId]: {
+                                                                                            ...(prev.participantDetails?.[studentId] || {}),
+                                                                                            [field.label]: val
+                                                                                        }
+                                                                                    }
+                                                                                }));
+                                                                            }}
+                                                                            className="w-full bg-black/50 border border-emerald-500/30 rounded-lg px-2.5 py-1.5 text-xs text-white outline-none focus:border-emerald-400 cursor-pointer"
+                                                                        >
+                                                                            <option value="">اختر...</option>
+                                                                            {(field.options || []).map((opt, oIdx) => (
+                                                                                <option key={oIdx} value={opt}>{opt}</option>
+                                                                            ))}
+                                                                        </select>
+                                                                    ) : (
+                                                                        <input
+                                                                            type="text"
+                                                                            list={`suggestions-${field.label.replace(/[^a-zA-Z0-9_\u0600-\u06FF]/g, '-')}`}
+                                                                            disabled={isReadOnly}
+                                                                            placeholder={`أدخل ${field.label}...`}
+                                                                            value={currentStudentDetails[field.label] || ''}
+                                                                            onChange={(e) => {
+                                                                                const val = e.target.value;
+                                                                                setFormData(prev => ({
+                                                                                    ...prev,
+                                                                                    participantDetails: {
+                                                                                        ...prev.participantDetails,
+                                                                                        [studentId]: {
+                                                                                            ...(prev.participantDetails?.[studentId] || {}),
+                                                                                            [field.label]: val
+                                                                                        }
+                                                                                    }
+                                                                                }));
+                                                                            }}
+                                                                            className="w-full bg-black/50 border border-emerald-500/30 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-gray-500 outline-none focus:border-emerald-400"
+                                                                        />
+                                                                    )}
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    ) : (
+                                        <div className="text-center py-6 px-4 bg-black/30 border border-dashed border-emerald-500/20 rounded-xl space-y-2">
+                                            <Search size={22} className="mx-auto text-emerald-400/50" />
+                                            <p className="text-xs text-emerald-300 font-bold">لا يوجد طلاب مطابقون للبحث</p>
+                                            <p className="text-[11px] text-gray-400">
+                                                {participantSearch ? `لم يتم العثور على طالب يطابق "${participantSearch}"` : 'لا يوجد طلاب ينطبق عليهم هذا الفلتر'}
+                                            </p>
+                                            <button
+                                                type="button"
+                                                onClick={() => { setParticipantSearch(''); setParticipantFilter('all'); }}
+                                                className="mt-1 text-xs bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 px-3 py-1.5 rounded-lg transition-colors font-medium inline-flex items-center gap-1 cursor-pointer"
+                                            >
+                                                <X size={12} /> مسح البحث وعرض كل الطلاب ({formData.studentIds.length})
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
                             )}
                             <MultiSelect
