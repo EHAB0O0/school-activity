@@ -1,14 +1,20 @@
 import { useState } from 'react';
 import { X, Printer, Award, Sparkles } from 'lucide-react';
 import { useSettings } from '../../contexts/SettingsContext';
+import { sortStudentsArabic, cleanClassString } from '../../utils/reportUtils';
 
 export default function BulkPrintCertificatesModal({
     isOpen,
     onClose,
     selectedStudents = []
 }) {
-    const { settings } = useSettings();
-    const schoolName = settings?.schoolName || 'ثانوية الملك عبدالله';
+    const { settings, schoolInfo } = useSettings();
+    const adminName = (schoolInfo?.educationAdmin && schoolInfo?.educationAdmin !== "إدارة التعليم بالمنطقة") 
+        ? schoolInfo.educationAdmin 
+        : "إدارة التعليم بالرياض";
+    const finalSchoolName = (schoolInfo?.name && schoolInfo?.name !== "ثانوية الملك عبدالله") 
+        ? schoolInfo.name 
+        : (settings?.schoolName && settings?.schoolName !== "ثانوية الملك عبدالله" ? settings.schoolName : "ثانوية الإمام الالوسي");
 
     const [certificateTitle, setCertificateTitle] = useState('شـهـادة شـكـر وتـقـديـر');
     const [certificateReason, setCertificateReason] = useState('تقديراً لمشاركته الفاعلة وتميزه الإيجابي في برامج وأنشطة المدرسة خلال العام الدراسي، متمنين له دوام التوفيق والنجاح.');
@@ -37,11 +43,10 @@ export default function BulkPrintCertificatesModal({
         const doc = iframe.contentWindow.document;
         doc.open();
 
-        const certificatesHtml = selectedStudents.map((student) => {
-            const isUnknown = student.grade === 'غير معروف' || student.grade === 'Unknown' || !!student.isGradeUnknown || (student.class && String(student.class).startsWith('غير معروف'));
-            const classLabel = isUnknown 
-                ? 'طالب متميز' 
-                : (student.grade && student.section ? `${student.grade} - ${student.section}` : (student.class || student.grade || 'طالب متميز')).replace(/\s*-\s*$/, '');
+        const sortedStudents = sortStudentsArabic(selectedStudents, 'name');
+
+        const certificatesHtml = sortedStudents.map((student) => {
+            const classLabel = cleanClassString(student);
 
             return `
             <div class="cert-page">
@@ -52,8 +57,8 @@ export default function BulkPrintCertificatesModal({
                             <div class="header-side">
                                 <div>المملكة العربية السعودية</div>
                                 <div>وزارة التعليم</div>
-                                <div>إدارة التعليم بالمنطقة</div>
-                                <div class="school-name">${schoolName}</div>
+                                <div>${adminName}</div>
+                                <div class="school-name">${finalSchoolName}</div>
                             </div>
                             <div class="cert-badge">
                                 <div class="badge-icon">🎖️</div>

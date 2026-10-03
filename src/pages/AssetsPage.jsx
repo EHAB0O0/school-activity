@@ -4,9 +4,11 @@ import { collection, addDoc, getDocs, doc, deleteDoc, updateDoc, query, where, o
 import { Plus, Trash2, Box, Tag, MapPin, Edit3, Save, Clock, FileText, X, AlertTriangle, Power, CheckCircle, PenTool, Loader2, Printer } from 'lucide-react';
 import toast from 'react-hot-toast';
 import ConfirmModal from '../components/ui/ConfirmModal';
-
+import { useSettings } from '../contexts/SettingsContext';
+import { getOfficialReportHeaderHtml, getStandardPrintStyles, printHtmlDocument } from '../utils/reportUtils';
 
 export default function AssetsPage() {
+    const { schoolInfo } = useSettings();
     const [activeTab, setActiveTab] = useState('equipment'); // equipment | venues
 
     // --- Equipment State ---
@@ -172,147 +174,132 @@ export default function AssetsPage() {
         if (!editingAsset) return;
         const toastId = toast.loading("جاري تحضير التقرير...");
 
-        // Create Iframe sandbox
-        const iframe = document.createElement('iframe');
-        iframe.style.position = 'fixed';
-        iframe.style.left = '-9999px';
-        iframe.style.width = '210mm'; // A4 width
-        iframe.style.minHeight = '297mm'; // A4 height
-        document.body.appendChild(iframe);
+        try {
+            const statusText = editingAsset.status === 'Available' ? 'متاح للاستخدام' : 'تحت الصيانة';
+            const headerHtml = getOfficialReportHeaderHtml({
+                schoolInfo,
+                title: 'تقرير تفصيلي عن الأصل والتجهيزات',
+                subTitle: 'قسم النشاط الطلابي المدرسي',
+                centerDetails: [
+                    `اسم المورد: <strong>${editingAsset.name}</strong>`,
+                    `النوع والتصنيف: <strong>${editingAsset.type}</strong>`
+                ],
+                leftDetails: [
+                    { label: 'الحالة الحالية', value: statusText }
+                ]
+            });
 
-        const doc = iframe.contentDocument || iframe.contentWindow.document;
+            const htmlContent = `
+                <!DOCTYPE html>
+                <html dir="rtl" lang="ar">
+                <head>
+                    <meta charset="utf-8">
+                    <title>تقرير أصل - ${editingAsset.name}</title>
+                    <style>
+                        ${getStandardPrintStyles(`
+                            .kpi-grid {
+                                display: grid;
+                                grid-template-columns: repeat(3, 1fr);
+                                gap: 12px;
+                                margin-bottom: 20px;
+                            }
+                            .section-title {
+                                font-size: 15px;
+                                font-weight: bold;
+                                margin: 25px 0 10px;
+                                border-bottom: 2px solid #e2e8f0;
+                                padding-bottom: 5px;
+                                color: #1e293b;
+                            }
+                            .notes-box {
+                                background: #fffbeb;
+                                border: 1px solid #fcd34d;
+                                padding: 12px 16px;
+                                border-radius: 8px;
+                                color: #92400e;
+                                line-height: 1.6;
+                                font-size: 13px;
+                            }
+                        `)}
+                    </style>
+                </head>
+                <body>
+                    ${headerHtml}
 
-        // Content
-        const htmlContent = `
-            <html dir="rtl" lang="ar">
-            <head>
-                <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
-                <style>
-                    @page { size: A4 portrait; margin: 12mm 15mm; }
-                    * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-                    body { font-family: 'Cairo', sans-serif; padding: 20px 0; color: #1a1a1a; background: #fff; margin: 0; }
-                    .header { text-align: center; border-bottom: 2px solid #eee; padding-bottom: 20px; margin-bottom: 30px; page-break-inside: avoid !important; break-inside: avoid !important; }
-                    .header h1 { margin: 0; color: #4f46e5; font-size: 24px; }
-                    .header p { margin: 5px 0 0; color: #666; font-size: 14px; }
-                    
-                    .card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 20px; page-break-inside: avoid !important; break-inside: avoid !important; }
-                    .label { color: #64748b; font-size: 12px; margin-bottom: 4px; display: block; }
-                    .value { font-size: 16px; font-weight: bold; color: #0f172a; }
-                    
-                    .status-available { color: #10b981; }
-                    .status-maintenance { color: #ef4444; }
-
-                    .section-title { font-size: 18px; font-weight: bold; margin: 30px 0 15px; border-right: 4px solid #4f46e5; padding-right: 10px; page-break-inside: avoid !important; break-inside: avoid !important; }
-                    
-                    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; page-break-inside: auto; break-inside: auto; }
-                    thead { display: table-header-group !important; }
-                    tfoot { display: table-footer-group !important; }
-                    th { background: #f1f5f9; padding: 12px; text-align: right; color: #475569; font-weight: 600; border-bottom: 2px solid #e2e8f0; }
-                    td { padding: 12px; border-bottom: 1px solid #e2e8f0; color: #334155; }
-                    tr, th, td { page-break-inside: avoid !important; break-inside: avoid !important; }
-                    tr:last-child td { border-bottom: none; }
-                    
-                    .notes-box { background: #fffbeb; border: 1px solid #fcd34d; padding: 15px; border-radius: 8px; color: #92400e; line-height: 1.6; page-break-inside: avoid !important; break-inside: avoid !important; }
-                </style>
-            </head>
-            <body>
-                <div class="header">
-                    <h1>تقرير تفصيلي عن الأصل</h1>
-                    <p>نظام إدارة الأنشطة المدرسية</p>
-                </div>
-
-                <div class="card">
-                    <table style="border: none;">
-                        <tr style="border: none;">
-                            <td style="border: none; padding: 0 0 15px 20px;">
-                                <span class="label">اسم المورد</span>
-                                <div class="value">${editingAsset.name}</div>
-                            </td>
-                            <td style="border: none; padding: 0;">
-                                <span class="label">النوع</span>
-                                <div class="value">${editingAsset.type}</div>
-                            </td>
-                        </tr>
-                        <tr style="border: none;">
-                            <td style="border: none; padding: 0;">
-                                <span class="label">الحالة الحالية</span>
-                                <div class="value ${editingAsset.status === 'Available' ? 'status-available' : 'status-maintenance'}">
-                                    ${editingAsset.status === 'Available' ? 'متاح للاستخدام' : 'تحت الصيانة'}
-                                </div>
-                            </td>
-                        </tr>
-                    </table>
-                </div>
-
-                ${editingAsset.notes ? `
-                    <div class="section-title">الملاحظات والمشكلات المسجلة</div>
-                    <div class="notes-box">
-                        ${editingAsset.notes}
+                    <div class="kpi-grid">
+                        <div class="kpi-card">
+                            <div class="kpi-label">اسم الأصل / المورد</div>
+                            <div class="kpi-value">${editingAsset.name}</div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-label">نوع الأصل</div>
+                            <div class="kpi-value">${editingAsset.type}</div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-label">الحالة التشغيلية</div>
+                            <div class="kpi-value" style="color: ${editingAsset.status === 'Available' ? '#059669' : '#dc2626'};">${statusText}</div>
+                        </div>
                     </div>
-                ` : ''}
 
-                <div class="section-title">سجل الاستخدام والأنشطة</div>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>اسم النشاط</th>
-                            <th>المكان</th>
-                            <th>التاريخ</th>
-                            <th>الوقت</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${assetHistory.length > 0 ? assetHistory.map(evt => `
+                    ${editingAsset.notes ? `
+                        <div class="section-title">الملاحظات والمشكلات المسجلة</div>
+                        <div class="notes-box">
+                            ${editingAsset.notes}
+                        </div>
+                    ` : ''}
+
+                    <div class="section-title">سجل الاستخدام والأنشطة (${assetHistory.length})</div>
+                    <table>
+                        <thead>
                             <tr>
-                                <td>${evt.title}</td>
-                                <td>${evt.venueId}</td>
-                                <td style="direction: ltr; text-align: right;">${evt.startTime?.toDate().toLocaleDateString('en-GB')}</td>
-                                <td>${evt.startTime?.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</td>
+                                <th style="width: 5%; text-align: center;">#</th>
+                                <th style="width: 45%;">اسم النشاط</th>
+                                <th style="width: 25%;">المكان</th>
+                                <th style="width: 15%;">التاريخ</th>
+                                <th style="width: 10%;">الوقت</th>
                             </tr>
-                        `).join('') : `
-                            <tr>
-                                <td colspan="4" style="text-align: center; padding: 20px; color: #94a3b8;">لا يوجد سجل استخدام لهذا الأصل حتى الآن</td>
-                            </tr>
-                        `}
-                    </tbody>
-                </table>
-                
-                <div style="margin-top: 50px; text-align: left; opacity: 0.5; font-size: 10px;">
-                    تم إصدار التقرير بتاريخ: ${new Date().toLocaleDateString('ar-SA')}
-                </div>
-            </body>
-            </html>
-        `;
+                        </thead>
+                        <tbody>
+                            ${assetHistory.length > 0 ? assetHistory.map((evt, idx) => `
+                                <tr>
+                                    <td style="text-align: center; font-weight: bold;">${idx + 1}</td>
+                                    <td style="font-weight: bold;">${evt.title}</td>
+                                    <td>${evt.venueId || '-'}</td>
+                                    <td style="direction: ltr; text-align: right;">${evt.startTime?.toDate ? evt.startTime.toDate().toLocaleDateString('en-GB') : (evt.date || '-')}</td>
+                                    <td style="direction: ltr; text-align: right;">${evt.startTime?.toDate ? evt.startTime.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
+                                </tr>
+                            `).join('') : `
+                                <tr>
+                                    <td colspan="5" style="text-align: center; padding: 20px; color: #94a3b8;">لا يوجد سجل استخدام لهذا الأصل حتى الآن</td>
+                                </tr>
+                            `}
+                        </tbody>
+                    </table>
 
-        doc.open();
-        doc.write(htmlContent);
-        doc.close();
+                    <div class="footer-signatures">
+                        <div class="sig-box">
+                            <div>مسؤول التجهيزات والعهد</div>
+                            <div class="sig-line">التوقيع: .....................</div>
+                        </div>
+                        <div class="sig-box">
+                            <div>مشرف النشاط الطلابي</div>
+                            <div class="sig-line">التوقيع: .....................</div>
+                        </div>
+                        <div class="sig-box">
+                            <div>مدير المدرسة</div>
+                            <div class="sig-line">الختم والتوقيع: .....................</div>
+                        </div>
+                    </div>
+                </body>
+                </html>
+            `;
 
-        // Wait for render (fonts etc)
-        setTimeout(async () => {
-            try {
-                const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
-                    import('html2canvas'),
-                    import('jspdf')
-                ]);
-                const canvas = await html2canvas(doc.body, { scale: 2 });
-                const imgData = canvas.toDataURL('image/jpeg', 0.9);
-                const pdf = new jsPDF('p', 'mm', 'a4');
-                const imgProps = pdf.getImageProperties(imgData);
-                const pdfWidth = pdf.internal.pageSize.getWidth();
-                const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
-
-                pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
-                pdf.save(`Asset_Report_${editingAsset.name.replace(/\s+/g, '_')}.pdf`);
-
-                toast.success("تم تحميل التقرير", { id: toastId });
-            } catch (err) {
-                console.error(err);
-                toast.error("فشل إنشاء PDF", { id: toastId });
-            } finally {
-                document.body.removeChild(iframe);
-            }
-        }, 1000);
+            toast.dismiss(toastId);
+            await printHtmlDocument(htmlContent, `تقرير_أصل_${editingAsset.name}`);
+        } catch (err) {
+            console.error(err);
+            toast.error("فشل إنشاء التقرير", { id: toastId });
+        }
     };
 
     // --- Venues Handlers ---
@@ -431,96 +418,128 @@ export default function AssetsPage() {
         if (!viewingVenue) return;
         const toastId = toast.loading("جاري تحضير التقرير...");
 
-        const iframe = document.createElement('iframe');
-        iframe.style.position = 'fixed'; iframe.style.left = '-9999px';
-        iframe.style.width = '210mm'; iframe.style.minHeight = '297mm';
-        document.body.appendChild(iframe);
+        try {
+            const statusLabel = VENUE_STATUS_OPTIONS.find(o => o.val === (viewingVenue.status || 'Available'))?.label || 'متاح';
+            const headerHtml = getOfficialReportHeaderHtml({
+                schoolInfo,
+                title: 'تقرير تفصيلي عن المقر / القاعة',
+                subTitle: 'قسم النشاط الطلابي المدرسي',
+                centerDetails: [
+                    `اسم المقر: <strong>${viewingVenue.name}</strong>`,
+                    `السعة الاستيعابية: <strong>${viewingVenue.capacity} مقعد</strong>`
+                ],
+                leftDetails: [
+                    { label: 'الحالة الحالية', value: statusLabel }
+                ]
+            });
 
-        const doc = iframe.contentDocument || iframe.contentWindow.document;
-        const statusLabel = VENUE_STATUS_OPTIONS.find(o => o.val === (viewingVenue.status || 'Available'))?.label;
-        const statusColor = VENUE_STATUS_OPTIONS.find(o => o.val === (viewingVenue.status || 'Available'))?.color;
+            const htmlContent = `
+                <!DOCTYPE html>
+                <html dir="rtl" lang="ar">
+                <head>
+                    <meta charset="utf-8">
+                    <title>تقرير مقر - ${viewingVenue.name}</title>
+                    <style>
+                        ${getStandardPrintStyles(`
+                            .kpi-grid {
+                                display: grid;
+                                grid-template-columns: repeat(3, 1fr);
+                                gap: 12px;
+                                margin-bottom: 20px;
+                            }
+                            .section-title {
+                                font-size: 15px;
+                                font-weight: bold;
+                                margin: 25px 0 10px;
+                                border-bottom: 2px solid #e2e8f0;
+                                padding-bottom: 5px;
+                                color: #1e293b;
+                            }
+                            .notes-box {
+                                background: #fffbeb;
+                                border: 1px solid #fcd34d;
+                                padding: 12px 16px;
+                                border-radius: 8px;
+                                color: #92400e;
+                                line-height: 1.6;
+                                font-size: 13px;
+                            }
+                        `)}
+                    </style>
+                </head>
+                <body>
+                    ${headerHtml}
 
-        const htmlContent = `
-            <html dir="rtl" lang="ar">
-            <head>
-                <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
-                <style>
-                    @page { size: A4 portrait; margin: 12mm 15mm; }
-                    * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-                    body { font-family: 'Cairo', sans-serif; padding: 20px 0; color: #1a1a1a; background: #fff; margin: 0; }
-                    .header { text-align: center; border-bottom: 2px solid #eee; padding-bottom: 20px; margin-bottom: 30px; page-break-inside: avoid !important; break-inside: avoid !important; }
-                    .header h1 { margin: 0; color: #4f46e5; font-size: 24px; }
-                    .card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; page-break-inside: avoid !important; break-inside: avoid !important; }
-                    .label { color: #64748b; font-size: 12px; }
-                    .value { font-size: 16px; font-weight: bold; color: #0f172a; }
-                    .status-emerald { color: #10b981; } .status-amber { color: #d97706; } .status-red { color: #ef4444; }
-                    .section-title { font-size: 18px; font-weight: bold; margin: 30px 0 15px; border-right: 4px solid #4f46e5; padding-right: 10px; page-break-inside: avoid !important; break-inside: avoid !important; }
-                    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; page-break-inside: auto; break-inside: auto; }
-                    thead { display: table-header-group !important; }
-                    tfoot { display: table-footer-group !important; }
-                    th { background: #f1f5f9; padding: 12px; text-align: right; border-bottom: 2px solid #e2e8f0; }
-                    td { padding: 12px; border-bottom: 1px solid #e2e8f0; }
-                    tr, th, td { page-break-inside: avoid !important; break-inside: avoid !important; }
-                    .notes-box { background: #fffbeb; border: 1px solid #fcd34d; padding: 15px; border-radius: 8px; color: #92400e; page-break-inside: avoid !important; break-inside: avoid !important; }
-                </style>
-            </head>
-            <body>
-                <div class="header"><h1>تقرير عن القاعة / المكان</h1><p>نظام إدارة الأنشطة</p></div>
-                <div class="card">
-                    <table style="border: none;">
-                        <tr style="border: none;">
-                            <td style="border: none;">
-                                <span class="label">اسم المكان</span><div class="value">${viewingVenue.name}</div>
-                            </td>
-                            <td style="border: none;">
-                                <span class="label">السعة</span><div class="value">${viewingVenue.capacity} مقعد</div>
-                            </td>
-                            <td style="border: none;">
-                                <span class="label">الحالة</span>
-                                <div class="value status-${statusColor}">${statusLabel}</div>
-                            </td>
-                        </tr>
-                    </table>
-                </div>
-                ${viewingVenue.notes ? `<div class="section-title">ملاحظات</div><div class="notes-box">${viewingVenue.notes}</div>` : ''}
-                <div class="section-title">سجل الأنشطة في هذا المكان</div>
-                <table>
-                    <thead><tr><th>النشاط</th><th>التاريخ</th><th>الوقت</th></tr></thead>
-                    <tbody>
-                        ${venueHistory.length > 0 ? venueHistory.map(evt => `
+                    <div class="kpi-grid">
+                        <div class="kpi-card">
+                            <div class="kpi-label">اسم المكان / المقر</div>
+                            <div class="kpi-value">${viewingVenue.name}</div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-label">السعة الاستيعابية</div>
+                            <div class="kpi-value">${viewingVenue.capacity} مقعد</div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-label">الحالة التشغيلية</div>
+                            <div class="kpi-value">${statusLabel}</div>
+                        </div>
+                    </div>
+
+                    ${viewingVenue.notes ? `
+                        <div class="section-title">الملاحظات</div>
+                        <div class="notes-box">${viewingVenue.notes}</div>
+                    ` : ''}
+
+                    <div class="section-title">سجل الأنشطة في هذا المكان (${venueHistory.length})</div>
+                    <table>
+                        <thead>
                             <tr>
-                                <td>${evt.title}</td>
-                                <td style="direction: ltr; text-align: right;">${evt.startTime?.toDate().toLocaleDateString('en-GB')}</td>
-                                <td>${evt.startTime?.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</td>
-                            </tr>`).join('') : '<tr><td colspan="3" style="text-align: center; padding: 20px;">لا يوجد سجل نشاط</td></tr>'}
-                    </tbody>
-                </table>
-                <div style="margin-top: 50px; opacity: 0.5; font-size: 10px;">${new Date().toLocaleDateString('ar-SA')}</div>
-            </body>
-            </html>
-        `;
+                                <th style="width: 5%; text-align: center;">#</th>
+                                <th style="width: 55%;">اسم النشاط</th>
+                                <th style="width: 25%;">التاريخ</th>
+                                <th style="width: 15%;">الوقت</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${venueHistory.length > 0 ? venueHistory.map((evt, idx) => `
+                                <tr>
+                                    <td style="text-align: center; font-weight: bold;">${idx + 1}</td>
+                                    <td style="font-weight: bold;">${evt.title}</td>
+                                    <td style="direction: ltr; text-align: right;">${evt.startTime?.toDate ? evt.startTime.toDate().toLocaleDateString('en-GB') : (evt.date || '-')}</td>
+                                    <td style="direction: ltr; text-align: right;">${evt.startTime?.toDate ? evt.startTime.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
+                                </tr>
+                            `).join('') : `
+                                <tr>
+                                    <td colspan="4" style="text-align: center; padding: 20px; color: #94a3b8;">لا يوجد سجل نشاط في هذا المكان حتى الآن</td>
+                                </tr>
+                            `}
+                        </tbody>
+                    </table>
 
-        doc.open(); doc.write(htmlContent); doc.close();
-        setTimeout(async () => {
-            try {
-                const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
-                    import('html2canvas'),
-                    import('jspdf')
-                ]);
-                const canvas = await html2canvas(doc.body, { scale: 2 });
-                const imgData = canvas.toDataURL('image/jpeg', 0.9);
-                const pdf = new jsPDF('p', 'mm', 'a4');
-                const imgProps = pdf.getImageProperties(imgData);
-                const pdfHeight = (imgProps.height * pdf.internal.pageSize.getWidth()) / imgProps.width;
-                pdf.addImage(imgData, 'JPEG', 0, 0, pdf.internal.pageSize.getWidth(), pdfHeight);
-                pdf.save(`Venue_Report_${viewingVenue.name}.pdf`);
-                toast.success("تم");
-            } catch { toast.error("فشل توليد التقرير"); }
-            finally {
-                toast.dismiss(toastId);
-                document.body.removeChild(iframe);
-            }
-        }, 1000);
+                    <div class="footer-signatures">
+                        <div class="sig-box">
+                            <div>مسؤول الصالات والمقرات</div>
+                            <div class="sig-line">التوقيع: .....................</div>
+                        </div>
+                        <div class="sig-box">
+                            <div>مشرف النشاط الطلابي</div>
+                            <div class="sig-line">التوقيع: .....................</div>
+                        </div>
+                        <div class="sig-box">
+                            <div>مدير المدرسة</div>
+                            <div class="sig-line">الختم والتوقيع: .....................</div>
+                        </div>
+                    </div>
+                </body>
+                </html>
+            `;
+
+            toast.dismiss(toastId);
+            await printHtmlDocument(htmlContent, `تقرير_مقر_${viewingVenue.name}`);
+        } catch (err) {
+            console.error(err);
+            toast.error("فشل إنشاء التقرير", { id: toastId });
+        }
     };
 
     const confirmDeleteVenue = (id) => {

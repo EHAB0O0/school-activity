@@ -16,6 +16,7 @@ import {
 import toast from 'react-hot-toast';
 import { useSettings } from '../../contexts/SettingsContext';
 import { logPointsChange } from '../../utils/pointsLedger';
+import { sortStudentsArabic, cleanClassString, getOfficialReportHeaderHtml, getStandardPrintStyles, printHtmlDocument } from '../../utils/reportUtils';
 
 export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpdated, onEditLink }) {
     const { schoolInfo } = useSettings();
@@ -919,38 +920,24 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
     };
 
     // Official Print Sheet
-    const handlePrintSheet = () => {
+    const handlePrintSheet = async () => {
         if (submissions.length === 0) {
             toast.error("لا توجد بيانات للطباعة");
             return;
         }
 
-        const iframe = document.createElement('iframe');
-        iframe.style.position = 'fixed';
-        iframe.style.right = '0';
-        iframe.style.bottom = '0';
-        iframe.style.width = '0';
-        iframe.style.height = '0';
-        iframe.style.border = '0';
-        document.body.appendChild(iframe);
-
-        const docIframe = iframe.contentWindow.document;
-        docIframe.open();
+        const sortedSubmissions = sortStudentsArabic(submissions, 'studentName');
 
         const customThs = customFields.length > 0
             ? customFields.map(f => `<th>${f.label}</th>`).join('')
             : `<th>${link.customFieldLabel || "البيان / المساهمة"}</th>`;
 
-        const rowsHtml = submissions.map((s, idx) => {
+        const rowsHtml = sortedSubmissions.map((s, idx) => {
             const customTds = customFields.length > 0
                 ? customFields.map(f => `<td>${s.customValues?.[f.id] || (f.id === 'f_legacy' ? s.customFieldValue : '') || (customFields.length === 1 ? s.customFieldValue : '') || '-'}</td>`).join('')
                 : `<td>${s.customFieldValue || '-'}</td>`;
 
-            const isUnknown = s.grade === 'غير معروف' || s.grade === 'Unknown' || !!s.isGradeUnknown || (s.grade && String(s.grade).trim().startsWith('غير معروف')) || (s.class && String(s.class).trim().startsWith('غير معروف'));
-            const cleanG = s.grade ? String(s.grade).replace(/\s*-\s*$/, '').trim() : '';
-            const classDisplay = isUnknown 
-                ? 'غير معروف' 
-                : (cleanG && s.section ? `${cleanG} - ${s.section}` : (s.class || cleanG || '-')).replace(/\s*-\s*$/, '');
+            const classDisplay = cleanClassString(s);
 
             return `
                 <tr>
@@ -964,133 +951,42 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
             `;
         }).join('');
 
-        docIframe.write(`
+        const headerHtml = getOfficialReportHeaderHtml({
+            schoolInfo,
+            title: 'كشف حصر المشاركات والتسليم',
+            subTitle: link.title,
+            centerDetails: [
+                `المجال: ${specializationsDisplay}`,
+                `إشراف الطالب المفوض: ${link.delegateName || '-'}`
+            ],
+            leftDetails: [
+                { label: 'إجمالي المسجلين', value: `${sortedSubmissions.length} طالب` },
+                { label: 'الحد الأقصى', value: link.maxCapacity ? `${link.maxCapacity} مقعد` : 'غير محدود (مفتوح)' }
+            ]
+        });
+
+        const htmlContent = `
             <!DOCTYPE html>
             <html dir="rtl" lang="ar">
             <head>
                 <meta charset="utf-8">
                 <title>كشف حصر المشاركات - ${link.title}</title>
                 <style>
-                    @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap');
-                    @page {
-                        size: A4 portrait;
-                        margin: 12mm 15mm;
-                    }
-                    * {
-                        box-sizing: border-box;
-                        -webkit-print-color-adjust: exact !important;
-                        print-color-adjust: exact !important;
-                    }
-                    body {
-                        font-family: 'Cairo', sans-serif;
-                        margin: 0;
-                        padding: 0;
-                        color: #0f172a;
-                        background: #ffffff;
-                    }
-                    .header {
-                        display: flex;
-                        justify-content: space-between;
-                        align-items: center;
-                        border-bottom: 2px solid #0f172a;
-                        padding-bottom: 12px;
-                        margin-bottom: 15px;
-                        page-break-inside: avoid;
-                        break-inside: avoid;
-                    }
-                    .header-title { text-align: center; }
-                    .header-title h2 { margin: 0; font-size: 20px; font-weight: 900; }
-                    .header-title p { margin: 4px 0 0; font-size: 13px; color: #475569; }
-                    .meta-bar {
-                        display: flex;
-                        justify-content: space-between;
-                        background: #f1f5f9;
-                        padding: 8px 14px;
-                        border-radius: 8px;
-                        margin-bottom: 18px;
-                        font-size: 12px;
-                        font-weight: 600;
-                        page-break-inside: avoid;
-                        break-inside: avoid;
-                    }
-                    table {
-                        width: 100%;
-                        border-collapse: collapse;
-                        margin-bottom: 25px;
-                        font-size: 12px;
-                        page-break-inside: auto;
-                        break-inside: auto;
-                    }
-                    thead {
-                        display: table-header-group !important;
-                    }
-                    tfoot {
-                        display: table-footer-group !important;
-                    }
-                    tr {
-                        page-break-inside: avoid !important;
-                        break-inside: avoid !important;
-                    }
-                    th, td {
-                        border: 1px solid #cbd5e1;
-                        padding: 7px 9px;
-                        page-break-inside: avoid !important;
-                        break-inside: avoid !important;
-                    }
-                    th {
-                        background-color: #f1f5f9 !important;
-                        color: #0f172a;
-                        font-weight: bold;
-                    }
-                    tr:nth-child(even) {
-                        background-color: #f8fafc;
-                    }
-                    .footer-signatures {
-                        display: flex;
-                        justify-content: space-around;
-                        margin-top: 30px;
-                        text-align: center;
-                        font-size: 13px;
-                        font-weight: 700;
-                        page-break-inside: avoid !important;
-                        break-inside: avoid !important;
-                    }
-                    .sig-box { min-width: 180px; }
-                    .sig-line { margin-top: 45px; border-top: 1px dashed #64748b; }
+                    ${getStandardPrintStyles()}
                 </style>
             </head>
             <body>
-                <div class="header">
-                    <div>
-                        <div>المملكة العربية السعودية</div>
-                        <div>وزارة التعليم</div>
-                        <div>${schoolInfo?.name || "مدرسة النشاط"}</div>
-                    </div>
-                    <div class="header-title">
-                        <h2>كشف حصر المشاركات والتسليم</h2>
-                        <p>${link.title}</p>
-                    </div>
-                    <div style="text-align:left;">
-                        <div>التاريخ: ${new Date().toLocaleDateString('ar-SA')}</div>
-                        <div>إجمالي المسجلين: ${submissions.length}</div>
-                    </div>
-                </div>
-
-                <div class="meta-bar">
-                    <div>إشراف الطالب المفوض: <strong>${link.delegateName}</strong></div>
-                    <div>المجال: <strong>${specializationsDisplay}</strong></div>
-                    <div>الحد الأقصى: <strong>${link.maxCapacity ? `${link.maxCapacity} مقعد` : 'غير محدود (مفتوح)'}</strong></div>
-                </div>
+                ${headerHtml}
 
                 <table>
                     <thead>
                         <tr>
-                            <th style="width:40px;">#</th>
+                            <th style="width:40px; text-align:center;">#</th>
                             <th>اسم الطالب</th>
-                            <th style="width:110px;">الصف والشعبة</th>
+                            <th style="width:120px; text-align:center;">الصف والشعبة</th>
                             ${customThs}
-                            <th style="width:90px;">الحالة</th>
-                            <th style="width:130px;">توقيع الاستلام / الحضور</th>
+                            <th style="width:90px; text-align:center;">الحالة</th>
+                            <th style="width:140px; text-align:center;">توقيع الاستلام / الحضور</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -1101,34 +997,25 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                 <div class="footer-signatures">
                     <div class="sig-box">
                         <div>الطالب المفوض</div>
-                        <div>${link.delegateName}</div>
+                        <div>${link.delegateName || '....................'}</div>
                         <div class="sig-line"></div>
                     </div>
                     <div class="sig-box">
                         <div>رائد النشاط الطلابي</div>
-                        <div>أ. ________________</div>
+                        <div>أ. ....................</div>
                         <div class="sig-line"></div>
                     </div>
                     <div class="sig-box">
                         <div>مدير المدرسة</div>
-                        <div>أ. ________________</div>
+                        <div>أ. ....................</div>
                         <div class="sig-line"></div>
                     </div>
                 </div>
             </body>
             </html>
-        `);
-        docIframe.close();
+        `;
 
-        setTimeout(() => {
-            iframe.contentWindow.focus();
-            iframe.contentWindow.print();
-            setTimeout(() => {
-                if (document.body.contains(iframe)) {
-                    document.body.removeChild(iframe);
-                }
-            }, 2000);
-        }, 600);
+        await printHtmlDocument(htmlContent, `كشف_حصر_المشاركات_${link.title}`);
     };
 
     return (

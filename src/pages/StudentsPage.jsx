@@ -13,6 +13,7 @@ import BulkPrintCertificatesModal from '../components/students/BulkPrintCertific
 import DuplicateResolverModal from '../components/students/DuplicateResolverModal';
 import { findDuplicateGroups, enrichDuplicateGroupsWithEvents, normalizeArabic } from '../utils/studentDuplicates';
 import { logPointsChange, clampPoints, sanitizeNegativePoints, fetchStudentPointsLogs } from '../utils/pointsLedger';
+import { sortStudentsArabic, cleanClassString, getOfficialReportHeaderHtml, getStandardPrintStyles, printHtmlDocument } from '../utils/reportUtils';
 
 export default function StudentsPage() {
     const [students, setStudents] = useState([]);
@@ -35,7 +36,7 @@ export default function StudentsPage() {
     const [isCertificatesModalOpen, setIsCertificatesModalOpen] = useState(false);
     const [isProcessingBulk, setIsProcessingBulk] = useState(false);
 
-    const { eventTypes, grades, settings } = useSettings();
+    const { eventTypes, grades, settings, schoolInfo } = useSettings();
     const [isAddModalOpen, setIsAddModalOpen] = useState(false);
     const [newStudent, setNewStudent] = useState({ name: '', class: '', grade: '', section: '', isGradeUnknown: false, specializations: [] });
 
@@ -251,27 +252,22 @@ export default function StudentsPage() {
     const generateStudentProfilePDF = async (student, history = [], includePoints = false, pointsLogs = []) => {
         const toastId = toast.loading('جاري تجهيز ملف الطالب للطباعة...');
         try {
-            const schoolName = settings?.schoolName || 'ثانوية الملك عبدالله';
-            const currentDate = new Date().toLocaleDateString('ar-SA');
             const classDisplay = cleanClassString(student);
 
-            // 1. Iframe Isolation
-            const iframe = document.createElement('iframe');
-            Object.assign(iframe.style, {
-                position: 'fixed', right: '0', bottom: '0', width: '0', height: '0',
-                border: 'none', zIndex: '-9999'
-            });
-            document.body.appendChild(iframe);
-            const doc = iframe.contentWindow.document;
-            doc.open();
-
-            // 2. HTML Elements
+            // Specializations HTML
             const specsHtml = (student.specializations && student.specializations.length > 0)
                 ? student.specializations.map(s => `<span class="badge">${s === 'General' ? 'عام' : s}</span>`).join(' ')
                 : '<span style="color:#94a3b8; font-size:12px;">لا يوجد تخصيص محدد</span>';
 
-            const historyRows = history.length > 0
-                ? history.map((evt, i) => `
+            // Activities Rows (Sorted by date descending)
+            const sortedHistory = [...history].sort((a, b) => {
+                const timeA = a.startTime?.toMillis ? a.startTime.toMillis() : (a.date ? new Date(a.date).getTime() : 0);
+                const timeB = b.startTime?.toMillis ? b.startTime.toMillis() : (b.date ? new Date(b.date).getTime() : 0);
+                return timeB - timeA;
+            });
+
+            const historyRows = sortedHistory.length > 0
+                ? sortedHistory.map((evt, i) => `
                     <tr>
                         <td style="text-align: center; font-weight: bold;">${i + 1}</td>
                         <td style="font-weight: bold;">${evt.title || '-'}</td>
@@ -288,8 +284,15 @@ export default function StudentsPage() {
 
             let pointsSectionHtml = '';
             if (includePoints) {
-                const pointsRows = pointsLogs && pointsLogs.length > 0
-                    ? pointsLogs.map((log, i) => {
+                // Ensure points logs are sorted descending
+                const sortedLogs = [...(pointsLogs || [])].sort((a, b) => {
+                    const timeA = a.createdAt?.toMillis ? a.createdAt.toMillis() : (a.createdAt?.seconds ? a.createdAt.seconds * 1000 : 0);
+                    const timeB = b.createdAt?.toMillis ? b.createdAt.toMillis() : (b.createdAt?.seconds ? b.createdAt.seconds * 1000 : 0);
+                    return timeB - timeA;
+                });
+
+                const pointsRows = sortedLogs.length > 0
+                    ? sortedLogs.map((log, i) => {
                         const isPos = (Number(log.change) || 0) > 0;
                         const changeStr = isPos ? `+${log.change}` : `${log.change}`;
                         const logDate = log.createdAt?.toDate ? log.createdAt.toDate().toLocaleDateString('ar-SA') : (log.date || '-');
@@ -314,16 +317,16 @@ export default function StudentsPage() {
                 pointsSectionHtml = `
                     <div class="section-container">
                         <div class="section-title">
-                            <h3>سجل وتفاصيل حركات نقاط التميز (${pointsLogs ? pointsLogs.length : 0} حركة مسجلة)</h3>
+                            <h3>سجل وتفاصيل حركات نقاط التميز (${sortedLogs.length} حركة مسجلة)</h3>
                         </div>
                         <table>
                             <thead>
                                 <tr>
-                                    <th style="width: 5%;">#</th>
-                                    <th style="width: 20%;">التاريخ والوقت</th>
-                                    <th style="width: 35%;">سبب الحركة / النشاط</th>
-                                    <th style="width: 15%; text-align: center;">نوع العملية</th>
-                                    <th style="width: 12%; text-align: center;">مقدار التغيير</th>
+                                    <th style="width: 5%; text-align: center;">#</th>
+                                    <th style="width: 22%;">التاريخ والوقت</th>
+                                    <th style="width: 33%;">سبب الحركة / النشاط</th>
+                                    <th style="width: 14%; text-align: center;">نوع العملية</th>
+                                    <th style="width: 13%; text-align: center;">مقدار التغيير</th>
                                     <th style="width: 13%; text-align: center;">الرصيد بعد الحركة</th>
                                 </tr>
                             </thead>
@@ -337,225 +340,125 @@ export default function StudentsPage() {
 
             const joinDateStr = student.joinedAt?.toDate ? student.joinedAt.toDate().toLocaleDateString('ar-SA') : '-';
 
-            doc.write(`
+            const headerHtml = getOfficialReportHeaderHtml({
+                schoolInfo,
+                title: includePoints ? 'تقرير السجل الشامل ونقاط التميز' : 'تقرير الملف الفردي للطالب',
+                subTitle: 'قسم النشاط الطلابي المدرسي',
+                studentName: student.name,
+                centerDetails: [
+                    `الصف / الشعبة: ${classDisplay}`
+                ],
+                leftDetails: [
+                    { label: 'حالة القيد', value: student.active !== false ? 'طالب منتظم' : 'مؤرشف' },
+                    { label: 'رصيد النقاط', value: `${student.totalPoints || 0} نقطة` }
+                ]
+            });
+
+            const htmlContent = `
                 <!DOCTYPE html>
                 <html dir="rtl" lang="ar">
                 <head>
                     <meta charset="UTF-8">
                     <title>ملف الطالب - ${student.name}</title>
                     <style>
-                        @page { size: A4 portrait; margin: 12mm 15mm; }
-                        * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-                        body {
-                            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                            background: #ffffff;
-                            color: #0f172a;
-                            margin: 0;
-                            padding: 0;
-                            line-height: 1.5;
-                        }
-                        
-                        /* HEADER */
-                        .header {
-                            display: flex;
-                            justify-content: space-between;
-                            align-items: center;
-                            border-bottom: 2px solid #1e1b4b;
-                            padding-bottom: 12px;
-                            margin-bottom: 20px;
-                            page-break-inside: avoid !important;
-                            break-inside: avoid !important;
-                        }
-                        .header-side { font-size: 12px; line-height: 1.6; }
-                        .header-title { text-align: center; }
-                        .header-title h1 { margin: 0; font-size: 20px; color: #1e1b4b; }
-                        .header-title p { margin: 3px 0 0 0; font-size: 12px; color: #64748b; }
-                        
-                        /* STUDENT BANNER */
-                        .student-banner {
-                            display: flex;
-                            align-items: center;
-                            gap: 16px;
-                            background: #f8fafc;
-                            border: 1px solid #e2e8f0;
-                            border-radius: 12px;
-                            padding: 16px 20px;
-                            margin-bottom: 20px;
-                            page-break-inside: avoid !important;
-                            break-inside: avoid !important;
-                        }
-                        .avatar {
-                            width: 56px;
-                            height: 56px;
-                            background: linear-gradient(135deg, #4f46e5, #7c3aed);
-                            color: #ffffff;
-                            border-radius: 50%;
-                            font-size: 24px;
-                            font-weight: bold;
-                            display: flex;
-                            align-items: center;
-                            justify-content: center;
-                            flex-shrink: 0;
-                        }
-                        .student-banner-info { flex: 1; }
-                        .student-banner-info h2 { margin: 0 0 4px 0; font-size: 20px; color: #0f172a; }
-                        .student-banner-info p { margin: 0; font-size: 12px; color: #64748b; }
-                        
-                        /* KPI SUMMARY CARDS */
-                        .grid-cards {
-                            display: grid;
-                            grid-template-columns: repeat(4, 1fr);
-                            gap: 12px;
-                            margin-bottom: 20px;
-                            page-break-inside: avoid !important;
-                            break-inside: avoid !important;
-                        }
-                        .kpi-card {
-                            background: #f8fafc;
-                            border: 1px solid #e2e8f0;
-                            border-radius: 10px;
-                            padding: 12px 14px;
-                            text-align: center;
-                        }
-                        .kpi-card label { display: block; font-size: 11px; color: #64748b; margin-bottom: 4px; font-weight: 600; }
-                        .kpi-card .val { font-size: 15px; font-weight: bold; color: #0f172a; }
-                        .kpi-card .points-val { color: #059669; }
-                        
-                        /* SPECIALIZATIONS */
-                        .specs-section {
-                            background: #f8fafc;
-                            border: 1px solid #e2e8f0;
-                            border-radius: 10px;
-                            padding: 12px 16px;
-                            margin-bottom: 20px;
-                            display: flex;
-                            align-items: center;
-                            gap: 12px;
-                            page-break-inside: avoid !important;
-                            break-inside: avoid !important;
-                        }
-                        .specs-label { font-size: 12px; font-weight: bold; color: #334155; white-space: nowrap; }
-                        .badge {
-                            background: #ede9fe;
-                            color: #5b21b6;
-                            border: 1px solid #ddd6fe;
-                            padding: 3px 10px;
-                            border-radius: 6px;
-                            font-size: 11px;
-                            font-weight: 600;
-                            display: inline-block;
-                        }
-                        
-                        /* SECTION */
-                        .section-container {
-                            margin-bottom: 25px;
-                            page-break-inside: auto;
-                            break-inside: auto;
-                        }
-                        .section-title {
-                            border-bottom: 2px solid #e2e8f0;
-                            padding-bottom: 6px;
-                            margin-bottom: 12px;
-                            page-break-inside: avoid !important;
-                            break-inside: avoid !important;
-                        }
-                        .section-title h3 {
-                            margin: 0;
-                            font-size: 15px;
-                            color: #1e293b;
-                            font-weight: bold;
-                        }
-                        
-                        /* TABLES */
-                        table {
-                            width: 100%;
-                            border-collapse: collapse;
-                            font-size: 12px;
-                            page-break-inside: auto;
-                            break-inside: auto;
-                        }
-                        thead {
-                            display: table-header-group !important;
-                        }
-                        tfoot {
-                            display: table-footer-group !important;
-                        }
-                        th {
-                            background-color: #f1f5f9;
-                            color: #1e293b;
-                            font-weight: bold;
-                            text-align: right;
-                            padding: 8px 10px;
-                            border: 1px solid #cbd5e1;
-                        }
-                        td {
-                            padding: 7px 10px;
-                            border: 1px solid #cbd5e1;
-                            color: #334155;
-                            vertical-align: middle;
-                        }
-                        tr:nth-child(even) { background-color: #f8fafc; }
-                        tr, th, td {
-                            page-break-inside: avoid !important;
-                            break-inside: avoid !important;
-                        }
-                        
-                        .status {
-                            display: inline-block;
-                            font-size: 10px;
-                            font-weight: bold;
-                            padding: 2px 8px;
-                            border-radius: 4px;
-                            background: #f1f5f9;
-                            color: #475569;
-                            border: 1px solid #cbd5e1;
-                        }
-                        .status.success {
-                            background: #ecfdf5;
-                            color: #059669;
-                            border-color: #a7f3d0;
-                        }
-                        
-                        .type-pill {
-                            font-size: 10px;
-                            background: #f1f5f9;
-                            color: #475569;
-                            padding: 2px 6px;
-                            border-radius: 4px;
-                            border: 1px solid #e2e8f0;
-                        }
-                        
-                        /* SIGNATURES */
-                        .signatures {
-                            display: flex;
-                            justify-content: space-between;
-                            margin-top: 35px;
-                            padding: 0 40px;
-                            font-size: 13px;
-                            page-break-inside: avoid !important;
-                            break-inside: avoid !important;
-                        }
-                        .sig-box { text-align: center; width: 180px; }
-                        .sig-role { font-weight: bold; margin-bottom: 40px; color: #1e1b4b; }
-                        .sig-line { border-top: 1px dashed #94a3b8; padding-top: 5px; font-size: 11px; color: #64748b; }
+                        ${getStandardPrintStyles(`
+                            .avatar {
+                                width: 52px;
+                                height: 52px;
+                                background: linear-gradient(135deg, #4f46e5, #7c3aed);
+                                color: #ffffff;
+                                border-radius: 50%;
+                                font-size: 22px;
+                                font-weight: bold;
+                                display: flex;
+                                align-items: center;
+                                justify-content: center;
+                                flex-shrink: 0;
+                            }
+                            .student-banner {
+                                display: flex;
+                                align-items: center;
+                                gap: 16px;
+                                background: #f8fafc;
+                                border: 1px solid #e2e8f0;
+                                border-radius: 12px;
+                                padding: 14px 18px;
+                                margin-bottom: 20px;
+                                page-break-inside: avoid !important;
+                                break-inside: avoid !important;
+                            }
+                            .student-banner-info { flex: 1; }
+                            .student-banner-info h2 { margin: 0 0 3px 0; font-size: 19px; color: #0f172a; }
+                            .student-banner-info p { margin: 0; font-size: 12px; color: #64748b; }
+                            .specs-section {
+                                background: #f8fafc;
+                                border: 1px solid #e2e8f0;
+                                border-radius: 10px;
+                                padding: 10px 14px;
+                                margin-bottom: 20px;
+                                display: flex;
+                                align-items: center;
+                                gap: 12px;
+                                page-break-inside: avoid !important;
+                                break-inside: avoid !important;
+                            }
+                            .specs-label { font-size: 12px; font-weight: bold; color: #334155; white-space: nowrap; }
+                            .badge {
+                                background: #ede9fe;
+                                color: #5b21b6;
+                                border: 1px solid #ddd6fe;
+                                padding: 3px 10px;
+                                border-radius: 6px;
+                                font-size: 11px;
+                                font-weight: 600;
+                                display: inline-block;
+                            }
+                            .section-container {
+                                margin-bottom: 25px;
+                                page-break-inside: auto;
+                                break-inside: auto;
+                            }
+                            .section-title {
+                                border-bottom: 2px solid #e2e8f0;
+                                padding-bottom: 6px;
+                                margin-bottom: 12px;
+                                page-break-inside: avoid !important;
+                                break-inside: avoid !important;
+                            }
+                            .section-title h3 {
+                                margin: 0;
+                                font-size: 15px;
+                                color: #1e293b;
+                                font-weight: bold;
+                            }
+                            .status {
+                                display: inline-block;
+                                font-size: 10px;
+                                font-weight: bold;
+                                padding: 2px 8px;
+                                border-radius: 4px;
+                                background: #f1f5f9;
+                                color: #475569;
+                                border: 1px solid #cbd5e1;
+                            }
+                            .status.success {
+                                background: #ecfdf5;
+                                color: #059669;
+                                border-color: #a7f3d0;
+                            }
+                            .type-pill {
+                                font-size: 10px;
+                                background: #f1f5f9;
+                                color: #475569;
+                                padding: 2px 6px;
+                                border-radius: 4px;
+                                border: 1px solid #e2e8f0;
+                            }
+                        `)}
                     </style>
                 </head>
                 <body>
-                    <div class="header">
-                        <div class="header-side">
-                            <div>المملكة العربية السعودية</div>
-                            <div>وزارة التعليم</div>
-                            <div>${schoolName}</div>
-                        </div>
-                        <div class="header-title">
-                            <h1>${includePoints ? 'تقرير السجل الشامل ونقاط التميز' : 'تقرير الملف الفردي للطالب'}</h1>
-                            <p>قسم النشاط الطلابي المدرسي</p>
-                        </div>
-                        <div class="header-side" style="text-align: left;">
-                            <div>تاريخ الاستخراج: ${currentDate}</div>
-                            <div>حالة القيد: ${student.active !== false ? 'طالب منتظم' : 'مؤرشف'}</div>
-                        </div>
-                    </div>
+                    ${headerHtml}
 
                     <div class="student-banner">
                         <div class="avatar">${student.name.charAt(0)}</div>
@@ -565,22 +468,22 @@ export default function StudentsPage() {
                         </div>
                     </div>
 
-                    <div class="grid-cards">
+                    <div class="kpi-grid">
                         <div class="kpi-card">
-                            <label>الصف / الشعبة</label>
-                            <div class="val">${classDisplay}</div>
+                            <div class="kpi-label">الصف / الشعبة</div>
+                            <div class="kpi-value">${classDisplay}</div>
                         </div>
                         <div class="kpi-card">
-                            <label>رصيد نقاط التميز</label>
-                            <div class="val points-val">${student.totalPoints || 0} نقطة</div>
+                            <div class="kpi-label">رصيد نقاط التميز</div>
+                            <div class="kpi-value points">${student.totalPoints || 0} نقطة</div>
                         </div>
                         <div class="kpi-card">
-                            <label>الأنشطة المسجلة</label>
-                            <div class="val">${history.length} نشاط</div>
+                            <div class="kpi-label">الأنشطة المسجلة</div>
+                            <div class="kpi-value">${history.length} نشاط</div>
                         </div>
                         <div class="kpi-card">
-                            <label>${includePoints ? 'حركات النقاط' : 'تاريخ الانضمام'}</label>
-                            <div class="val">${includePoints ? `${pointsLogs ? pointsLogs.length : 0} حركة` : joinDateStr}</div>
+                            <div class="kpi-label">${includePoints ? 'حركات النقاط' : 'تاريخ الانضمام'}</div>
+                            <div class="kpi-value">${includePoints ? `${pointsLogs ? pointsLogs.length : 0} حركة` : joinDateStr}</div>
                         </div>
                     </div>
 
@@ -611,32 +514,22 @@ export default function StudentsPage() {
 
                     ${pointsSectionHtml}
 
-                    <div class="signatures">
+                    <div class="footer-signatures">
                         <div class="sig-box">
-                            <div class="sig-role">مشرف النشاط الطلابي</div>
+                            <div>مشرف النشاط الطلابي</div>
                             <div class="sig-line">التوقيع: .....................</div>
                         </div>
                         <div class="sig-box">
-                            <div class="sig-role">مدير المدرسة</div>
+                            <div>مدير المدرسة</div>
                             <div class="sig-line">الختم والتوقيع: .....................</div>
                         </div>
                     </div>
                 </body>
                 </html>
-            `);
-            doc.close();
+            `;
 
-            setTimeout(() => {
-                toast.dismiss(toastId);
-                iframe.contentWindow.focus();
-                iframe.contentWindow.print();
-                setTimeout(() => {
-                    if (document.body.contains(iframe)) {
-                        document.body.removeChild(iframe);
-                    }
-                }, 2000);
-            }, 600);
-
+            toast.dismiss(toastId);
+            await printHtmlDocument(htmlContent, `ملف الطالب - ${student.name}`);
         } catch (e) {
             console.error(e);
             toast.error("فشل تجهيز الملف للطباعة", { id: toastId });
@@ -929,8 +822,9 @@ export default function StudentsPage() {
     // 6. Bulk Export to Excel (.xlsx)
     // 6. Bulk Export to Excel (.xlsx)
     const handleExportCSV = async () => {
-        const selectedList = students.filter(s => selectedIds.includes(s.id));
-        if (selectedList.length === 0) return;
+        const rawList = students.filter(s => selectedIds.includes(s.id));
+        if (rawList.length === 0) return;
+        const selectedList = sortStudentsArabic(rawList, 'name');
 
         const toastId = toast.loading('جاري تجهيز ملف Excel...');
         try {
@@ -981,25 +875,12 @@ export default function StudentsPage() {
     };
 
     // 7. Bulk Consolidated Sheet Print
-    const handlePrintConsolidated = () => {
-        const selectedList = students.filter(s => selectedIds.includes(s.id));
-        if (selectedList.length === 0) return;
+    const handlePrintConsolidated = async () => {
+        const rawList = students.filter(s => selectedIds.includes(s.id));
+        if (rawList.length === 0) return;
+        const selectedList = sortStudentsArabic(rawList, 'name');
 
-        const schoolName = settings?.schoolName || 'ثانوية الملك عبدالله';
         const currentDate = new Date().toLocaleDateString('ar-SA');
-
-        const iframe = document.createElement('iframe');
-        iframe.style.position = 'fixed';
-        iframe.style.right = '0';
-        iframe.style.bottom = '0';
-        iframe.style.width = '0';
-        iframe.style.height = '0';
-        iframe.style.border = 'none';
-        iframe.style.zIndex = '-9999';
-        document.body.appendChild(iframe);
-
-        const doc = iframe.contentWindow.document;
-        doc.open();
 
         const rowsHtml = selectedList.map((st, idx) => `
             <tr>
@@ -1012,50 +893,30 @@ export default function StudentsPage() {
             </tr>
         `).join('');
 
-        doc.write(`
+        const headerHtml = getOfficialReportHeaderHtml({
+            schoolInfo,
+            title: 'كشف بيانات الطلاب المشاركين',
+            subTitle: 'قسم النشاط الطلابي المدرسي',
+            centerDetails: [
+                `العدد الإجمالي: ${selectedList.length} طالب`
+            ],
+            leftDetails: [
+                `تاريخ الاستخراج: ${currentDate}`
+            ]
+        });
+
+        const htmlContent = `
             <!DOCTYPE html>
             <html dir="rtl" lang="ar">
             <head>
                 <meta charset="UTF-8">
                 <title>كشف مجمّع لبيانات الطلاب</title>
                 <style>
-                    @page { size: A4 portrait; margin: 12mm 15mm; }
-                    * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-                    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; color: #111827; }
-                    .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #1e1b4b; padding-bottom: 12px; margin-bottom: 20px; page-break-inside: avoid !important; break-inside: avoid !important; }
-                    .header-side { font-size: 13px; line-height: 1.6; }
-                    .header-title { text-align: center; }
-                    .header-title h1 { margin: 0; font-size: 22px; color: #1e1b4b; }
-                    .header-title p { margin: 4px 0 0 0; font-size: 13px; color: #4b5563; }
-                    table { width: 100%; border-collapse: collapse; margin-bottom: 30px; font-size: 13px; page-break-inside: auto; break-inside: auto; }
-                    thead { display: table-header-group !important; }
-                    tfoot { display: table-footer-group !important; }
-                    th, td { border: 1px solid #d1d5db; padding: 8px 10px; }
-                    th { background-color: #f3f4f6; color: #1f2937; font-weight: bold; text-align: right; }
-                    tr:nth-child(even) { background-color: #f9fafb; }
-                    tr, th, td { page-break-inside: avoid !important; break-inside: avoid !important; }
-                    .signatures { display: flex; justify-content: space-between; margin-top: 40px; padding: 0 30px; font-size: 14px; page-break-inside: avoid !important; break-inside: avoid !important; }
-                    .sig-box { text-align: center; width: 200px; }
-                    .sig-role { font-weight: bold; margin-bottom: 40px; color: #1f2937; }
-                    .sig-line { border-top: 1px dashed #9ca3af; padding-top: 5px; font-size: 12px; color: #6b7280; }
+                    ${getStandardPrintStyles()}
                 </style>
             </head>
             <body>
-                <div class="header">
-                    <div class="header-side">
-                        <div>المملكة العربية السعودية</div>
-                        <div>وزارة التعليم</div>
-                        <div>${schoolName}</div>
-                    </div>
-                    <div class="header-title">
-                        <h1>كشف بيانات الطلاب المشاركين</h1>
-                        <p>العدد الإجمالي: ${selectedList.length} طالب</p>
-                    </div>
-                    <div class="header-side" style="text-align: left;">
-                        <div>التاريخ: ${currentDate}</div>
-                        <div>قسم النشاط المدرسي</div>
-                    </div>
-                </div>
+                ${headerHtml}
 
                 <table>
                     <thead>
@@ -1073,172 +934,214 @@ export default function StudentsPage() {
                     </tbody>
                 </table>
 
-                <div class="signatures">
+                <div class="footer-signatures">
                     <div class="sig-box">
-                        <div class="sig-role">مشرف النشاط الطلابي</div>
+                        <div>مشرف النشاط الطلابي</div>
                         <div class="sig-line">التوقيع: .....................</div>
                     </div>
                     <div class="sig-box">
-                        <div class="sig-role">مدير المدرسة</div>
+                        <div>مدير المدرسة</div>
                         <div class="sig-line">الختم والتوقيع: .....................</div>
                     </div>
                 </div>
             </body>
             </html>
-        `);
-        doc.close();
+        `;
 
-        setTimeout(() => {
-            iframe.contentWindow.focus();
-            iframe.contentWindow.print();
-            setTimeout(() => {
-                if (document.body.contains(iframe)) {
-                    document.body.removeChild(iframe);
-                }
-            }, 2000);
-        }, 600);
+        await printHtmlDocument(htmlContent, 'كشف مجمّع لبيانات الطلاب');
     };
 
     // 8. Bulk Detailed Records Print
     const handlePrintDetailed = async () => {
-        const selectedList = students.filter(s => selectedIds.includes(s.id));
-        if (selectedList.length === 0) return;
+        const rawList = students.filter(s => selectedIds.includes(s.id));
+        if (rawList.length === 0) return;
+        const selectedList = sortStudentsArabic(rawList, 'name');
 
         const toastId = toast.loading(`جاري تجهيز سجلات ${selectedList.length} طالب للطباعة...`);
         try {
-            const schoolName = settings?.schoolName || 'ثانوية الملك عبدالله';
-            const currentDate = new Date().toLocaleDateString('ar-SA');
-
             const eventsSnap = await getDocs(query(collection(db, 'events'), orderBy('startTime', 'desc'), limit(150)));
             const allEvents = eventsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-
-            const iframe = document.createElement('iframe');
-            iframe.style.position = 'fixed';
-            iframe.style.right = '0';
-            iframe.style.bottom = '0';
-            iframe.style.width = '0';
-            iframe.style.height = '0';
-            iframe.style.border = 'none';
-            iframe.style.zIndex = '-9999';
-            document.body.appendChild(iframe);
-
-            const doc = iframe.contentWindow.document;
-            doc.open();
 
             const pagesHtml = selectedList.map(st => {
                 const studentEvents = allEvents.filter(e => e.participatingStudents && e.participatingStudents.includes(st.id));
                 const eventsRows = studentEvents.length > 0 ? studentEvents.map((evt, idx) => `
-                    <div class="row">
-                        <div class="cell w-5">${idx + 1}</div>
-                        <div class="cell w-45 bold">${evt.title}</div>
-                        <div class="cell w-20 dim">${evt.typeName || '-'}</div>
-                        <div class="cell w-15">${evt.date || (evt.startTime?.toDate ? evt.startTime.toDate().toLocaleDateString('en-GB') : '-')}</div>
-                        <div class="cell w-15 center"><span class="status ${evt.status === 'Done' ? 'success' : ''}">${evt.status === 'Done' ? 'مكتمل' : (evt.status || 'مجدول')}</span></div>
-                    </div>
-                `).join('') : '<div class="empty">لا توجد مشاركات مسجلة لهذا الطالب حتى الآن</div>';
+                    <tr>
+                        <td style="text-align: center; font-weight: bold;">${idx + 1}</td>
+                        <td style="font-weight: bold;">${evt.title}</td>
+                        <td>${evt.typeName || '-'}</td>
+                        <td style="direction: ltr; text-align: right;">${evt.date || (evt.startTime?.toDate ? evt.startTime.toDate().toLocaleDateString('en-GB') : '-')}</td>
+                        <td style="text-align: center;"><span class="status ${evt.status === 'Done' ? 'success' : ''}">${evt.status === 'Done' ? 'مكتمل' : (evt.status || 'مجدول')}</span></td>
+                    </tr>
+                `).join('') : '<tr><td colspan="5" style="text-align: center; padding: 20px; color: #9ca3af;">لا توجد مشاركات مسجلة لهذا الطالب حتى الآن</td></tr>';
 
                 const specsHtml = (st.specializations || []).map(sp => `<span class="badge">${sp === 'General' ? 'عام' : sp}</span>`).join(' ') || '<span style="color:#9ca3af">لا يوجد تخصيص</span>';
 
+                const studentHeaderHtml = getOfficialReportHeaderHtml({
+                    schoolInfo,
+                    title: 'الملف الفردي للطالب',
+                    subTitle: 'قسم النشاط الطلابي المدرسي',
+                    studentName: st.name,
+                    centerDetails: [
+                        `الصف / الشعبة: ${cleanClassString(st)}`
+                    ],
+                    leftDetails: [
+                        { label: 'حالة القيد', value: st.active !== false ? 'طالب منتظم' : 'مؤرشف' },
+                        { label: 'نقاط التميز', value: `${st.totalPoints || 0} نقطة` }
+                    ]
+                });
+
                 return `
                     <div class="student-page">
-                        <div class="header">
-                            <div class="school-info">
-                                <div>المملكة العربية السعودية - وزارة التعليم</div>
-                                <div style="font-weight: bold; color: #4338ca;">${schoolName}</div>
-                            </div>
-                            <div class="report-title">
-                                <h2>الملف الفردي للطالب</h2>
-                                <p>تاريخ الاستخراج: ${currentDate}</p>
-                            </div>
-                        </div>
+                        ${studentHeaderHtml}
 
-                        <div class="profile-card">
+                        <div class="student-banner">
                             <div class="avatar">${st.name.charAt(0)}</div>
-                            <div class="student-meta">
-                                <h1>${st.name}</h1>
-                                <div class="meta-row">
-                                    <span>الصف: <strong>${cleanClassString(st)}</strong></span>
-                                    <span>نقاط التميز: <strong class="points">${st.totalPoints || 0}</strong></span>
-                                    <span>تاريخ الانضمام: <strong>${st.joinedAt?.toDate ? st.joinedAt.toDate().toLocaleDateString('ar-SA') : '-'}</strong></span>
-                                </div>
+                            <div class="student-banner-info">
+                                <h2>${st.name}</h2>
+                                <p>الصف: <strong>${cleanClassString(st)}</strong> • رصيد النقاط: <strong style="color: #059669;">${st.totalPoints || 0} نقطة</strong></p>
                             </div>
                         </div>
 
-                        <div class="section-box">
-                            <h3>التخصصات والفرق المسجل بها</h3>
+                        <div class="specs-section">
+                            <span class="specs-label">التخصصات والفرق المسجل بها:</span>
                             <div>${specsHtml}</div>
                         </div>
 
-                        <div class="section-box">
-                            <h3>سجل الأنشطة والمشاركات (${studentEvents.length})</h3>
-                            <div class="table">
-                                <div class="row head">
-                                    <div class="cell w-5">#</div>
-                                    <div class="cell w-45">النشاط</div>
-                                    <div class="cell w-20">النوع</div>
-                                    <div class="cell w-15">التاريخ</div>
-                                    <div class="cell w-15 center">الحالة</div>
-                                </div>
-                                ${eventsRows}
+                        <div class="section-container">
+                            <div class="section-title">
+                                <h3>سجل الأنشطة والمشاركات (${studentEvents.length})</h3>
+                            </div>
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th style="width: 5%; text-align: center;">#</th>
+                                        <th style="width: 45%;">اسم النشاط</th>
+                                        <th style="width: 20%;">النوع / التصنيف</th>
+                                        <th style="width: 15%;">التاريخ</th>
+                                        <th style="width: 15%; text-align: center;">الحالة</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${eventsRows}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div class="footer-signatures">
+                            <div class="sig-box">
+                                <div>مشرف النشاط الطلابي</div>
+                                <div class="sig-line">التوقيع: .....................</div>
+                            </div>
+                            <div class="sig-box">
+                                <div>مدير المدرسة</div>
+                                <div class="sig-line">الختم والتوقيع: .....................</div>
                             </div>
                         </div>
                     </div>
                 `;
             }).join('');
 
-            doc.write(`
+            const htmlContent = `
                 <!DOCTYPE html>
                 <html dir="rtl" lang="ar">
                 <head>
                     <meta charset="UTF-8">
                     <title>سجلات تفصيلية للطلاب</title>
                     <style>
-                        @page { size: A4 portrait; margin: 12mm 15mm; }
-                        * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-                        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; color: #111827; }
-                        .student-page { page-break-after: always; break-after: page; page-break-inside: avoid !important; break-inside: avoid !important; min-height: 250mm; display: flex; flex-direction: column; }
-                        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #e5e7eb; padding-bottom: 10px; margin-bottom: 20px; page-break-inside: avoid !important; break-inside: avoid !important; }
-                        .school-info { font-size: 12px; line-height: 1.5; }
-                        .report-title { text-align: left; }
-                        .report-title h2 { margin: 0; font-size: 18px; color: #1e1b4b; }
-                        .report-title p { margin: 2px 0 0 0; font-size: 11px; color: #6b7280; }
-                        .profile-card { display: flex; align-items: center; gap: 15px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 12px; padding: 15px; margin-bottom: 20px; page-break-inside: avoid !important; break-inside: avoid !important; }
-                        .avatar { width: 50px; height: 50px; border-radius: 50%; background: #4f46e5; color: white; display: flex; align-items: center; justify-content: center; font-size: 22px; font-weight: bold; }
-                        .student-meta h1 { margin: 0 0 6px 0; font-size: 20px; color: #111827; }
-                        .meta-row { display: flex; gap: 20px; font-size: 13px; color: #4b5563; }
-                        .points { color: #059669; }
-                        .section-box { margin-bottom: 20px; page-break-inside: avoid !important; break-inside: avoid !important; }
-                        .section-box h3 { font-size: 14px; border-bottom: 1px solid #e5e7eb; padding-bottom: 5px; margin-bottom: 10px; color: #374151; }
-                        .badge { background: #e0e7ff; color: #4338ca; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin-left: 5px; }
-                        .table { border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; page-break-inside: auto; break-inside: auto; }
-                        .row { display: flex; border-bottom: 1px solid #e5e7eb; padding: 8px 10px; font-size: 12px; page-break-inside: avoid !important; break-inside: avoid !important; }
-                        .row.head { background: #f9fafb; font-weight: bold; color: #374151; }
-                        .row:last-child { border-bottom: none; }
-                        .cell { padding: 0 5px; }
-                        .w-5 { width: 5%; } .w-45 { width: 45%; } .w-20 { width: 20%; } .w-15 { width: 15%; }
-                        .bold { font-weight: bold; } .dim { color: #6b7280; } .center { text-align: center; }
-                        .status { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: #f3f4f6; color: #4b5563; }
-                        .status.success { background: #ecfdf5; color: #059669; }
-                        .empty { padding: 20px; text-align: center; color: #9ca3af; font-size: 12px; }
+                        ${getStandardPrintStyles(`
+                            .student-page {
+                                page-break-after: always;
+                                break-after: page;
+                                min-height: 250mm;
+                                display: flex;
+                                flex-direction: column;
+                            }
+                            .student-banner {
+                                display: flex;
+                                align-items: center;
+                                gap: 14px;
+                                background: #f8fafc;
+                                border: 1px solid #e2e8f0;
+                                border-radius: 10px;
+                                padding: 12px 16px;
+                                margin-bottom: 16px;
+                                page-break-inside: avoid !important;
+                                break-inside: avoid !important;
+                            }
+                            .avatar {
+                                width: 44px;
+                                height: 44px;
+                                border-radius: 50%;
+                                background: linear-gradient(135deg, #4f46e5, #7c3aed);
+                                color: white;
+                                display: flex;
+                                align-items: center;
+                                justify-content: center;
+                                font-size: 20px;
+                                font-weight: bold;
+                                flex-shrink: 0;
+                            }
+                            .student-banner-info h2 { margin: 0 0 3px 0; font-size: 17px; color: #0f172a; }
+                            .student-banner-info p { margin: 0; font-size: 12px; color: #475569; }
+                            .specs-section {
+                                background: #f8fafc;
+                                border: 1px solid #e2e8f0;
+                                border-radius: 8px;
+                                padding: 10px 14px;
+                                margin-bottom: 16px;
+                                display: flex;
+                                align-items: center;
+                                gap: 10px;
+                                page-break-inside: avoid !important;
+                                break-inside: avoid !important;
+                            }
+                            .specs-label { font-size: 12px; font-weight: bold; color: #334155; white-space: nowrap; }
+                            .badge {
+                                background: #ede9fe;
+                                color: #5b21b6;
+                                border: 1px solid #ddd6fe;
+                                padding: 2px 8px;
+                                border-radius: 4px;
+                                font-size: 11px;
+                                font-weight: 600;
+                            }
+                            .section-container {
+                                margin-bottom: 20px;
+                                flex: 1;
+                            }
+                            .section-title {
+                                border-bottom: 2px solid #e2e8f0;
+                                padding-bottom: 5px;
+                                margin-bottom: 10px;
+                            }
+                            .section-title h3 {
+                                margin: 0;
+                                font-size: 14px;
+                                color: #1e293b;
+                                font-weight: bold;
+                            }
+                            .status {
+                                font-size: 10px;
+                                padding: 2px 6px;
+                                border-radius: 4px;
+                                background: #f3f4f6;
+                                color: #4b5563;
+                            }
+                            .status.success {
+                                background: #ecfdf5;
+                                color: #059669;
+                            }
+                        `)}
                     </style>
                 </head>
                 <body>
                     ${pagesHtml}
                 </body>
                 </html>
-            `);
-            doc.close();
+            `;
 
-            setTimeout(() => {
-                toast.dismiss(toastId);
-                iframe.contentWindow.focus();
-                iframe.contentWindow.print();
-                setTimeout(() => {
-                    if (document.body.contains(iframe)) {
-                        document.body.removeChild(iframe);
-                    }
-                }, 2000);
-            }, 600);
+            toast.dismiss(toastId);
+            await printHtmlDocument(htmlContent, 'سجلات تفصيلية للطلاب');
         } catch (err) {
             console.error("Print detailed error:", err);
             toast.error("فشل تجهيز السجلات للطباعة", { id: toastId });

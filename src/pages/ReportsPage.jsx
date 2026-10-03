@@ -15,6 +15,13 @@ import { ar } from 'date-fns/locale';
 import { Tag, CheckSquare, Square } from 'lucide-react';
 import MultiSelect from '../components/ui/MultiSelect';
 import { normalizeArabic } from '../utils/studentDuplicates';
+import {
+    sortStudentsArabic,
+    cleanClassString,
+    getOfficialReportHeaderHtml,
+    getStandardPrintStyles,
+    printHtmlDocument
+} from '../utils/reportUtils';
 
 const FIREBASE_RULES_SNIPPET = `rules_version = '2';
 service cloud.firestore {
@@ -112,34 +119,14 @@ const getVenueLabel = (venueId) => {
 
 // Sub-component for Print Controls
 const PrintControls = ({ event, onPrint }) => {
-    const [theme, setTheme] = useState('light'); // Default to Ink Saver (Light)
-
     return (
-        <div className="flex items-center gap-3">
-            <div className="flex bg-black/40 rounded-lg p-1 border border-white/10">
-                <button
-                    onClick={() => setTheme('light')}
-                    className={`p-1.5 rounded-md transition-all ${theme === 'light' ? 'bg-white text-black shadow-sm' : 'text-gray-400 hover:text-white'}`}
-                    title="وضع الطباعة (توفير الحبر)"
-                >
-                    <FileText size={16} /> {/* Using FileText as proxy for 'Document/White' look */}
-                </button>
-                <button
-                    onClick={() => setTheme('dark')}
-                    className={`p-1.5 rounded-md transition-all ${theme === 'dark' ? 'bg-gray-700 text-white shadow-sm' : 'text-gray-400 hover:text-white'}`}
-                    title="الوضع الليلي (كما في الشاشة)"
-                >
-                    <Box size={16} /> {/* Using Box as proxy for 'Dark/Screen' look */}
-                </button>
-            </div>
-
-            <button
-                onClick={() => onPrint(event, theme)}
-                className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl shadow-lg flex items-center transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-                <Printer size={16} className="ml-2" /> طباعة ({theme === 'light' ? 'عادي' : 'ليلي'})
-            </button>
-        </div>
+        <button
+            onClick={() => onPrint(event)}
+            className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl shadow-lg flex items-center transition-all disabled:opacity-50 disabled:cursor-not-allowed font-bold text-xs sm:text-sm"
+            title="طباعة التقرير أو حفظه كـ PDF"
+        >
+            <Printer size={16} className="ml-2" /> طباعة تقرير النشاط (A4)
+        </button>
     );
 };
 
@@ -147,7 +134,7 @@ import { useSettings } from '../contexts/SettingsContext';
 
 export default function ReportsPage() {
     const location = useLocation();
-    const { grades, eventTypes, activeProfile } = useSettings(); // Use Global Grades
+    const { grades, eventTypes, activeProfile, schoolInfo } = useSettings(); // Use Global Grades
     const [activeTab, setActiveTab] = useState(() => {
         const searchParams = new URLSearchParams(window.location.search);
         return location.state?.tab || searchParams.get('tab') || 'activities';
@@ -1102,19 +1089,19 @@ export default function ReportsPage() {
                         <th style="width: 15%">النقاط</th>
                     </tr>
                 `;
-                tableRowsHtml = previewData.map((item, i) => {
+                const sortedStudents = sortStudentsArabic(previewData, 'name');
+                tableRowsHtml = sortedStudents.map((item, i) => {
                     const specs = item.specializations && item.specializations.length > 0
-                        ? item.specializations.map(s => s === 'General' ? 'عام' : s).join(', ')
+                        ? item.specializations.map(s => s === 'General' ? 'عام' : s).join('، ')
                         : '-';
-                    const isUnknown = item.grade === 'غير معروف' || item.grade === 'Unknown' || !!item.isGradeUnknown || (item.class && String(item.class).startsWith('غير معروف'));
-                    const className = isUnknown ? 'غير معروف' : ((item.grade && item.section) ? `${item.grade} - ${item.section}` : (item.class || item.grade || '-')).replace(/\s*-\s*$/, '');
+                    const className = cleanClassString(item);
                     const mainRow = `
                     <tr>
                          <td class="center dim">${i + 1}</td>
                         <td class="bold">${item.name}</td>
                         <td>${specs}</td>
                         <td class="center">${className}</td>
-                        <td class="center bold success-text">${item.points}</td>
+                        <td class="center bold success-text">${item.points || 0}</td>
                     </tr>
                     `;
 
@@ -1229,10 +1216,11 @@ export default function ReportsPage() {
                         <th style="width: 10%">التاريخ</th>
                     </tr>
                 `;
-                tableRowsHtml = previewData.map((item, i) => {
+                const sortedPoints = sortStudentsArabic(previewData, 'studentName');
+                tableRowsHtml = sortedPoints.map((item, i) => {
                     const isPos = (Number(item.change) || 0) > 0;
                     const changeStr = isPos ? `+${item.change}` : `${item.change}`;
-                    const className = (item.grade && item.section) ? `${item.grade} - ${item.section}` : (item.class || '-');
+                    const className = cleanClassString(item);
                     return `
                     <tr>
                         <td class="center dim">${i + 1}</td>
@@ -1256,11 +1244,12 @@ export default function ReportsPage() {
                             <th style="width: 15%">النقاط السابقة</th>
                         </tr>
                     `;
-                    tableRowsHtml = previewData.map((item, i) => {
+                    const sortedArchiveStudents = sortStudentsArabic(previewData, 'name');
+                    tableRowsHtml = sortedArchiveStudents.map((item, i) => {
                         const specs = item.specializations && item.specializations.length > 0
                             ? item.specializations.map(s => s === 'General' ? 'عام' : s).join('، ')
                             : '-';
-                        const className = (item.grade && item.section) ? `${item.grade} - ${item.section}` : (item.class || item.grade || '-');
+                        const className = cleanClassString(item);
                         return `
                         <tr>
                             <td class="center dim">${i + 1}</td>
@@ -1293,166 +1282,34 @@ export default function ReportsPage() {
                 }
             }
 
-            // 3. Write Full HTML Document
-            // Using "Light Mode" styles by default for printing friendly bulk reports
-            doc.write(`
+            const headerHtml = getOfficialReportHeaderHtml({
+                schoolInfo,
+                title: pageTitle,
+                subTitle: 'التقرير الإداري الشامل',
+                centerDetails: [
+                    `التصنيف: ${titleMap[activeTab] || 'تقرير عام'}`,
+                    gradeFilter && gradeFilter !== 'All' ? `الصف: ${gradeFilter}` : null,
+                    sectionFilter && sectionFilter !== 'All' ? `الشعبة: ${sectionFilter}` : null
+                ].filter(Boolean),
+                leftDetails: [
+                    { label: 'التاريخ', value: new Date().toLocaleDateString('ar-SA') },
+                    { label: 'الوقت', value: new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' }) },
+                    { label: 'إجمالي السجلات', value: `${previewData.length} سجل` }
+                ]
+            });
+
+            const fullHtml = `
                 <!DOCTYPE html>
                 <html dir="rtl" lang="ar">
                 <head>
+                    <meta charset="UTF-8">
+                    <title>${pageTitle}</title>
                     <style>
-                        @page { size: A4 portrait; margin: 12mm 15mm; }
-                        * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-                        body {
-                            font-family: 'Arial', sans-serif;
-                            background-color: #ffffff;
-                            color: #1f2937;
-                            margin: 0;
-                            padding: 20px 0;
-                        }
-                        .header {
-                            text-align: center;
-                            margin-bottom: 30px;
-                            border-bottom: 2px solid #e5e7eb;
-                            padding-bottom: 20px;
-                            page-break-inside: avoid !important;
-                            break-inside: avoid !important;
-                        }
-                        h1 { margin: 0; font-size: 24px; color: #111827; }
-                        p.subtitle { margin: 5px 0 0; color: #6b7280; font-size: 14px; }
-                        
-                        table {
-                            width: 100%;
-                            border-collapse: collapse;
-                            margin-top: 20px;
-                            font-size: 13px;
-                            page-break-inside: auto;
-                            break-inside: auto;
-                        }
-                        thead {
-                            display: table-header-group !important;
-                        }
-                        tfoot {
-                            display: table-footer-group !important;
-                        }
-                        th {
-                            background-color: #f3f4f6;
-                            color: #374151;
-                            text-align: right;
-                            padding: 10px 12px;
-                            border-bottom: 2px solid #e5e7eb;
-                            font-weight: bold;
-                        }
-                        td {
-                            padding: 9px 12px;
-                            border-bottom: 1px solid #e5e7eb;
-                            vertical-align: middle;
-                        }
-                        tr, th, td {
-                            page-break-inside: avoid !important;
-                            break-inside: avoid !important;
-                        }
-                        tr:nth-child(even) { background-color: #f9fafb; }
-                        
-                        .bold { font-weight: bold; }
-                        .dim { color: #6b7280; }
-                        .center { text-align: center; }
-                        .success-text { color: #059669; }
-                        
-                        .badge {
-                            padding: 4px 8px;
-                            border-radius: 4px;
-                            font-size: 11px;
-                            font-weight: bold;
-                            display: inline-block;
-                        }
-                        .badge.success { background-color: #ecfdf5; color: #059669; }
-                        .badge.neutral { background-color: #f3f4f6; color: #4b5563; }
-                        .badge.danger { background-color: #fef2f2; color: #dc2626; }
-
-                        /* DETAILS ROW STYLES */
-                        .details-row { background-color: #ffffff !important; }
-                        .details-box {
-                            background-color: #f8fafc;
-                            border: 1px solid #e2e8f0;
-                            border-radius: 8px;
-                            padding: 10px;
-                            margin: 5px 0 15px 0;
-                        }
-                        .details-title {
-                            font-weight: bold;
-                            font-size: 12px;
-                            color: #64748b;
-                            margin-bottom: 5px;
-                        }
-                        .class-group { margin-bottom: 8px; border-right: 2px solid #e2e8f0; padding-right: 8px; }
-                        .class-header { font-size: 11px; font-weight: bold; color: #475569; margin-bottom: 4px; }
-                        
-                        .tags-container {
-                            display: flex;
-                            flex-wrap: wrap;
-                            gap: 6px;
-                            align-items: center;
-                        }
-                        .student-tag {
-                            display: inline-flex;
-                            align-items: center;
-                            justify-content: center;
-                            background-color: #fff;
-                            border: 1px solid #cbd5e1;
-                            padding: 3px 8px; /* Corrected padding */
-                            border-radius: 4px;
-                            font-size: 11px;
-                            color: #334155;
-                            line-height: 1.3;
-                            margin-bottom: 2px;
-                        }
-
-                        .details-section { margin-top: 8px; margin-bottom: 8px; }
-                        .asset-tag { display: inline-block; background: #fffbeb; color: #92400e; padding: 2px 6px; border-radius: 4px; border: 1px solid #fcd34d; font-size: 10px; margin-left: 4px; }
-                        .fields-container { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; }
-                        .field-item { font-size: 11px; background: #f8fafc; padding: 4px; border-radius: 4px; border: 1px solid #e2e8f0; }
-
-                        /* HISTORY STYLES */
-                        .history-container { margin: 2px 0; }
-                        .history-header { font-size: 11px; font-weight: bold; color: #475569; margin-bottom: 6px; }
-                        .history-items { display: flex; flex-wrap: wrap; gap: 6px; }
-                        .history-tag {
-                            display: inline-flex;
-                            align-items: center;
-                            gap: 6px;
-                            background-color: #ffffff;
-                            border: 1px solid #cbd5e1;
-                            padding: 3px 8px;
-                            border-radius: 4px;
-                            font-size: 11px;
-                            color: #334155;
-                        }
-                        .history-title { font-weight: bold; color: #1e293b; }
-                        .history-meta { font-size: 10px; color: #64748b; }
-                        .history-points {
-                            background-color: #ecfdf5;
-                            color: #059669;
-                            font-weight: bold;
-                            font-size: 10px;
-                            padding: 1px 4px;
-                            border-radius: 3px;
-                        }
-
-                        .footer {
-                            margin-top: 40px;
-                            text-align: left;
-                            font-size: 10px;
-                            color: #9ca3af;
-                            border-top: 1px solid #e5e7eb;
-                            padding-top: 10px;
-                        }
+                        ${getStandardPrintStyles()}
                     </style>
                 </head>
                 <body>
-                    <div class="header">
-                        <h1>${pageTitle}</h1>
-                        <p class="subtitle">تاريخ التقرير: ${dateStr}</p>
-                    </div>
+                    ${headerHtml}
 
                     <table>
                         <thead>
@@ -1463,145 +1320,41 @@ export default function ReportsPage() {
                         </tbody>
                     </table>
 
-                    <div class="footer">
-                        Generated by School Management System
+                    <div class="footer-signatures">
+                        <div class="sig-box">
+                            <div>المعد / المسؤول</div>
+                            <div>________________</div>
+                            <div class="sig-line"></div>
+                        </div>
+                        <div class="sig-box">
+                            <div>رائد النشاط الطلابي</div>
+                            <div>أ. ________________</div>
+                            <div class="sig-line"></div>
+                        </div>
+                        <div class="sig-box">
+                            <div>مدير المدرسة</div>
+                            <div>أ. ________________</div>
+                            <div class="sig-line"></div>
+                        </div>
                     </div>
                 </body>
                 </html>
-            `);
-            doc.close();
+            `;
 
-            await new Promise(r => setTimeout(r, 100)); // Render wait
-
-            // --- SMART PAGINATION LOGIC (Bulk) ---
-            const pageHeightPx = 3394; // 1200px * 2 (scale) -> A4 Ratio = ~3394px height
-            const rows = doc.querySelectorAll('tr'); // Target table rows
-
-            rows.forEach(row => {
-                const rect = row.getBoundingClientRect();
-                const top = rect.top + window.scrollY;
-                const height = rect.height;
-
-                const startPage = Math.floor(top / pageHeightPx);
-                const endPage = Math.floor((top + height) / pageHeightPx);
-
-                if (endPage > startPage) {
-                    // Row crosses page boundary -> Push to next page start
-                    // Use CSS transform or margin on cells since tr margin is tricky
-                    // Better to find the <td> content and pad it? Or simpler: 
-                    // Add a spacer row? 
-                    // Actually, margin-top works on block-display elements. 
-                    // Let's try adding a spacer div *before* the row using insertBefore? 
-                    // Or simpler: set row display to block? No, breaks table.
-                    // Solution: Add a spacer row.
-
-                    const spacer = doc.createElement('tr');
-                    spacer.style.height = `${(endPage * pageHeightPx) - top + 40}px`;
-                    spacer.style.background = 'transparent';
-                    row.parentNode.insertBefore(spacer, row);
-                }
-            });
-
-            // 4. Capture & PDF
-            const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
-                import('html2canvas'),
-                import('jspdf')
-            ]);
-            await import('jspdf-autotable');
-
-            const canvas = await html2canvas(doc.body, {
-                scale: 2,
-                useCORS: true,
-                logging: false,
-                windowWidth: 1200,
-                // height: doc.body.scrollHeight + 100, // Ensure full height capture
-                backgroundColor: '#ffffff'
-            });
-
-            document.body.removeChild(iframe);
-
-            const imgData = canvas.toDataURL('image/jpeg', 0.85); // Slightly higher quality
-            const pdf = new jsPDF('p', 'pt', 'a4');
-            const pageWidth = 595.28;
-            const pageHeight = 841.89;
-
-            // Calculate dimensions
-            const imgWidth = pageWidth;
-            const imgHeight = (canvas.height * imgWidth) / canvas.width;
-
-            let heightLeft = imgHeight;
-            let position = 0;
-
-            // First Page
-            pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
-            heightLeft -= pageHeight;
-
-            // Subsequent Pages (Slicing)
-            while (heightLeft > 0) {
-                position -= pageHeight; // Slice by moving image up
-                pdf.addPage();
-                pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
-                heightLeft -= pageHeight;
-            }
-
-            pdf.save(`Report_${activeTab}_${Date.now()}.pdf`);
-
-            toast.success("تم تحميل التقرير الشامل", { id: toastId });
-
+            toast.dismiss(toastId);
+            await printHtmlDocument(fullHtml, pageTitle);
+            toast.success("تم فتح نافذة الطباعة / حفظ PDF بنجاح");
         } catch (error) {
             console.error(error);
             toast.error("فشل في إنشاء التقرير الشامل", { id: toastId });
         }
     };
 
-    // --- 4. Single Event PDF (NUCLEAR OPTION: Iframe Isolation with Themes) ---
-    const generateSingleEventPDF = async (event, theme = 'light') => {
-        const toastId = toast.loading('جاري تحضير الملف...');
+    // --- 4. Single Event Print / PDF (Official 3-Column Header, Alphabetical Sorting & Vector Printing) ---
+    const generateSingleEventPDF = async (event) => {
+        const toastId = toast.loading('جاري تحضير ملف الطباعة...');
 
         try {
-            // Theme Configuration
-            const themes = {
-                dark: {
-                    bg: '#1a1a20',
-                    text: '#ffffff',
-                    textSec: '#9ca3af',
-                    cardBg: 'rgba(255,255,255,0.05)',
-                    cardBorder: 'rgba(255,255,255,0.05)',
-                    listBg: 'rgba(0,0,0,0.2)',
-                    listBorder: 'rgba(255,255,255,0.05)',
-                    itemBorder: 'rgba(255,255,255,0.1)',
-                    footerBorder: 'rgba(255,255,255,0.1)'
-                },
-                light: {
-                    bg: '#ffffff',
-                    text: '#000000',
-                    textSec: '#4b5563', // gray-600
-                    cardBg: '#f3f4f6', // gray-100
-                    cardBorder: '#e5e7eb', // gray-200
-                    listBg: '#ffffff',
-                    listBorder: '#e5e7eb',
-                    itemBorder: '#f3f4f6',
-                    footerBorder: '#e5e7eb'
-                }
-            };
-
-            const t = themes[theme];
-
-            // 1. Create a hidden Iframe (Clean Slate Environment)
-            const iframe = document.createElement('iframe');
-            iframe.style.position = 'fixed';
-            iframe.style.top = '-9999px';
-            iframe.style.left = '0';
-            iframe.style.width = '800px';
-            iframe.style.height = '1200px';
-            iframe.style.border = 'none';
-
-            document.body.appendChild(iframe);
-
-            // 2. Write RAW HTML into the iframe document
-            const doc = iframe.contentWindow.document;
-            doc.open();
-
             // Extract all participant field labels present in this event
             const customFieldLabels = new Set();
             if (event.participantDetails && typeof event.participantDetails === 'object') {
@@ -1613,266 +1366,176 @@ export default function ReportsPage() {
             }
             const activeCustomCols = Array.from(customFieldLabels);
 
-            let studentsListHtml = '';
-            if (event.studentNames.length > 0) {
-                if (activeCustomCols.length > 0) {
-                    // Render as a clean tabular view with columns for custom fields
-                    const theadThs = activeCustomCols.map(col => `<th style="padding: 8px 12px; text-align: right; font-size: 11px; border-bottom: 2px solid ${t.itemBorder}; color: ${t.textSec};">${col}</th>`).join('');
-                    const tbodyTrs = event.studentNames.map((s, i) => {
-                        const pDetails = event.participantDetails?.[s.id] || {};
-                        const colTds = activeCustomCols.map(col => {
-                            const val = pDetails[col] || '-';
-                            return `<td style="padding: 8px 12px; font-size: 11px; border-bottom: 1px solid ${t.itemBorder}; color: ${theme === 'light' ? '#1f2937' : '#e5e7eb'}; font-weight: 500;">${val}</td>`;
-                        }).join('');
+            // Sort students alphabetically (أبجدي)
+            const sortedStudents = sortStudentsArabic(event.studentNames || []);
 
-                        return `<tr>
-                            <td style="padding: 8px 12px; font-size: 11px; border-bottom: 1px solid ${t.itemBorder}; color: ${t.textSec}; width: 30px; text-align: center;">${i + 1}</td>
-                            <td style="padding: 8px 12px; font-size: 12px; border-bottom: 1px solid ${t.itemBorder}; font-weight: bold; color: ${t.text};">${s.name}</td>
-                            <td style="padding: 8px 12px; font-size: 11px; border-bottom: 1px solid ${t.itemBorder}; color: ${t.textSec};">${(s.grade || s.section) ? `${s.grade} - ${s.section}` : '-'}</td>
-                            ${colTds}
-                        </tr>`;
+            let studentsListHtml = '';
+            if (sortedStudents.length > 0) {
+                const theadThs = activeCustomCols.map(col => `<th style="padding: 8px 12px; text-align: right; font-size: 11px;">${col}</th>`).join('');
+                const tbodyTrs = sortedStudents.map((s, i) => {
+                    const pDetails = event.participantDetails?.[s.id] || {};
+                    const colTds = activeCustomCols.map(col => {
+                        const val = pDetails[col] || '-';
+                        return `<td style="padding: 8px 12px; font-size: 11px; text-align: right;">${val}</td>`;
                     }).join('');
 
-                    studentsListHtml = `
-                        <table style="width: 100%; border-collapse: collapse; text-align: right;">
-                            <thead>
-                                <tr style="background: ${t.cardBg};">
-                                    <th style="padding: 8px 12px; text-align: center; width: 30px; font-size: 11px; border-bottom: 2px solid ${t.itemBorder}; color: ${t.textSec};">#</th>
-                                    <th style="padding: 8px 12px; text-align: right; font-size: 11px; border-bottom: 2px solid ${t.itemBorder}; color: ${t.textSec};">اسم الطالب</th>
-                                    <th style="padding: 8px 12px; text-align: right; font-size: 11px; border-bottom: 2px solid ${t.itemBorder}; color: ${t.textSec};">الصف والشعبة</th>
-                                    ${theadThs}
-                                </tr>
-                            </thead>
-                            <tbody>
-                                ${tbodyTrs}
-                            </tbody>
-                        </table>
+                    const cls = cleanClassString(s);
+
+                    return `
+                        <tr>
+                            <td style="padding: 8px 10px; font-size: 11px; text-align: center; width: 35px;">${i + 1}</td>
+                            <td style="padding: 8px 12px; font-size: 12px; font-weight: bold; color: #0f172a;">${s.name}</td>
+                            <td style="padding: 8px 12px; font-size: 11px; text-align: center;">${cls}</td>
+                            ${colTds}
+                            <td style="padding: 8px 12px; width: 120px; border-bottom: 1px dotted #94a3b8;"></td>
+                        </tr>
                     `;
-                } else {
-                    studentsListHtml = event.studentNames.map((s, i) =>
-                        `<div class="item">
-                            <span class="idx">${i + 1}</span>
-                            <div style="display: flex; flex-direction: column;">
-                                <span style="font-weight: bold;">${s.name}</span>
-                                ${(s.grade || s.section) ? `<span style="font-size: 10px; color: ${theme === 'light' ? '#6b7280' : '#9ca3af'}">${s.grade} - ${s.section}</span>` : ''}
-                            </div>
-                         </div>`).join('');
-                }
+                }).join('');
+
+                studentsListHtml = `
+                    <table>
+                        <thead>
+                            <tr>
+                                <th style="width: 35px; text-align: center;">#</th>
+                                <th style="text-align: right;">اسم الطالب</th>
+                                <th style="width: 140px; text-align: center;">الصف والشعبة</th>
+                                ${theadThs}
+                                <th style="width: 120px; text-align: center;">التوقيع / الحضور</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${tbodyTrs}
+                        </tbody>
+                    </table>
+                `;
             } else {
-                studentsListHtml = '<div class="empty">لا يوجد طلاب</div>';
+                studentsListHtml = '<div style="padding: 20px; text-align: center; color: #94a3b8; font-size: 13px;">لا يوجد طلاب مشاركون مسجلون لهذا النشاط</div>';
             }
 
             const assetsListHtml = (event.assets && event.assets.length > 0)
                 ? event.assets.map(a => {
                     const name = assetMap[a] || a;
-                    return `<span class="asset-pill">${name}</span>`;
-                }).join('')
-                : `<div class="empty" style="color: ${t.textSec}; font-size: 12px;">لا توجد موارد أو أدوات مسجلة لهذا النشاط</div>`;
+                    return `<span style="display: inline-block; background: #fffbeb; color: #92400e; border: 1px solid #fcd34d; padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 600;">${name}</span>`;
+                }).join(' ')
+                : `<div style="color: #64748b; font-size: 12px;">لا توجد موارد أو أدوات مسجلة لهذا النشاط</div>`;
 
-            const statusBg = event.status === 'مكتمل'
-                ? (theme === 'dark' ? 'rgba(16, 185, 129, 0.2)' : '#ecfdf5') // green-900/20 vs green-50
-                : (theme === 'dark' ? 'rgba(107, 114, 128, 0.2)' : '#f3f4f6'); // gray-800/20 vs gray-100
+            const headerHtml = getOfficialReportHeaderHtml({
+                schoolInfo,
+                title: 'تقرير النشاط الطلابي',
+                subTitle: event.title,
+                centerDetails: [
+                    `المجال / النوع: ${event.type || 'عام'}`,
+                    `المقر: ${event.venue || 'المدرسة'}`
+                ],
+                leftDetails: [
+                    { label: 'التاريخ', value: event.formattedDate || event.date || new Date().toLocaleDateString('ar-SA') },
+                    { label: 'الوقت', value: event.time || '-' },
+                    { label: 'إجمالي المشاركين', value: `${event.studentsCount || sortedStudents.length} طالب` },
+                    { label: 'حالة النشاط', value: event.status || 'مكتمل' }
+                ]
+            });
 
-            // Adjust status text color for light mode readability if needed
-            const statusTextColor = event.status === 'مكتمل'
-                ? (theme === 'dark' ? '#34d399' : '#059669') // emerald-400 vs emerald-600
-                : (theme === 'dark' ? '#9ca3af' : '#4b5563'); // gray-400 vs gray-600
-
-
-            doc.write(`
+            const html = `
                 <!DOCTYPE html>
                 <html dir="rtl" lang="ar">
                 <head>
+                    <meta charset="UTF-8">
+                    <title>تقرير النشاط - ${event.title}</title>
                     <style>
-                        body {
-                            margin: 0;
-                            padding: 40px;
-                            background-color: ${t.bg};
-                            color: ${t.text};
-                            font-family: 'Arial', sans-serif;
-                        }
-                        h1 { margin: 0 0 5px 0; font-size: 28px; }
-                        p.type { color: #6366f1; font-size: 14px; margin-bottom: 30px; }
-                        .cards { display: flex; gap: 15px; margin-bottom: 30px; }
-                        .card { 
-                            flex: 1; 
-                            background: ${t.cardBg}; 
-                            border: 1px solid ${t.cardBorder}; 
-                            border-radius: 12px; 
-                            padding: 15px; 
-                            text-align: center; 
-                        }
-                        .card .label { color: ${t.textSec}; font-size: 12px; margin-bottom: 5px; }
-                        .card .value { font-weight: bold; font-size: 16px; }
-                        .status-badge { 
-                            padding: 4px 8px; 
-                            border-radius: 4px; 
-                            font-weight: bold; 
-                            font-size: 14px; 
-                            display: inline-block; 
-                            margin-top: 2px;
-                        }
-                        h3 { 
-                            font-size: 18px; 
-                            margin-bottom: 15px; 
-                            border-bottom: 1px solid ${t.footerBorder}; 
-                            padding-bottom: 10px; 
-                        }
-                        .list { 
-                            background: ${t.listBg}; 
-                            border: 1px solid ${t.listBorder}; 
-                            border-radius: 12px; 
-                            overflow: hidden; 
-                        }
-                        .item { 
-                            padding: 10px; 
-                            border-bottom: 1px solid ${t.itemBorder}; 
-                            color: ${theme === 'light' ? '#374151' : '#d1d5db'}; 
-                            display: flex; 
-                            align-items: center; 
-                        }
-                        .idx { 
-                            width: 30px; 
-                            color: ${t.textSec}; 
-                            text-align: center;
-                        }
-                        .asset-pill {
-                            display: inline-block;
-                            background: ${theme === 'light' ? '#fef3c7' : 'rgba(245, 158, 11, 0.15)'};
-                            color: ${theme === 'light' ? '#92400e' : '#fbbf24'};
-                            border: 1px solid ${theme === 'light' ? '#fde68a' : 'rgba(245, 158, 11, 0.3)'};
-                            padding: 5px 12px;
-                            border-radius: 6px;
-                            font-size: 12px;
-                            font-weight: 500;
-                        }
-                        .footer { 
-                            margin-top: 40px; 
-                            border-top: 1px solid ${t.footerBorder}; 
-                            padding-top: 20px; 
-                            color: ${t.textSec}; 
-                            font-size: 12px; 
-                            display: flex; 
-                            justify-content: space-between; 
-                        }
+                        ${getStandardPrintStyles(`
+                            .event-summary {
+                                display: grid;
+                                grid-template-columns: repeat(4, 1fr);
+                                gap: 12px;
+                                margin-bottom: 20px;
+                                page-break-inside: avoid !important;
+                                break-inside: avoid !important;
+                            }
+                            .event-summary-item {
+                                background: #f8fafc;
+                                border: 1px solid #e2e8f0;
+                                border-radius: 8px;
+                                padding: 10px 12px;
+                                text-align: center;
+                            }
+                            .event-summary-label {
+                                font-size: 11px;
+                                color: #64748b;
+                                font-weight: 700;
+                                margin-bottom: 4px;
+                            }
+                            .event-summary-val {
+                                font-size: 14px;
+                                font-weight: 800;
+                                color: #0f172a;
+                            }
+                        `)}
                     </style>
                 </head>
                 <body>
-                    <div style="text-align: right;">
-                        <h1>${event.title}</h1>
-                        <p class="type">${event.type}</p>
-                        
-                        <div class="cards">
-                            <div class="card">
-                                <div class="label">التاريخ</div>
-                                <div class="value">${event.formattedDate}</div>
-                            </div>
-                            <div class="card">
-                                <div class="label">الوقت</div>
-                                <div class="value">${event.time}</div>
-                            </div>
-                            <div class="card">
-                                <div class="label">المكان</div>
-                                <div class="value">${event.venue}</div>
-                            </div>
-                            <div class="card">
-                                <div class="label">الحالة</div>
-                                <span class="status-badge" style="background: ${statusBg}; color: ${statusTextColor};">
-                                    ${event.status}
-                                </span>
-                            </div>
-                        </div>
+                    ${headerHtml}
 
-                        <h3>الطلاب المشاركون (${event.studentsCount})</h3>
-                        <div class="list">
-                            ${studentsListHtml}
+                    <div class="event-summary">
+                        <div class="event-summary-item">
+                            <div class="event-summary-label">تاريخ النشاط</div>
+                            <div class="event-summary-val">${event.formattedDate || event.date}</div>
                         </div>
+                        <div class="event-summary-item">
+                            <div class="event-summary-label">الوقت المحدد</div>
+                            <div class="event-summary-val">${event.time || '-'}</div>
+                        </div>
+                        <div class="event-summary-item">
+                            <div class="event-summary-label">المقر / المكان</div>
+                            <div class="event-summary-val">${event.venue || '-'}</div>
+                        </div>
+                        <div class="event-summary-item">
+                            <div class="event-summary-label">حالة الفعالية</div>
+                            <div class="event-summary-val" style="color: ${event.status === 'مكتمل' ? '#059669' : '#d97706'}">${event.status || 'مكتمل'}</div>
+                        </div>
+                    </div>
 
-                        <h3 style="margin-top: 25px;">الموارد والأدوات المستخدمة (${event.assets?.length || 0})</h3>
-                        <div style="background: ${t.listBg}; border: 1px solid ${t.listBorder}; border-radius: 12px; padding: 14px; display: flex; flex-wrap: wrap; gap: 8px;">
+                    <div style="margin-bottom: 25px;">
+                        <h3 style="font-size: 14px; font-weight: 800; color: #1e293b; margin: 0 0 10px 0;">
+                            كشف بأسماء الطلاب المشاركين (${sortedStudents.length} طالب - مرتبين أبجدياً):
+                        </h3>
+                        ${studentsListHtml}
+                    </div>
+
+                    <div style="margin-bottom: 25px; page-break-inside: avoid !important; break-inside: avoid !important;">
+                        <h3 style="font-size: 13px; font-weight: 800; color: #1e293b; margin: 0 0 8px 0;">
+                            الموارد والأدوات المستخدمة (${event.assets?.length || 0}):
+                        </h3>
+                        <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; display: flex; flex-wrap: wrap; gap: 8px;">
                             ${assetsListHtml}
                         </div>
+                    </div>
 
-                        <div class="footer">
-                             <span>تم استخراج التقرير آلياً</span>
-                             <span style="font-family: monospace;">ID: ${event.id}</span>
+                    <div class="footer-signatures">
+                        <div class="sig-box">
+                            <div>المشرف على النشاط</div>
+                            <div>أ. ________________</div>
+                            <div class="sig-line"></div>
+                        </div>
+                        <div class="sig-box">
+                            <div>رائد النشاط الطلابي</div>
+                            <div>أ. ________________</div>
+                            <div class="sig-line"></div>
+                        </div>
+                        <div class="sig-box">
+                            <div>مدير المدرسة</div>
+                            <div>أ. ________________</div>
+                            <div class="sig-line"></div>
                         </div>
                     </div>
                 </body>
                 </html>
-            `);
-            doc.close();
+            `;
 
-            await new Promise(r => setTimeout(r, 100));
-
-            // --- SMART PAGINATION LOGIC ---
-            const pageHeightPx = 2262; // 800px * 2 (scale) -> A4 Ratio = ~2262px height
-            const items = doc.querySelectorAll('.item'); // Target student rows
-
-            items.forEach(item => {
-                const rect = item.getBoundingClientRect();
-                const top = rect.top + window.scrollY; // Handle relative to doc
-                const height = rect.height;
-
-                const startPage = Math.floor(top / pageHeightPx);
-                const endPage = Math.floor((top + height) / pageHeightPx);
-
-                if (endPage > startPage) {
-                    // Item crosses page boundary -> Push to next page start
-                    const nextPageStart = endPage * pageHeightPx;
-                    const push = nextPageStart - top + 40; // +40px safe margin (header/padding)
-                    item.style.marginTop = `${push}px`;
-                }
-            });
-
-            // 3. Capture Iframe Body
-            const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
-                import('html2canvas'),
-                import('jspdf')
-            ]);
-            await import('jspdf-autotable');
-
-            const canvas = await html2canvas(doc.body, {
-                scale: 2,
-                useCORS: true,
-                backgroundColor: t.bg,
-                logging: false,
-                windowWidth: 800,
-                windowHeight: 1200
-            });
-
-            // 4. Clean up
-            document.body.removeChild(iframe);
-
-            // OPTIMIZATION: JPEG 0.75 quality reduction
-            const imgData = canvas.toDataURL('image/jpeg', 0.70);
-            const imgWidth = 595.28;
-            const pageHeight = 841.89;
-            const imgHeight = (canvas.height * imgWidth) / canvas.width;
-
-            const pdf = new jsPDF('p', 'pt', 'a4');
-
-            let heightLeft = imgHeight;
-            let position = 0;
-
-            // First Page
-            pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
-            heightLeft -= pageHeight;
-
-            // Subsequent Pages
-            while (heightLeft > 0) {
-                position -= pageHeight;
-                pdf.addPage();
-                pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
-                heightLeft -= pageHeight;
-            }
-
-            pdf.save(`Activity_${event.title}_${theme}.pdf`);
-
-            toast.success("تم تحميل تقرير النشاط", { id: toastId });
+            toast.dismiss(toastId);
+            await printHtmlDocument(html, `تقرير_${event.title}`);
         } catch (error) {
-            console.error("PDF Fail:", error);
-            toast.error("فشل في إنشاء ملف PDF", { id: toastId });
+            console.error("Print fail:", error);
+            toast.error("فشل في تجهيز ملف الطباعة", { id: toastId });
         }
     };
 
