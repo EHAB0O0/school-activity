@@ -5,7 +5,7 @@ import {
     Clock, CheckSquare, Square, RefreshCw, Calendar, Link2,
     UserPlus, ArrowRightLeft, Sparkles, Filter, ChevronDown, Check,
     Phone, GraduationCap, AlertCircle, Award, UserX, ExternalLink, HelpCircle,
-    Zap, Users
+    Zap, Users, FileText, GitMerge
 } from 'lucide-react';
 import { db } from '../../firebase';
 import {
@@ -24,6 +24,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
     const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
     const [submissions, setSubmissions] = useState([]);
     const [students, setStudents] = useState([]);
+    const [linkedEvent, setLinkedEvent] = useState(null); // Real-time data of the linked event
     const [loading, setLoading] = useState(true);
     const [isApproving, setIsApproving] = useState(false);
     const processingSubIdsRef = useRef(new Set());
@@ -43,6 +44,8 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
     const [chosenStudentOverride, setChosenStudentOverride] = useState(null); // Manually picked student
     const [reassignSearchQuery, setReassignSearchQuery] = useState('');
     const [showManualReassign, setShowManualReassign] = useState(false);
+    const [customFieldValues, setCustomFieldValues] = useState({}); // Custom participant fields values in approval modal
+    const activeSubKeyRef = useRef('');
 
     // Real-time Submissions Listener
     useEffect(() => {
@@ -85,6 +88,26 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
         }
         fetchStudents();
     }, [isOpen]);
+
+    // Real-time listener for linked event to track participants & custom participantDetails
+    useEffect(() => {
+        if (!isOpen || !link?.eventId) {
+            setLinkedEvent(null);
+            return;
+        }
+
+        const unsub = onSnapshot(doc(db, 'events', link.eventId), (docSnap) => {
+            if (docSnap.exists()) {
+                setLinkedEvent({ id: docSnap.id, ...docSnap.data() });
+            } else {
+                setLinkedEvent(null);
+            }
+        }, (err) => {
+            console.error("Error listening to linked event:", err);
+        });
+
+        return () => unsub();
+    }, [isOpen, link?.eventId]);
 
     // Sync link count with approved count
     useEffect(() => {
@@ -273,17 +296,90 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                 existingSection: matchedStudent?.section || '',
                 existingPhone: matchedStudent?.phone || '',
                 existingPoints: Number(matchedStudent?.totalPoints) || 0,
+                isAlreadyInEvent: Boolean(matchedStudent && linkedEvent?.participatingStudents?.includes(matchedStudent.id)),
+                existingEventDetails: (matchedStudent && linkedEvent?.participantDetails?.[matchedStudent.id]) || null,
+                hasCustomFieldMergeConflict: Boolean(
+                    matchedStudent &&
+                    linkedEvent?.participatingStudents?.includes(matchedStudent.id) &&
+                    linkedEvent?.participantDetails?.[matchedStudent.id] &&
+                    Object.entries(linkedEvent.participantDetails[matchedStudent.id]).some(([lbl, existingVal]) => {
+                        if (!existingVal || !String(existingVal).trim()) return false;
+                        const incomingVal = sub.customValues?.[lbl] ||
+                            (link?.customFields || []).find(f => f.label === lbl)?.id && sub.customValues?.[(link?.customFields || []).find(f => f.label === lbl).id] ||
+                            sub.customFieldValue || '';
+                        return Boolean(incomingVal && String(incomingVal).trim() && String(incomingVal).trim() !== String(existingVal).trim());
+                    })
+                ),
                 candidates
             };
         });
 
         return map;
-    }, [submissions, students]);
+    }, [submissions, students, linkedEvent, link?.customFields]);
 
     // Parse custom fields (backward compatible)
     const customFields = Array.isArray(link?.customFields) && link.customFields.length > 0
         ? link.customFields
         : (link?.customFieldLabel ? [{ id: 'f_legacy', label: link.customFieldLabel, required: !!link.customFieldRequired }] : []);
+
+    // Initialize customFieldValues when opening or changing studentActionSub modal
+    useEffect(() => {
+        if (!studentActionSub) {
+            activeSubKeyRef.current = '';
+            setCustomFieldValues({});
+            return;
+        }
+
+        const sub = studentActionSub;
+        const dupInfo = duplicateMap[sub.id] || {};
+        const matchedStudent = chosenStudentOverride || dupInfo.matchedStudent;
+        const studentId = matchedStudent?.id || 'new';
+        const currentKey = `${sub.id}_${studentId}_${linkedEvent?.id || ''}`;
+
+        // Initialize only when active student/submission changes to preserve in-progress user typing
+        if (activeSubKeyRef.current !== currentKey) {
+            activeSubKeyRef.current = currentKey;
+            const existingDetails = (studentId !== 'new' && linkedEvent?.participantDetails?.[studentId]) || {};
+            const initialValues = {};
+            const fieldsList = customFields.length > 0
+                ? customFields
+                : (link?.customFieldLabel ? [{ id: 'f_legacy', label: link.customFieldLabel }] : []);
+
+            fieldsList.forEach((f, idx) => {
+                const label = f.label;
+                const existingVal = String(existingDetails[label] || existingDetails[f.id] || '').trim();
+                const incomingVal = String(
+                    sub.customValues?.[f.id] ??
+                    sub.customValues?.[label] ??
+                    (idx === 0 ? (sub.customFieldValue ?? '') : '')
+                ).trim();
+
+                if (existingVal && incomingVal) {
+                    if (existingVal === incomingVal || existingVal.includes(incomingVal)) {
+                        initialValues[label] = existingVal;
+                    } else if (incomingVal.includes(existingVal)) {
+                        initialValues[label] = incomingVal;
+                    } else {
+                        // Merge with Arabic comma automatically as requested
+                        initialValues[label] = `${existingVal}، ${incomingVal}`;
+                    }
+                } else if (existingVal) {
+                    initialValues[label] = existingVal;
+                } else {
+                    initialValues[label] = incomingVal;
+                }
+            });
+
+            // Extra existing fields from event that are not in fieldsList
+            Object.keys(existingDetails).forEach(label => {
+                if (!(label in initialValues)) {
+                    initialValues[label] = String(existingDetails[label] || '').trim();
+                }
+            });
+
+            setCustomFieldValues(initialValues);
+        }
+    }, [studentActionSub, chosenStudentOverride, linkedEvent, customFields, link?.customFieldLabel, duplicateMap]);
 
     // Parse specializations display
     const specializationsDisplay = Array.isArray(link?.specializations) && link.specializations.length > 0
@@ -421,7 +517,8 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
         createProfile = false,
         eventOnly = false,
         customPoints = null,
-        timingOverride = null
+        timingOverride = null,
+        resolvedCustomFields = null
     }) => {
         if (!sub || !sub.id || processingSubIdsRef.current.has(sub.id) || isApproving) {
             return;
@@ -543,20 +640,50 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                     eventUpdates[`combineLinkStudents.${studentId}`] = true;
                 }
 
-                const customFieldsList = link.customFields || [];
-                const detailsForStudent = {};
-                if (sub.customValues && typeof sub.customValues === 'object') {
-                    Object.entries(sub.customValues).forEach(([fId, val]) => {
-                        const matchedField = customFieldsList.find(f => f.id === fId);
-                        const label = matchedField?.label || fId;
+                // Merge participant details with existing details from linkedEvent
+                const existingStudentDetails = (studentId && linkedEvent?.participantDetails?.[studentId]) || {};
+                const detailsForStudent = { ...existingStudentDetails };
+
+                if (resolvedCustomFields && typeof resolvedCustomFields === 'object') {
+                    // Use resolved fields from approval modal (contains user's approved/edited/comma-merged text)
+                    Object.entries(resolvedCustomFields).forEach(([label, val]) => {
                         if (val !== undefined && val !== null && String(val).trim()) {
-                            detailsForStudent[label] = val;
+                            detailsForStudent[label] = String(val).trim();
                         }
                     });
-                }
-                if (Object.keys(detailsForStudent).length === 0 && sub.customFieldValue) {
-                    const fallbackLabel = customFieldsList[0]?.label || 'ملاحظات / الدور';
-                    detailsForStudent[fallbackLabel] = sub.customFieldValue;
+                } else {
+                    // Fallback / direct approval without modal: merge automatic with comma
+                    const customFieldsList = link.customFields || [];
+                    const incomingDetails = {};
+                    if (sub.customValues && typeof sub.customValues === 'object') {
+                        Object.entries(sub.customValues).forEach(([fId, val]) => {
+                            const matchedField = customFieldsList.find(f => f.id === fId);
+                            const label = matchedField?.label || fId;
+                            if (val !== undefined && val !== null && String(val).trim()) {
+                                incomingDetails[label] = String(val).trim();
+                            }
+                        });
+                    }
+                    if (Object.keys(incomingDetails).length === 0 && sub.customFieldValue) {
+                        const fallbackLabel = customFieldsList[0]?.label || link.customFieldLabel || 'ملاحظات / الدور';
+                        incomingDetails[fallbackLabel] = String(sub.customFieldValue).trim();
+                    }
+
+                    // Auto merge with Arabic comma
+                    Object.entries(incomingDetails).forEach(([label, incomingVal]) => {
+                        const existingVal = String(detailsForStudent[label] || '').trim();
+                        if (existingVal && incomingVal) {
+                            if (existingVal === incomingVal || existingVal.includes(incomingVal)) {
+                                detailsForStudent[label] = existingVal;
+                            } else if (incomingVal.includes(existingVal)) {
+                                detailsForStudent[label] = incomingVal;
+                            } else {
+                                detailsForStudent[label] = `${existingVal}، ${incomingVal}`;
+                            }
+                        } else {
+                            detailsForStudent[label] = incomingVal || existingVal;
+                        }
+                    });
                 }
 
                 if (Object.keys(detailsForStudent).length > 0) {
@@ -573,7 +700,8 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                 approvalMode: eventOnly ? 'event_only' : createProfile ? 'new_profile' : updateProfile ? 'profile_updated' : 'linked',
                 deferredPoints: isDeferred,
                 pendingPoints: isDeferred ? rawPoints : 0,
-                pointsAwarded: pointsToAwardNow
+                pointsAwarded: pointsToAwardNow,
+                ...(resolvedCustomFields ? { resolvedCustomValues: resolvedCustomFields } : {})
             });
 
             if (isDeferred) {
@@ -588,6 +716,9 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
             setShowManualReassign(false);
             setReassignSearchQuery('');
             setActionPointsOverride(null);
+            setActionTimingOverride(null);
+            setCustomFieldValues({});
+            activeSubKeyRef.current = '';
         } catch (err) {
             console.error("Approve error:", err);
             toast.error("فشل في اعتماد الطالب: " + err.message);
@@ -795,20 +926,39 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                 subsToApprove.forEach(({ sub, studentId }) => {
                     if (!studentId) return;
 
-                    const detailsForStudent = {};
+                    const existingForStudent = linkedEvent?.participantDetails?.[studentId] || {};
+                    const detailsForStudent = { ...existingForStudent };
+
+                    const incomingDetails = {};
                     if (sub.customValues && typeof sub.customValues === 'object') {
                         Object.entries(sub.customValues).forEach(([fId, val]) => {
                             const matchedField = customFieldsList.find(f => f.id === fId);
                             const label = matchedField?.label || fId;
                             if (val !== undefined && val !== null && String(val).trim()) {
-                                detailsForStudent[label] = val;
+                                incomingDetails[label] = String(val).trim();
                             }
                         });
                     }
-                    if (Object.keys(detailsForStudent).length === 0 && sub.customFieldValue) {
-                        const fallbackLabel = customFieldsList[0]?.label || 'ملاحظات / الدور';
-                        detailsForStudent[fallbackLabel] = sub.customFieldValue;
+                    if (Object.keys(incomingDetails).length === 0 && sub.customFieldValue) {
+                        const fallbackLabel = customFieldsList[0]?.label || link.customFieldLabel || 'ملاحظات / الدور';
+                        incomingDetails[fallbackLabel] = String(sub.customFieldValue).trim();
                     }
+
+                    // Auto merge with Arabic comma
+                    Object.entries(incomingDetails).forEach(([label, incomingVal]) => {
+                        const existingVal = String(detailsForStudent[label] || '').trim();
+                        if (existingVal && incomingVal) {
+                            if (existingVal === incomingVal || existingVal.includes(incomingVal)) {
+                                detailsForStudent[label] = existingVal;
+                            } else if (incomingVal.includes(existingVal)) {
+                                detailsForStudent[label] = incomingVal;
+                            } else {
+                                detailsForStudent[label] = `${existingVal}، ${incomingVal}`;
+                            }
+                        } else {
+                            detailsForStudent[label] = incomingVal || existingVal;
+                        }
+                    });
 
                     if (Object.keys(detailsForStudent).length > 0) {
                         eventUpdates[`participantDetails.${studentId}`] = detailsForStudent;
@@ -1453,6 +1603,18 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                                             </span>
                                                         )}
 
+                                                        {dupInfo.hasCustomFieldMergeConflict && (
+                                                            <span className="text-[11px] px-2 py-0.5 rounded-md bg-amber-950/80 border border-amber-500/60 text-amber-300 font-semibold flex items-center gap-1 animate-pulse">
+                                                                <GitMerge size={11} className="text-amber-400" /> دمج نصوص بالفعالية
+                                                            </span>
+                                                        )}
+
+                                                        {dupInfo.isAlreadyInEvent && !dupInfo.hasCustomFieldMergeConflict && (
+                                                            <span className="text-[11px] px-2 py-0.5 rounded-md bg-indigo-950/70 border border-indigo-700/50 text-indigo-300 font-semibold flex items-center gap-1">
+                                                                <Calendar size={11} /> مسجل بالفعالية مسبقاً
+                                                            </span>
+                                                        )}
+
                                                         {/* Status Badge */}
                                                         <span className={`text-[11px] px-2 py-0.5 rounded-md font-bold ${
                                                             sub.status === 'approved'
@@ -1529,20 +1691,22 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                                         setStudentActionSub(sub);
                                                     }}
                                                     className={`px-2.5 py-1.5 rounded-lg border text-xs font-bold flex items-center gap-1.5 transition-all ${
-                                                        dupInfo.hasDiscrepancy
+                                                        dupInfo.hasCustomFieldMergeConflict
+                                                            ? 'bg-amber-600/30 hover:bg-amber-600/40 border-amber-500 text-amber-200 ring-2 ring-amber-500/20 animate-pulse'
+                                                            : dupInfo.hasDiscrepancy
                                                             ? 'bg-amber-600/25 hover:bg-amber-600/40 border-amber-500/50 text-amber-300'
                                                             : !dupInfo.matchedStudent
                                                             ? 'bg-purple-600/25 hover:bg-purple-600/40 border-purple-500/50 text-purple-300'
                                                             : 'bg-indigo-600/20 hover:bg-indigo-600/30 border-indigo-500/30 text-indigo-300'
                                                     }`}
-                                                    title="خيارات التعامل والربط الذكي"
+                                                    title={dupInfo.hasCustomFieldMergeConflict ? "يوجد نص سابق بالفعالية بحاجة لمراجعة أو دمج" : "خيارات التعامل والربط الذكي"}
                                                 >
-                                                    <Sparkles size={14} />
-                                                    <span>خيارات التعامل</span>
+                                                    {dupInfo.hasCustomFieldMergeConflict ? <GitMerge size={14} className="text-amber-400" /> : <Sparkles size={14} />}
+                                                    <span>{dupInfo.hasCustomFieldMergeConflict ? "دمج النصوص" : "خيارات التعامل"}</span>
                                                 </button>
 
-                                                {/* Direct Fast Approve if already matched with no discrepancy */}
-                                                {sub.status !== 'approved' && dupInfo.matchedStudent && !dupInfo.hasDiscrepancy && (
+                                                {/* Direct Fast Approve if already matched with no discrepancy & no merge conflict */}
+                                                {sub.status !== 'approved' && dupInfo.matchedStudent && !dupInfo.hasDiscrepancy && !dupInfo.hasCustomFieldMergeConflict && (
                                                     <button
                                                         type="button"
                                                         disabled={isApproving}
@@ -1727,6 +1891,34 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                     const subPhone = normalizePhone(sub.phone);
                     const stuPhone = normalizePhone(matchedStudent?.phone);
                     const isPhoneMatch = !matchedStudent || !subPhone || !stuPhone || subPhone === stuPhone;
+
+                    // Custom fields to display and edit
+                    const fieldsToDisplay = (() => {
+                        const list = [];
+                        const seenLabels = new Set();
+
+                        if (customFields && customFields.length > 0) {
+                            customFields.forEach(f => {
+                                list.push({ id: f.id, label: f.label });
+                                seenLabels.add(f.label);
+                            });
+                        } else if (link?.customFieldLabel) {
+                            list.push({ id: 'f_legacy', label: link.customFieldLabel });
+                            seenLabels.add(link.customFieldLabel);
+                        }
+
+                        // Also include any fields from linkedEvent?.participantDetails?.[studentId]
+                        if (matchedStudent?.id && linkedEvent?.participantDetails?.[matchedStudent.id]) {
+                            Object.keys(linkedEvent.participantDetails[matchedStudent.id]).forEach(lbl => {
+                                if (!seenLabels.has(lbl)) {
+                                    list.push({ id: lbl, label: lbl });
+                                    seenLabels.add(lbl);
+                                }
+                            });
+                        }
+
+                        return list;
+                    })();
 
                     return (
                         <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 overflow-y-auto animate-in fade-in">
@@ -1946,6 +2138,144 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                     )}
                                 </div>
 
+                                {/* Custom Participant Fields & Text Merging Box */}
+                                {fieldsToDisplay.length > 0 && (
+                                    <div className="bg-slate-950/70 rounded-xl border border-slate-800 p-3.5 space-y-3">
+                                        <div className="flex items-center justify-between flex-wrap gap-2">
+                                            <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                                                <FileText size={14} className="text-indigo-400" />
+                                                <span>بيانات ونصوص المشاركة المخصصة بالفعالية:</span>
+                                            </label>
+                                            {fieldsToDisplay.some(f => {
+                                                const ex = String(linkedEvent?.participantDetails?.[matchedStudent?.id]?.[f.label] || '').trim();
+                                                const inc = String(sub.customValues?.[f.id] || sub.customValues?.[f.label] || (fieldsToDisplay[0]?.label === f.label ? sub.customFieldValue : '') || '').trim();
+                                                return ex && inc && ex !== inc;
+                                            }) && (
+                                                <span className="text-[11px] px-2.5 py-0.5 rounded-full font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30 flex items-center gap-1">
+                                                    <GitMerge size={12} className="text-amber-400" />
+                                                    <span>تم دمج النصين بفاصلة تلقائياً</span>
+                                                </span>
+                                            )}
+                                        </div>
+
+                                        <div className="space-y-3">
+                                            {fieldsToDisplay.map((field) => {
+                                                const fieldLabel = field.label;
+                                                const existingVal = String(linkedEvent?.participantDetails?.[matchedStudent?.id]?.[fieldLabel] || '').trim();
+                                                const incomingVal = String(
+                                                    sub.customValues?.[field.id] ??
+                                                    sub.customValues?.[fieldLabel] ??
+                                                    (fieldsToDisplay[0]?.label === fieldLabel ? (sub.customFieldValue ?? '') : '')
+                                                ).trim();
+                                                const hasBoth = Boolean(existingVal && incomingVal && existingVal !== incomingVal);
+                                                const mergedAutoText = hasBoth ? `${existingVal}، ${incomingVal}` : (incomingVal || existingVal);
+                                                const currentVal = customFieldValues[fieldLabel] !== undefined ? customFieldValues[fieldLabel] : mergedAutoText;
+
+                                                return (
+                                                    <div key={fieldLabel} className="bg-slate-900/90 border border-slate-800 rounded-xl p-3 space-y-2">
+                                                        <div className="flex items-center justify-between flex-wrap gap-1.5">
+                                                            <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                                                                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400"></span>
+                                                                <span>{fieldLabel}:</span>
+                                                            </span>
+                                                            {hasBoth && (
+                                                                <span className="text-[10px] text-amber-300 font-semibold px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/20">
+                                                                    تحديث وإضافة للمسجل مسبقاً
+                                                                </span>
+                                                            )}
+                                                        </div>
+
+                                                        {/* Breakdown banner if student already had text in this event */}
+                                                        {hasBoth && (
+                                                            <div className="p-2.5 rounded-lg bg-amber-950/40 border border-amber-500/30 text-xs space-y-1.5">
+                                                                <div className="flex items-center gap-1 text-[11px] font-bold text-amber-300">
+                                                                    <AlertCircle size={13} />
+                                                                    <span>الطالب لديه نص مسجل مسبقاً في هذه الفعالية:</span>
+                                                                </div>
+                                                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
+                                                                    <div className="bg-slate-900/80 p-1.5 rounded border border-slate-700/60">
+                                                                        <span className="text-slate-400 block text-[10px]">النص السابق بالفعالية:</span>
+                                                                        <span className="font-semibold text-slate-200">{existingVal}</span>
+                                                                    </div>
+                                                                    <div className="bg-slate-900/80 p-1.5 rounded border border-indigo-500/30">
+                                                                        <span className="text-indigo-400 block text-[10px]">النص الجديد من الرابط:</span>
+                                                                        <span className="font-semibold text-indigo-200">{incomingVal}</span>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        )}
+
+                                                        {/* Editable Text Area / Input */}
+                                                        <div className="space-y-1.5">
+                                                            <input
+                                                                type="text"
+                                                                value={currentVal}
+                                                                onChange={(e) => setCustomFieldValues(prev => ({
+                                                                    ...prev,
+                                                                    [fieldLabel]: e.target.value
+                                                                }))}
+                                                                placeholder={`أدخل نص ${fieldLabel}...`}
+                                                                className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-indigo-500 font-medium"
+                                                            />
+
+                                                            {/* Quick selection chips */}
+                                                            {hasBoth && (
+                                                                <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                                                                    <span className="text-[10px] text-slate-400">خيارات سريعة:</span>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => setCustomFieldValues(prev => ({
+                                                                            ...prev,
+                                                                            [fieldLabel]: `${existingVal}، ${incomingVal}`
+                                                                        }))}
+                                                                        className={`px-2 py-0.5 rounded text-[11px] font-semibold border transition-all ${
+                                                                            currentVal === `${existingVal}، ${incomingVal}`
+                                                                                ? 'bg-indigo-600 border-indigo-500 text-white font-bold shadow-sm'
+                                                                                : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-300'
+                                                                        }`}
+                                                                    >
+                                                                        ✓ دمج بفاصلة ({existingVal}، {incomingVal})
+                                                                    </button>
+
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => setCustomFieldValues(prev => ({
+                                                                            ...prev,
+                                                                            [fieldLabel]: existingVal
+                                                                        }))}
+                                                                        className={`px-2 py-0.5 rounded text-[11px] font-semibold border transition-all ${
+                                                                            currentVal === existingVal
+                                                                                ? 'bg-amber-600/30 border-amber-500 text-amber-200 font-bold'
+                                                                                : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-300'
+                                                                        }`}
+                                                                    >
+                                                                        النص السابق فقط ({existingVal})
+                                                                    </button>
+
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => setCustomFieldValues(prev => ({
+                                                                            ...prev,
+                                                                            [fieldLabel]: incomingVal
+                                                                        }))}
+                                                                        className={`px-2 py-0.5 rounded text-[11px] font-semibold border transition-all ${
+                                                                            currentVal === incomingVal
+                                                                                ? 'bg-indigo-600/30 border-indigo-500 text-indigo-200 font-bold'
+                                                                                : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-300'
+                                                                        }`}
+                                                                    >
+                                                                        النص الجديد فقط ({incomingVal})
+                                                                    </button>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                )}
+
                                 {/* Action Options */}
                                 <div className="space-y-2 pt-1">
                                     <div className="flex items-center justify-between">
@@ -1970,7 +2300,8 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                                 createProfile: false,
                                                 eventOnly: false,
                                                 customPoints: rawPoints,
-                                                timingOverride: effectiveTiming
+                                                timingOverride: effectiveTiming,
+                                                resolvedCustomFields: customFieldValues
                                             })}
                                             className="w-full p-3 rounded-xl bg-emerald-600/15 hover:bg-emerald-600/25 disabled:opacity-50 disabled:cursor-not-allowed border border-emerald-500/40 text-right text-xs text-white flex flex-col gap-1 transition-all group cursor-pointer"
                                         >
@@ -1999,7 +2330,8 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                                 createProfile: false,
                                                 eventOnly: false,
                                                 customPoints: rawPoints,
-                                                timingOverride: effectiveTiming
+                                                timingOverride: effectiveTiming,
+                                                resolvedCustomFields: customFieldValues
                                             })}
                                             className="w-full p-3 rounded-xl bg-amber-600/15 hover:bg-amber-600/25 disabled:opacity-50 disabled:cursor-not-allowed border border-amber-500/40 text-right text-xs text-white flex flex-col gap-1 transition-all group cursor-pointer"
                                         >
@@ -2027,7 +2359,8 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                             createProfile: false,
                                             eventOnly: true,
                                             customPoints: 0,
-                                            timingOverride: 'immediate'
+                                            timingOverride: 'immediate',
+                                            resolvedCustomFields: customFieldValues
                                         })}
                                         className="w-full p-3 rounded-xl bg-slate-800 hover:bg-slate-750 disabled:opacity-50 disabled:cursor-not-allowed border border-slate-700 text-right text-xs text-white flex flex-col gap-1 transition-all cursor-pointer"
                                     >
@@ -2051,7 +2384,8 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                             createProfile: true,
                                             eventOnly: false,
                                             customPoints: rawPoints,
-                                            timingOverride: effectiveTiming
+                                            timingOverride: effectiveTiming,
+                                            resolvedCustomFields: customFieldValues
                                         })}
                                         className={`w-full p-3 rounded-xl border text-right text-xs text-white flex flex-col gap-1 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
                                             !matchedStudent
