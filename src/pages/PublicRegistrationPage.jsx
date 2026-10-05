@@ -389,6 +389,48 @@ export default function PublicRegistrationPage() {
         toast.success('تم إلغاء خيار "غير معروف" واستعادة الصفوف لجميع الطلاب');
     };
 
+    // Rapid Entry row management helpers
+    const handleAddRapidRow = (count = 1) => {
+        const allCurrentlyUnknown = rapidRows.length > 0 && rapidRows.every(r => r.isGradeUnknown);
+        const defaultGrade = gradeOptions[0] || '';
+        const defaultSection = getSectionOptions(defaultGrade)[0] || '1';
+        const newRows = Array.from({ length: count }, () => ({
+            studentName: '',
+            isGradeUnknown: allCurrentlyUnknown,
+            grade: allCurrentlyUnknown ? 'غير معروف' : defaultGrade,
+            section: allCurrentlyUnknown ? '' : defaultSection,
+            customValues: {},
+            phone: ''
+        }));
+        setRapidRows(prev => [...prev, ...newRows]);
+    };
+
+    const handleRemoveEmptyRapidRows = () => {
+        const filled = rapidRows.filter(r => r.studentName && r.studentName.trim().length > 0);
+        if (filled.length === 0) {
+            const defaultGrade = gradeOptions[0] || '';
+            const defaultSection = getSectionOptions(defaultGrade)[0] || '1';
+            setRapidRows([{
+                studentName: '',
+                isGradeUnknown: false,
+                grade: defaultGrade,
+                section: defaultSection,
+                customValues: {},
+                phone: ''
+            }]);
+            toast('تمت إعادة تعيين القائمة إلى سطر فارغ واحد', { icon: 'ℹ️' });
+            return;
+        }
+        const removedCount = rapidRows.length - filled.length;
+        setRapidRows(filled);
+        toast.success(`تم حذف ${removedCount} سطر فارغ`);
+    };
+
+    // Rapid Entry live metrics
+    const totalRapidRows = rapidRows.length;
+    const filledRapidRows = rapidRows.filter(r => r.studentName && r.studentName.trim().length > 0).length;
+    const emptyRapidRows = totalRapidRows - filledRapidRows;
+
     // Submit Rapid Entries
     const handleSaveRapid = async () => {
         const validRows = rapidRows.filter(r => r.studentName.trim().length > 0);
@@ -540,8 +582,8 @@ export default function PublicRegistrationPage() {
                 </div>
 
                 {/* Campaign Main Card */}
-                <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6 relative overflow-hidden">
-                    <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-indigo-500 via-purple-500 to-amber-500" />
+                <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6 relative">
+                    <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-indigo-500 via-purple-500 to-amber-500 rounded-t-3xl" />
 
                     {/* Title & Subtitle */}
                     <div className="space-y-2">
@@ -928,6 +970,82 @@ export default function PublicRegistrationPage() {
                                     </div>
                                 </div>
 
+                                {/* الشريط الثابت العلوي: زر إضافة سطر ومؤشرات الأسطر المعبأة والفارغة */}
+                                <div className="sticky top-2 sm:top-4 z-20 bg-slate-900/95 backdrop-blur-md border border-slate-700/80 p-2.5 sm:p-3 rounded-2xl shadow-xl shadow-black/40 flex flex-wrap items-center justify-between gap-2.5">
+                                    {/* أزرار الإضافة السريعة */}
+                                    <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                                        <button
+                                            type="button"
+                                            onClick={() => handleAddRapidRow(1)}
+                                            className="px-3.5 py-1.5 sm:py-2 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white rounded-xl text-xs font-bold shadow-md shadow-indigo-600/30 flex items-center gap-1.5 transition-all"
+                                            title="إضافة سطر طالب جديد"
+                                        >
+                                            <Plus size={15} className="stroke-[2.5]" />
+                                            <span>إضافة سطر</span>
+                                        </button>
+
+                                        <button
+                                            type="button"
+                                            onClick={() => handleAddRapidRow(5)}
+                                            className="px-2.5 py-1.5 sm:py-2 bg-slate-800 hover:bg-slate-700 active:scale-95 text-indigo-300 border border-indigo-500/30 rounded-xl text-xs font-semibold transition-all"
+                                            title="إضافة 5 أسطر دفعة واحدة"
+                                        >
+                                            +5 أسطر
+                                        </button>
+
+                                        {emptyRapidRows > 0 && (
+                                            <button
+                                                type="button"
+                                                onClick={handleRemoveEmptyRapidRows}
+                                                className="px-2.5 py-1.5 sm:py-2 bg-rose-500/10 hover:bg-rose-500/20 active:scale-95 text-rose-300 border border-rose-500/30 rounded-xl text-xs font-semibold flex items-center gap-1 transition-all"
+                                                title="حذف جميع الأسطر الفارغة"
+                                            >
+                                                <Trash2 size={13} />
+                                                <span>حذف الفاضي ({emptyRapidRows})</span>
+                                            </button>
+                                        )}
+                                    </div>
+
+                                    {/* عدادات الأسطر: الإجمالي، المليانين، الفاضيين */}
+                                    <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                                        {/* الإجمالي */}
+                                        <div className="flex items-center gap-1.5 px-2.5 py-1 sm:py-1.5 bg-slate-950/70 border border-slate-800 rounded-xl text-slate-300" title="إجمالي عدد الأسطر">
+                                            <span className="text-slate-400 text-[11px]">الأسطر:</span>
+                                            <span className="font-bold text-white font-mono text-xs">{totalRapidRows}</span>
+                                        </div>
+
+                                        {/* المليانين */}
+                                        <div className="flex items-center gap-1.5 px-2.5 py-1 sm:py-1.5 bg-emerald-500/15 border border-emerald-500/30 rounded-xl text-emerald-300" title="عدد الأسطر التي تم إدخال اسم الطالب بها">
+                                            <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0"></span>
+                                            <span className="text-[11px]">مليان:</span>
+                                            <span className="font-bold font-mono text-xs text-emerald-200">{filledRapidRows}</span>
+                                        </div>
+
+                                        {/* الفاضيين */}
+                                        <div className={`flex items-center gap-1.5 px-2.5 py-1 sm:py-1.5 border rounded-xl transition-colors ${
+                                            emptyRapidRows > 0
+                                                ? 'bg-amber-500/15 border-amber-500/30 text-amber-300'
+                                                : 'bg-slate-950/50 border-slate-800 text-slate-500'
+                                        }`} title="عدد الأسطر الفارغة">
+                                            <span className={`w-2 h-2 rounded-full shrink-0 ${emptyRapidRows > 0 ? 'bg-amber-400 animate-pulse' : 'bg-slate-600'}`}></span>
+                                            <span className="text-[11px]">فاضي:</span>
+                                            <span className={`font-bold font-mono text-xs ${emptyRapidRows > 0 ? 'text-amber-200' : 'text-slate-500'}`}>{emptyRapidRows}</span>
+                                        </div>
+
+                                        {/* حفظ سريع مباشر من الشريط الثابت */}
+                                        <button
+                                            type="button"
+                                            disabled={isSubmitting || filledRapidRows === 0}
+                                            onClick={handleSaveRapid}
+                                            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 sm:py-2 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white rounded-xl text-xs font-bold shadow-md shadow-emerald-600/30 transition-all disabled:opacity-40"
+                                            title="حفظ الأسطر المكتملة الآن"
+                                        >
+                                            <Save size={14} />
+                                            <span>حفظ ({filledRapidRows})</span>
+                                        </button>
+                                    </div>
+                                </div>
+
                                 <div className="space-y-2.5">
                                     {rapidRows.map((row, idx) => (
                                         <div key={idx} className="flex items-center gap-2 bg-slate-800/50 p-2.5 rounded-2xl border border-slate-800 flex-wrap sm:flex-nowrap">
@@ -1065,30 +1183,26 @@ export default function PublicRegistrationPage() {
                                     ))}
                                 </div>
 
-                                <div className="flex items-center justify-between pt-2">
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            const allCurrentlyUnknown = rapidRows.length > 0 && rapidRows.every(r => r.isGradeUnknown);
-                                            const defaultGrade = gradeOptions[0] || '';
-                                            const defaultSection = getSectionOptions(defaultGrade)[0] || '1';
-                                            setRapidRows([
-                                                ...rapidRows,
-                                                {
-                                                    studentName: '',
-                                                    isGradeUnknown: allCurrentlyUnknown,
-                                                    grade: allCurrentlyUnknown ? 'غير معروف' : defaultGrade,
-                                                    section: allCurrentlyUnknown ? '' : defaultSection,
-                                                    customValues: {},
-                                                    phone: ''
-                                                }
-                                            ]);
-                                        }}
-                                        className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors"
-                                    >
-                                        <Plus size={14} />
-                                        <span>إضافة سطر جديد</span>
-                                    </button>
+                                <div className="flex items-center justify-between pt-2 flex-wrap gap-2">
+                                    <div className="flex items-center gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => handleAddRapidRow(1)}
+                                            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                                        >
+                                            <Plus size={14} />
+                                            <span>إضافة سطر جديد</span>
+                                        </button>
+
+                                        <button
+                                            type="button"
+                                            onClick={() => handleAddRapidRow(5)}
+                                            className="px-3 py-2 bg-slate-800/60 hover:bg-slate-700 border border-slate-700/80 text-slate-300 rounded-xl text-xs font-medium transition-colors"
+                                            title="إضافة 5 أسطر جديدة دفعة واحدة"
+                                        >
+                                            +5 أسطر
+                                        </button>
+                                    </div>
 
                                     <button
                                         type="button"
@@ -1097,7 +1211,7 @@ export default function PublicRegistrationPage() {
                                         className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-indigo-600/30 flex items-center gap-2 transition-all disabled:opacity-50"
                                     >
                                         <Save size={16} />
-                                        <span>{isSubmitting ? "جاري الحفظ..." : "حفظ الكل دفعة واحدة"}</span>
+                                        <span>{isSubmitting ? "جاري الحفظ..." : `حفظ الكل دفعة واحدة (${filledRapidRows})`}</span>
                                     </button>
                                 </div>
                             </div>
