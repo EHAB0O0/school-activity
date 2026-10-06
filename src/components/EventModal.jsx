@@ -588,6 +588,26 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
         }
     };
 
+    const handleConfirmDone = () => {
+        const dateBase = formData.date || initialData?.date || format(new Date(), 'yyyy-MM-dd');
+        const startStr = formData.startTime?.includes(':') ? formData.startTime : '08:00';
+        const endStr = formData.endTime?.includes(':') ? formData.endTime : '09:00';
+        const start = new Date(`${dateBase}T${startStr}`);
+        const end = new Date(`${dateBase}T${endStr}`);
+
+        onSave({
+            ...initialData,
+            ...formData,
+            date: dateBase,
+            startTime: Timestamp.fromDate(start),
+            endTime: Timestamp.fromDate(end),
+            participatingStudents: formData.studentIds,
+            linkStudentIds: (formData.linkStudentIds || []).filter(id => formData.studentIds.includes(id)),
+            status: 'Done',
+            markDone: true
+        });
+    };
+
     if (!isOpen) return null;
 
     return (
@@ -1215,14 +1235,7 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                     {initialData?.id && initialData?.status !== 'Done' && (
                         <button
                             type="button"
-                            onClick={() => onSave({
-                                ...initialData,
-                                ...formData,
-                                participatingStudents: formData.studentIds,
-                                linkStudentIds: (formData.linkStudentIds || []).filter(id => formData.studentIds.includes(id)),
-                                status: 'Done',
-                                markDone: true
-                            })}
+                            onClick={handleConfirmDone}
                             className="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold shadow-lg flex items-center justify-center text-sm active:scale-[0.98] transition-transform"
                         >
                             <CheckCircle size={17} className="ml-1.5" />
@@ -1277,14 +1290,7 @@ export default function EventModal({ isOpen, onClose, initialData, onSave, onDel
                         {initialData?.id && initialData?.status !== 'Done' && (
                             <button
                                 type="button"
-                                onClick={() => onSave({
-                                    ...initialData,
-                                    ...formData,
-                                    participatingStudents: formData.studentIds,
-                                    linkStudentIds: (formData.linkStudentIds || []).filter(id => formData.studentIds.includes(id)),
-                                    status: 'Done',
-                                    markDone: true
-                                })}
+                                onClick={handleConfirmDone}
                                 className="px-4 py-2.5 sm:py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold shadow-lg flex items-center text-xs sm:text-sm"
                             >
                                 <CheckCircle size={16} className="ml-1" />

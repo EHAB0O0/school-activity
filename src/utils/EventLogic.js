@@ -1,4 +1,4 @@
-import { runTransaction, doc, collection, query, where, getDocs, writeBatch } from 'firebase/firestore';
+import { runTransaction, doc, collection, query, where, getDocs, writeBatch, Timestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { logPointsChange } from './pointsLedger';
 
@@ -171,6 +171,22 @@ export async function updateEventWithSmartSync(eventId, newData) {
 
             // Update the event itself
             const newLinkStudents = newData.linkStudentIds || currentServerData.linkStudentIds || [];
+            let finalStartTime = currentServerData.startTime;
+            if (newData.startTime?.toDate) {
+                finalStartTime = newData.startTime;
+            } else if (newData.date && newData.startTime) {
+                const timeStr = typeof newData.startTime === 'string' && newData.startTime.includes('T') ? newData.startTime.split('T')[1] : newData.startTime;
+                finalStartTime = Timestamp.fromDate(new Date(`${newData.date}T${timeStr}`));
+            }
+
+            let finalEndTime = currentServerData.endTime;
+            if (newData.endTime?.toDate) {
+                finalEndTime = newData.endTime;
+            } else if (newData.date && newData.endTime) {
+                const timeStr = typeof newData.endTime === 'string' && newData.endTime.includes('T') ? newData.endTime.split('T')[1] : newData.endTime;
+                finalEndTime = Timestamp.fromDate(new Date(`${newData.date}T${timeStr}`));
+            }
+
             const updatePayload = {
                 ...currentServerData,
                 ...newData,
@@ -181,8 +197,8 @@ export async function updateEventWithSmartSync(eventId, newData) {
                 venueId: newData.venueId ?? currentServerData.venueId ?? '',
                 title: newData.title ?? currentServerData.title ?? '',
                 date: newData.date ?? currentServerData.date ?? '',
-                startTime: newData.startTime ?? currentServerData.startTime ?? '',
-                endTime: newData.endTime ?? currentServerData.endTime ?? ''
+                startTime: finalStartTime,
+                endTime: finalEndTime
             };
             delete updatePayload.id;
             delete updatePayload.markDone;

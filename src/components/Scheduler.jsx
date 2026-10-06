@@ -70,13 +70,74 @@ export default function Scheduler() {
                 where('startTime', '<=', Timestamp.fromDate(end))
             );
 
-            // Add archived filter
-            // Note: Compound queries with status != 'archived' require index.
-            // Client-side filtering is easier here given small dataset
-            const querySnapshot = await getDocs(q);
-            const eventsData = querySnapshot.docs
-                .map(doc => ({ ...doc.data(), id: doc.id })) // Fix: id last to prevent overwrite by data().id (if null)
-                .filter(ev => ev.status !== 'archived');
+            const startDateStr = format(start, 'yyyy-MM-dd');
+            const endDateStr = format(end, 'yyyy-MM-dd');
+
+            let querySnapshotDocs = [];
+            try {
+                const querySnapshot = await getDocs(q);
+                querySnapshotDocs = querySnapshot.docs;
+            } catch (err) {
+                console.warn("Primary startTime query notice:", err);
+            }
+
+            let dateSnapshotDocs = [];
+            try {
+                const dateQ = query(
+                    collection(db, 'events'),
+                    where('date', '>=', startDateStr),
+                    where('date', '<=', endDateStr)
+                );
+                const dateSnapshot = await getDocs(dateQ);
+                dateSnapshotDocs = dateSnapshot.docs;
+            } catch (dateErr) {
+                console.warn("Secondary date query notice:", dateErr);
+            }
+
+            const docsMap = new Map();
+            querySnapshotDocs.forEach(d => {
+                docsMap.set(d.id, { ...d.data(), id: d.id });
+            });
+            dateSnapshotDocs.forEach(d => {
+                if (!docsMap.has(d.id)) {
+                    docsMap.set(d.id, { ...d.data(), id: d.id });
+                }
+            });
+
+            // Convert and auto-heal any event with non-Timestamp startTime
+            const eventsData = Array.from(docsMap.values())
+                .filter(ev => ev.status !== 'archived')
+                .map(ev => {
+                    let st = ev.startTime;
+                    let et = ev.endTime;
+                    let needsHealing = false;
+
+                    if (st && !st.toDate) {
+                        needsHealing = true;
+                        const timeStr = typeof st === 'string' && st.includes(':')
+                            ? (st.includes('T') ? st.split('T')[1] : st)
+                            : '08:00';
+                        const dStr = ev.date || startDateStr;
+                        st = Timestamp.fromDate(new Date(`${dStr}T${timeStr}`));
+                    }
+                    if (et && !et.toDate) {
+                        needsHealing = true;
+                        const timeStr = typeof et === 'string' && et.includes(':')
+                            ? (et.includes('T') ? et.split('T')[1] : et)
+                            : '09:00';
+                        const dStr = ev.date || startDateStr;
+                        et = Timestamp.fromDate(new Date(`${dStr}T${timeStr}`));
+                    }
+
+                    if (needsHealing && ev.id) {
+                        updateDoc(doc(db, 'events', ev.id), {
+                            startTime: st,
+                            endTime: et || st
+                        }).catch(e => console.warn("Could not auto-heal event timestamp:", e));
+                    }
+
+                    return { ...ev, startTime: st, endTime: et };
+                });
 
             setEvents(eventsData);
         } catch (error) {
@@ -217,11 +278,33 @@ export default function Scheduler() {
                     }
                 }
 
+                let finalStartTime = serverEvent.startTime;
+                if (eventData.startTime?.toDate) {
+                    finalStartTime = eventData.startTime;
+                } else if (eventData.date && eventData.startTime) {
+                    const timeStr = eventData.startTime.includes('T') ? eventData.startTime.split('T')[1] : eventData.startTime;
+                    finalStartTime = Timestamp.fromDate(new Date(`${eventData.date}T${timeStr}`));
+                } else if (serverEvent.startTime?.toDate) {
+                    finalStartTime = serverEvent.startTime;
+                }
+
+                let finalEndTime = serverEvent.endTime;
+                if (eventData.endTime?.toDate) {
+                    finalEndTime = eventData.endTime;
+                } else if (eventData.date && eventData.endTime) {
+                    const timeStr = eventData.endTime.includes('T') ? eventData.endTime.split('T')[1] : eventData.endTime;
+                    finalEndTime = Timestamp.fromDate(new Date(`${eventData.date}T${timeStr}`));
+                } else if (serverEvent.endTime?.toDate) {
+                    finalEndTime = serverEvent.endTime;
+                }
+
                 // --- PHASE 2: ALL WRITES (Only after all reads complete) ---
                 // 1. Update Event Document
                 const updatePayload = {
                     ...serverEvent,
                     ...eventData,
+                    startTime: finalStartTime,
+                    endTime: finalEndTime,
                     status: 'Done',
                     points: pointsToAward,
                     deferredPointsAwarded: true
