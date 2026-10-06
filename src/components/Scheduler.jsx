@@ -176,25 +176,21 @@ export default function Scheduler() {
         try {
             await runTransaction(db, async (transaction) => {
                 const eventRef = doc(db, 'events', eventData.id);
-                const pointsToAward = Number(eventData.points) || 10;
+                const eventSnap = await transaction.get(eventRef);
+                const serverEvent = eventSnap.exists() ? eventSnap.data() : {};
+                const pointsToAward = Number(eventData.points ?? serverEvent.points) || 10;
 
-                // 1. Update Event Status
-                transaction.update(eventRef, {
-                    status: 'Done',
-                    points: pointsToAward,
-                    deferredPointsAwarded: true
-                });
-
-                // 2. Award Points to Students
-                const linkStudents = eventData.linkStudentIds || [];
-                const deferredLinkStudents = eventData.deferredLinkStudents || {};
-                const combineLinkStudents = eventData.combineLinkStudents || {};
+                const linkStudents = eventData.linkStudentIds || serverEvent.linkStudentIds || [];
+                const deferredLinkStudents = eventData.deferredLinkStudents || serverEvent.deferredLinkStudents || {};
+                const combineLinkStudents = eventData.combineLinkStudents || serverEvent.combineLinkStudents || {};
 
                 // Map of studentId -> { points, isLink }
                 const awardMap = new Map();
 
+                const participantList = eventData.participatingStudents || serverEvent.participatingStudents || [];
+
                 // Non-link manual participants
-                (eventData.participatingStudents || []).forEach(id => {
+                participantList.forEach(id => {
                     if (!linkStudents.includes(id)) {
                         awardMap.set(id, { points: pointsToAward, isLink: false });
                     }
@@ -210,12 +206,35 @@ export default function Scheduler() {
                     awardMap.set(id, { points: pointsToAward, isLink: true });
                 });
 
+                // --- PHASE 1: ALL READS (Must execute before any writes) ---
+                const studentDocs = [];
                 for (const [studentId, { points: pts, isLink }] of awardMap.entries()) {
                     if (pts <= 0) continue;
                     const studentRef = doc(db, 'students', studentId);
                     const sSnap = await transaction.get(studentRef);
-                    if (!sSnap.exists()) continue;
+                    if (sSnap.exists()) {
+                        studentDocs.push({ studentId, studentRef, sSnap, pts, isLink });
+                    }
+                }
 
+                // --- PHASE 2: ALL WRITES (Only after all reads complete) ---
+                // 1. Update Event Document
+                const updatePayload = {
+                    ...serverEvent,
+                    ...eventData,
+                    status: 'Done',
+                    points: pointsToAward,
+                    deferredPointsAwarded: true
+                };
+                delete updatePayload.id;
+                delete updatePayload.markDone;
+                const cleanPayload = Object.fromEntries(
+                    Object.entries(updatePayload).filter(([_, v]) => v !== undefined)
+                );
+                transaction.update(eventRef, cleanPayload);
+
+                // 2. Update Student Points
+                for (const { studentId, studentRef, sSnap, pts, isLink } of studentDocs) {
                     const sData = sSnap.data();
                     const prev = Math.max(0, Number(sData.totalPoints) || 0);
                     const next = prev + pts;
@@ -232,12 +251,12 @@ export default function Scheduler() {
                         previousTotalPoints: prev,
                         newTotalPoints: next,
                         reason: isLink
-                            ? `إنجاز نشاط مسجل عبر رابط: ${eventData.title || ''}`
-                            : `مشاركة في نشاط: ${eventData.title || ''}`,
+                            ? `إنجاز نشاط مسجل عبر رابط: ${eventData.title || serverEvent.title || ''}`
+                            : `مشاركة في نشاط: ${eventData.title || serverEvent.title || ''}`,
                         actionType: 'activity_award',
                         eventId: eventData.id,
-                        eventTitle: eventData.title || '',
-                        eventType: eventData.typeName || ''
+                        eventTitle: eventData.title || serverEvent.title || '',
+                        eventType: eventData.typeName || serverEvent.typeName || ''
                     });
                 }
             });
@@ -337,7 +356,8 @@ export default function Scheduler() {
             await runTransaction(db, async (transaction) => {
                 const eventRef = doc(db, 'events', eventData.id);
 
-                // 1. Reverse Points (if requested)
+                // --- PHASE 1: READS ONLY ---
+                const studentDocs = [];
                 if (reversePoints) {
                     const pointsToDeduct = Number(eventData.points) || 10;
                     const linkStudents = eventData.linkStudentIds || [];
@@ -369,8 +389,15 @@ export default function Scheduler() {
                         if (pts <= 0) continue;
                         const studentRef = doc(db, 'students', studentId);
                         const sSnap = await transaction.get(studentRef);
-                        if (!sSnap.exists()) continue;
+                        if (sSnap.exists()) {
+                            studentDocs.push({ studentId, studentRef, sSnap, pts });
+                        }
+                    }
+                }
 
+                // --- PHASE 2: WRITES ONLY ---
+                if (reversePoints) {
+                    for (const { studentId, studentRef, sSnap, pts } of studentDocs) {
                         const sData = sSnap.data();
                         const prev = Math.max(0, Number(sData.totalPoints) || 0);
                         const next = Math.max(0, prev - pts); // Guaranteed non-negative

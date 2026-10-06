@@ -1,16 +1,18 @@
-import { runTransaction, doc } from 'firebase/firestore';
+import { runTransaction, doc, collection, query, where, getDocs, writeBatch } from 'firebase/firestore';
 import { db } from '../firebase';
-import { logPointsChange, clampPoints } from './pointsLedger';
+import { logPointsChange } from './pointsLedger';
 
 /**
  * Updates an event and recalculates student points transactionally.
  * Handles cases where points changed, students changed, or status changed to/from 'Done'.
  * Ensures points are never negative and records point ledger movements.
+ * Strictly adheres to Firestore transaction rule: all reads before all writes.
  */
 export async function updateEventWithSmartSync(eventId, newData) {
     if (!eventId) throw new Error("Event ID is required for update.");
 
     const loggedChanges = [];
+    let shouldUpdateDeferredSubmissions = false;
 
     try {
         await runTransaction(db, async (transaction) => {
@@ -25,6 +27,9 @@ export async function updateEventWithSmartSync(eventId, newData) {
 
             const isDone = newData.status === 'Done';
             const wasDone = currentServerData.status === 'Done';
+            if (!wasDone && isDone) {
+                shouldUpdateDeferredSubmissions = true;
+            }
 
             // Lists of students
             const oldStudents = currentServerData.participatingStudents || [];
@@ -52,47 +57,19 @@ export async function updateEventWithSmartSync(eventId, newData) {
             const oldPoints = Number(currentServerData.points) || 0;
             const newPoints = Number(newData.points) || 0;
 
-            // Helper to get student and apply change
-            const applyStudentPointsChange = async (studentId, diff, reason, actionType) => {
-                if (diff === 0) return;
-                const sRef = doc(db, 'students', studentId);
-                const sSnap = await transaction.get(sRef);
-                if (!sSnap.exists()) return;
-
-                const sData = sSnap.data();
-                const prev = Math.max(0, Number(sData.totalPoints) || 0);
-                const next = Math.max(0, prev + diff);
-
-                transaction.update(sRef, { totalPoints: next });
-
-                loggedChanges.push({
-                    studentId,
-                    studentName: sData.name || 'طالب',
-                    grade: sData.grade || '',
-                    section: sData.section || '',
-                    class: sData.class || '',
-                    change: diff,
-                    previousTotalPoints: prev,
-                    newTotalPoints: next,
-                    reason,
-                    actionType,
-                    eventId,
-                    eventTitle: newData.title || currentServerData.title || '',
-                    eventType: newData.typeName || currentServerData.typeName || ''
-                });
-            };
+            // Collect all student point adjustments in memory: studentId -> { diff, reason, actionType }
+            const studentPointDiffs = new Map();
 
             // 1. If it WAS Done and is NO LONGER Done -> Revert all points
             if (wasDone && !isDone) {
                 for (const studentId of oldStudents) {
                     const ptsToRevert = getStudentEventPoints(studentId, currentServerData, oldPoints);
                     if (ptsToRevert > 0) {
-                        await applyStudentPointsChange(
-                            studentId,
-                            -ptsToRevert,
-                            `إلغاء اعتماد نشاط: ${currentServerData.title || ''}`,
-                            'activity_deduct'
-                        );
+                        studentPointDiffs.set(studentId, {
+                            diff: -ptsToRevert,
+                            reason: `إلغاء اعتماد نشاط: ${currentServerData.title || ''}`,
+                            actionType: 'activity_deduct'
+                        });
                     }
                 }
             }
@@ -108,12 +85,11 @@ export async function updateEventWithSmartSync(eventId, newData) {
                     for (const id of removed) {
                         const oldAward = getStudentEventPoints(id, currentServerData, oldPoints);
                         if (oldAward > 0) {
-                            await applyStudentPointsChange(
-                                id,
-                                -oldAward,
-                                `إزالة من نشاط معتمد: ${currentServerData.title || ''}`,
-                                'activity_deduct'
-                            );
+                            studentPointDiffs.set(id, {
+                                diff: -oldAward,
+                                reason: `إزالة من نشاط معتمد: ${currentServerData.title || ''}`,
+                                actionType: 'activity_deduct'
+                            });
                         }
                     }
 
@@ -121,12 +97,11 @@ export async function updateEventWithSmartSync(eventId, newData) {
                     for (const id of added) {
                         const newAward = getStudentEventPoints(id, newData, newPoints);
                         if (newAward > 0) {
-                            await applyStudentPointsChange(
-                                id,
-                                newAward,
-                                `إضافة إلى نشاط معتمد: ${newData.title || currentServerData.title || ''}`,
-                                'activity_award'
-                            );
+                            studentPointDiffs.set(id, {
+                                diff: newAward,
+                                reason: `إضافة إلى نشاط معتمد: ${newData.title || currentServerData.title || ''}`,
+                                actionType: 'activity_award'
+                            });
                         }
                     }
 
@@ -136,12 +111,11 @@ export async function updateEventWithSmartSync(eventId, newData) {
                         const newAward = getStudentEventPoints(id, newData, newPoints);
                         const diff = newAward - oldAward;
                         if (diff !== 0) {
-                            await applyStudentPointsChange(
-                                id,
+                            studentPointDiffs.set(id, {
                                 diff,
-                                `تعديل نقاط النشاط: ${newData.title || currentServerData.title || ''} (${diff > 0 ? `+${diff}` : diff})`,
-                                diff > 0 ? 'activity_award' : 'activity_deduct'
-                            );
+                                reason: `تعديل نقاط النشاط: ${newData.title || currentServerData.title || ''} (${diff > 0 ? `+${diff}` : diff})`,
+                                actionType: diff > 0 ? 'activity_award' : 'activity_deduct'
+                            });
                         }
                     }
                 } else {
@@ -149,31 +123,103 @@ export async function updateEventWithSmartSync(eventId, newData) {
                     for (const id of newStudents) {
                         const award = getStudentEventPoints(id, newData, newPoints);
                         if (award > 0) {
-                            await applyStudentPointsChange(
-                                id,
-                                award,
-                                `مشاركة في نشاط: ${newData.title || currentServerData.title || ''}`,
-                                'activity_award'
-                            );
+                            studentPointDiffs.set(id, {
+                                diff: award,
+                                reason: `مشاركة في نشاط: ${newData.title || currentServerData.title || ''}`,
+                                actionType: 'activity_award'
+                            });
                         }
                     }
                 }
             }
 
-            // Finally, update the event itself
-            transaction.update(eventRef, {
+            // --- PHASE 1: ALL READS (Must execute before any writes) ---
+            const studentDocs = [];
+            for (const [studentId, info] of studentPointDiffs.entries()) {
+                if (info.diff === 0) continue;
+                const sRef = doc(db, 'students', studentId);
+                const sSnap = await transaction.get(sRef);
+                if (sSnap.exists()) {
+                    studentDocs.push({ studentId, sRef, sSnap, ...info });
+                }
+            }
+
+            // --- PHASE 2: ALL WRITES (Only after all reads complete) ---
+            for (const item of studentDocs) {
+                const sData = item.sSnap.data();
+                const prev = Math.max(0, Number(sData.totalPoints) || 0);
+                const next = Math.max(0, prev + item.diff);
+
+                transaction.update(item.sRef, { totalPoints: next });
+
+                loggedChanges.push({
+                    studentId: item.studentId,
+                    studentName: sData.name || 'طالب',
+                    grade: sData.grade || '',
+                    section: sData.section || '',
+                    class: sData.class || '',
+                    change: item.diff,
+                    previousTotalPoints: prev,
+                    newTotalPoints: next,
+                    reason: item.reason,
+                    actionType: item.actionType,
+                    eventId,
+                    eventTitle: newData.title || currentServerData.title || '',
+                    eventType: newData.typeName || currentServerData.typeName || ''
+                });
+            }
+
+            // Update the event itself
+            const newLinkStudents = newData.linkStudentIds || currentServerData.linkStudentIds || [];
+            const updatePayload = {
+                ...currentServerData,
                 ...newData,
                 participatingStudents: newStudents,
                 linkStudentIds: newLinkStudents,
                 points: newPoints,
                 status: newData.status,
-                venueId: newData.venueId,
-                title: newData.title,
-                date: newData.date,
-                startTime: newData.startTime,
-                endTime: newData.endTime
-            });
+                venueId: newData.venueId ?? currentServerData.venueId ?? '',
+                title: newData.title ?? currentServerData.title ?? '',
+                date: newData.date ?? currentServerData.date ?? '',
+                startTime: newData.startTime ?? currentServerData.startTime ?? '',
+                endTime: newData.endTime ?? currentServerData.endTime ?? ''
+            };
+            delete updatePayload.id;
+            delete updatePayload.markDone;
+            const cleanPayload = Object.fromEntries(
+                Object.entries(updatePayload).filter(([_, v]) => v !== undefined)
+            );
+            transaction.update(eventRef, cleanPayload);
         });
+
+        // Update any link submissions marked as deferred for this event
+        if (shouldUpdateDeferredSubmissions) {
+            try {
+                const subSnap = await getDocs(query(
+                    collection(db, 'link_submissions'),
+                    where('eventId', '==', eventId)
+                ));
+                if (!subSnap.empty) {
+                    const subBatch = writeBatch(db);
+                    let hasDeferred = false;
+                    subSnap.docs.forEach(docSnap => {
+                        const d = docSnap.data();
+                        if (d.deferredPoints) {
+                            hasDeferred = true;
+                            subBatch.update(docSnap.ref, {
+                                deferredPoints: false,
+                                pointsAwarded: d.pendingPoints || newData.points || 0,
+                                pendingPoints: 0,
+                                awardedAtEventDone: true
+                            });
+                        }
+                    });
+                    if (hasDeferred) await subBatch.commit();
+                }
+            } catch (subErr) {
+                console.warn("Could not batch update link_submissions on event done:", subErr);
+            }
+        }
 
         // Record all logged movements asynchronously after successful commit
         if (loggedChanges.length > 0) {
