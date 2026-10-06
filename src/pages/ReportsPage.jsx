@@ -376,7 +376,7 @@ export default function ReportsPage() {
     const [assetUsageMap, setAssetUsageMap] = useState({});
 
     // Helper to build participation and asset usage histories
-    const buildHistoryMaps = (eventDocs, sMap = studentMap, aMap = assetMap) => {
+    const buildHistoryMaps = (eventDocs, sMap = studentMap, aMap = assetMap, linkDocs = []) => {
         const pMap = {};
         const uMap = {};
 
@@ -415,11 +415,47 @@ export default function ReportsPage() {
                     const aName = aMap[assId];
                     if (aName) {
                         if (!uMap[aName]) uMap[aName] = [];
-                        uMap[aName].push(ev);
+                        pMap[aName].push(ev);
                     }
                 });
             }
         });
+
+        // Cross-reference delegated links for students
+        if (Array.isArray(linkDocs)) {
+            linkDocs.forEach(d => {
+                const ld = d.data ? d.data() : d;
+                const delegateId = ld.delegateStudentId;
+                const delegateName = ld.delegateName;
+                const ev = {
+                    id: `link_${d.id}`,
+                    title: ld.title || 'رابط تسجيل',
+                    date: ld.createdAt?.toDate ? format(ld.createdAt.toDate(), 'yyyy-MM-dd') : '',
+                    formattedDate: ld.createdAt?.toDate ? format(ld.createdAt.toDate(), 'd MMMM yyyy', { locale: ar }) : '',
+                    time: ld.createdAt?.toDate ? format(ld.createdAt.toDate(), 'hh:mm a') : '',
+                    venue: ld.eventTitle ? `مرتبط بـ: ${ld.eventTitle}` : 'رابط تسجيل إلكتروني',
+                    status: ld.delegatePointsAwarded ? 'مكتمل (ممنوح)' : (ld.status === 'paused' ? 'موقوف' : 'طالب مفوض'),
+                    rawStatus: ld.status || 'Active',
+                    points: ld.delegateRewardPoints || 0,
+                    isDelegate: true,
+                    role: 'طالب مفوض'
+                };
+
+                if (delegateId) {
+                    if (!pMap[delegateId]) pMap[delegateId] = [];
+                    pMap[delegateId].push(ev);
+                }
+                if (delegateName) {
+                    const cleanDelName = String(delegateName).replace(/\(.*?\)/g, '').trim();
+                    if (!pMap[delegateName]) pMap[delegateName] = [];
+                    pMap[delegateName].push(ev);
+                    if (cleanDelName && cleanDelName !== delegateName) {
+                        if (!pMap[cleanDelName]) pMap[cleanDelName] = [];
+                        pMap[cleanDelName].push(ev);
+                    }
+                }
+            });
+        }
 
         setStudentParticipationMap(pMap);
         setAssetUsageMap(uMap);
@@ -476,7 +512,15 @@ export default function ReportsPage() {
                 console.warn("Notice loading assets map:", e);
             }
 
-            buildHistoryMaps(eDocs, sMap, aMap);
+            let lDocs = [];
+            try {
+                const lSnap = await getDocs(collection(db, 'registration_links'));
+                lDocs = lSnap.docs;
+            } catch (e) {
+                console.warn("Notice loading links for history:", e);
+            }
+
+            buildHistoryMaps(eDocs, sMap, aMap, lDocs);
         };
         loadInitialData();
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -622,7 +666,12 @@ export default function ReportsPage() {
             let data = [];
             if (activeTab === 'activities') {
                 const snap = await getDocs(query(collection(db, 'events'), orderBy('startTime', 'desc')));
-                buildHistoryMaps(snap.docs);
+                let lDocs = [];
+                try {
+                    const lSnap = await getDocs(collection(db, 'registration_links'));
+                    lDocs = lSnap.docs;
+                } catch {}
+                buildHistoryMaps(snap.docs, studentMap, assetMap, lDocs);
                 data = snap.docs.map(d => {
                     const pd = d.data();
                     const participatingStudents = pd.participatingStudents?.map(id => {

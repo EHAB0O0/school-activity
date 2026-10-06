@@ -19,6 +19,7 @@ import AdvancedPrintModal from '../components/ui/AdvancedPrintModal';
 export default function StudentsPage() {
     const [students, setStudents] = useState([]);
     const [allEvents, setAllEvents] = useState([]);
+    const [allLinks, setAllLinks] = useState([]);
     const [searchTerm, setSearchTerm] = useState('');
     const [sortBy, setSortBy] = useState('name'); // name | points
     const [gradeFilter, setGradeFilter] = useState('');
@@ -91,6 +92,17 @@ export default function StudentsPage() {
             console.warn("Events sync error:", err.message);
         });
         return () => unsubscribeEvents();
+    }, []);
+
+    // --- Real-time Registration Links Listener (for delegate cross-referencing) ---
+    useEffect(() => {
+        const qLinks = query(collection(db, 'registration_links'));
+        const unsubscribeLinks = onSnapshot(qLinks, (snap) => {
+            setAllLinks(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        }, (err) => {
+            console.warn("Registration links sync error:", err.message);
+        });
+        return () => unsubscribeLinks();
     }, []);
 
     // --- Smart Duplicate Detection ---
@@ -176,7 +188,7 @@ export default function StudentsPage() {
         setProfileTab('info');
     };
 
-    // Live History Listener (Only run when opening a different student)
+    // Live History Listener: Events participation + Delegated links (Only run when opening a different student or links change)
     useEffect(() => {
         if (!selectedStudent?.id) return;
 
@@ -187,13 +199,48 @@ export default function StudentsPage() {
         );
 
         const unsubscribe = onSnapshot(q, (snap) => {
-            setStudentHistory(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+            const evts = snap.docs.map(d => ({ id: d.id, ...d.data(), isDelegate: false }));
+
+            // Cross-reference delegated registration links for this student
+            const normName = normalizeArabic(selectedStudent.name || '');
+            const delegatedLinks = allLinks.filter(l => {
+                if (l.delegateStudentId && l.delegateStudentId === selectedStudent.id) return true;
+                if (l.delegateName && normName) {
+                    const normDel = normalizeArabic(l.delegateName);
+                    return normDel.includes(normName) || normName.includes(normDel);
+                }
+                return false;
+            }).map(link => ({
+                id: `link_${link.id}`,
+                linkId: link.id,
+                title: link.title || 'رابط تسجيل',
+                typeName: 'طالب مفوض (إشراف وتنظيم)',
+                venueId: link.eventTitle ? `مرتبط بـ: ${link.eventTitle}` : 'رابط تسجيل إلكتروني',
+                status: link.delegatePointsAwarded ? 'Done' : (link.status === 'paused' ? 'موقوف' : 'نشط'),
+                isDelegate: true,
+                role: 'طالب مفوض',
+                eventTitle: link.eventTitle || '',
+                eventId: link.eventId || null,
+                currentCount: Number(link.currentCount) || 0,
+                delegateRewardPoints: Number(link.delegateRewardPoints) || 0,
+                delegatePointsAwarded: !!link.delegatePointsAwarded,
+                date: link.createdAt?.toDate ? link.createdAt.toDate().toLocaleDateString('ar-SA') : (link.createdAt?.seconds ? new Date(link.createdAt.seconds * 1000).toLocaleDateString('ar-SA') : '-'),
+                startTime: link.createdAt || null
+            }));
+
+            const combined = [...evts, ...delegatedLinks].sort((a, b) => {
+                const timeA = a.startTime?.toMillis ? a.startTime.toMillis() : (a.startTime?.seconds ? a.startTime.seconds * 1000 : (a.date ? new Date(a.date).getTime() : 0));
+                const timeB = b.startTime?.toMillis ? b.startTime.toMillis() : (b.startTime?.seconds ? b.startTime.seconds * 1000 : (b.date ? new Date(b.date).getTime() : 0));
+                return timeB - timeA;
+            });
+
+            setStudentHistory(combined);
         }, (error) => {
             console.error("History sync error:", error);
         });
 
         return () => unsubscribe();
-    }, [selectedStudent?.id]);
+    }, [selectedStudent?.id, selectedStudent?.name, allLinks]);
 
     // Points History Fetcher (Only run when opening a different student)
     useEffect(() => {
@@ -294,19 +341,27 @@ export default function StudentsPage() {
             });
 
             const historyRows = sortedHistory.length > 0
-                ? sortedHistory.map((evt, i) => `
+                ? sortedHistory.map((evt, i) => {
+                    const statusLabel = evt.isDelegate
+                        ? (evt.delegatePointsAwarded ? 'مفوض (ممنوح)' : 'طالب مفوض')
+                        : (evt.status === 'Done' ? 'مكتمل' : (evt.status || 'مسجّل'));
+                    const statusClass = (evt.status === 'Done' || (evt.isDelegate && evt.delegatePointsAwarded)) ? 'success' : '';
+                    const typeLabel = evt.isDelegate ? 'طالب مفوض (إشراف وتنظيم)' : (evt.typeName || '-');
+
+                    return `
                     <tr>
                         <td style="text-align: center; font-weight: bold;">${i + 1}</td>
                         <td style="font-weight: bold;">${evt.title || '-'}</td>
-                        <td>${evt.typeName || '-'}</td>
+                        <td>${typeLabel}</td>
                         <td style="color: ${isDark ? '#94a3b8' : isMonochrome ? '#000000' : '#64748b'}; font-size: 12px;">${evt.date || (evt.startTime?.toDate ? evt.startTime.toDate().toLocaleDateString('ar-SA') : '-')}</td>
                         <td style="text-align: center;">
-                            <span class="status ${evt.status === 'Done' ? 'success' : ''}">
-                                ${evt.status === 'Done' ? 'مكتمل' : (evt.status || 'مسجّل')}
+                            <span class="status ${statusClass}">
+                                ${statusLabel}
                             </span>
                         </td>
                     </tr>
-                `).join('')
+                    `;
+                }).join('')
                 : `<tr><td colspan="5" style="text-align: center; color: #94a3b8; padding: 20px;">لا توجد مشاركات مسجلة لهذا الطالب حتى الآن</td></tr>`;
 
             const shouldIncludePoints = columns.includes('points') || includePoints;
@@ -975,8 +1030,10 @@ export default function StudentsPage() {
                 if (columns.includes('specializations')) tds.push(`<td>${(st.specializations || []).map(s => s === 'General' ? 'عام' : s).join('، ') || 'عام'}</td>`);
                 if (columns.includes('points')) tds.push(`<td style="text-align: center; font-weight: bold; color: #047857;">${st.totalPoints || 0}</td>`);
                 if (columns.includes('activitiesCount')) {
+                    const normStName = normalizeArabic(st.name || '');
                     const stEventsCount = allEvents.filter(e => e.participatingStudents?.includes(st.id)).length;
-                    tds.push(`<td style="text-align: center; font-weight: 600;">${stEventsCount}</td>`);
+                    const stLinksCount = allLinks.filter(l => l.delegateStudentId === st.id || (l.delegateName && normStName && normalizeArabic(l.delegateName).includes(normStName))).length;
+                    tds.push(`<td style="text-align: center; font-weight: 600;">${stEventsCount + stLinksCount}</td>`);
                 }
                 if (columns.includes('notes')) tds.push(`<td style="font-size: 11px; color: #64748b;">${st.notes || ''}</td>`);
                 if (showSignatureCol) tds.push('<td style="min-width: 100px; border-bottom: 1px dotted #94a3b8;"></td>');
@@ -1124,14 +1181,32 @@ export default function StudentsPage() {
             const isMonochrome = theme === 'monochrome';
 
             const pagesHtml = selectedList.map(st => {
-                const studentEvents = allEvts.filter(e => e.participatingStudents && e.participatingStudents.includes(st.id));
+                const normName = normalizeArabic(st.name || '');
+                const stEvents = allEvts.filter(e => e.participatingStudents && e.participatingStudents.includes(st.id));
+                const stLinks = allLinks.filter(l => {
+                    if (l.delegateStudentId && l.delegateStudentId === st.id) return true;
+                    if (l.delegateName && normName) {
+                        const normDel = normalizeArabic(l.delegateName);
+                        return normDel.includes(normName) || normName.includes(normDel);
+                    }
+                    return false;
+                }).map(link => ({
+                    id: `link_${link.id}`,
+                    title: link.title || 'رابط تسجيل',
+                    typeName: 'طالب مفوض (إشراف وتنظيم)',
+                    date: link.createdAt?.toDate ? link.createdAt.toDate().toLocaleDateString('en-GB') : '',
+                    status: link.delegatePointsAwarded ? 'Done' : 'مفوض',
+                    isDelegate: true,
+                    delegatePointsAwarded: !!link.delegatePointsAwarded
+                }));
+                const studentEvents = [...stEvents, ...stLinks];
                 const eventsRows = studentEvents.length > 0 ? studentEvents.map((evt, idx) => `
                     <tr>
                         <td style="text-align: center; font-weight: bold;">${idx + 1}</td>
                         <td style="font-weight: bold;">${evt.title}</td>
-                        <td>${evt.typeName || '-'}</td>
+                        <td>${evt.isDelegate ? 'طالب مفوض (إشراف وتنظيم)' : (evt.typeName || '-')}</td>
                         <td style="direction: ltr; text-align: right;">${evt.date || (evt.startTime?.toDate ? evt.startTime.toDate().toLocaleDateString('en-GB') : '-')}</td>
-                        <td style="text-align: center;"><span class="status ${evt.status === 'Done' ? 'success' : ''}">${evt.status === 'Done' ? 'مكتمل' : (evt.status || 'مجدول')}</span></td>
+                        <td style="text-align: center;"><span class="status ${evt.status === 'Done' ? 'success' : ''}">${evt.isDelegate ? (evt.delegatePointsAwarded ? 'مفوض (ممنوح)' : 'طالب مفوض') : (evt.status === 'Done' ? 'مكتمل' : (evt.status || 'مجدول'))}</span></td>
                     </tr>
                 `).join('') : '<tr><td colspan="5" style="text-align: center; padding: 20px; color: #9ca3af;">لا توجد مشاركات مسجلة لهذا الطالب حتى الآن</td></tr>';
 
@@ -1924,15 +1999,51 @@ export default function StudentsPage() {
                                         {studentHistory.length > 0 ? studentHistory.map(evt => (
                                             <div key={evt.id} className="bg-white/5 p-4 rounded-xl border border-white/5 flex items-center justify-between hover:bg-white/10 transition-colors">
                                                 <div className="flex items-center">
-                                                    <div className={`w-2 h-12 rounded-full mr-4 ${evt.status === 'Done' ? 'bg-emerald-500' : 'bg-gray-600'}`}></div>
+                                                    <div className={`w-2 h-12 rounded-full mr-4 ${
+                                                        evt.isDelegate
+                                                            ? (evt.delegatePointsAwarded ? 'bg-amber-400' : 'bg-indigo-500')
+                                                            : (evt.status === 'Done' ? 'bg-emerald-500' : 'bg-gray-600')
+                                                    }`}></div>
                                                     <div>
-                                                        <div className="font-bold text-white text-lg">{evt.title}</div>
-                                                        <div className="text-gray-400 text-sm">{evt.typeName} | {evt.venueId}</div>
+                                                        <div className="flex items-center gap-2 flex-wrap">
+                                                            <span className="font-bold text-white text-lg">{evt.title}</span>
+                                                            {evt.isDelegate && (
+                                                                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 inline-flex items-center gap-1">
+                                                                    <Award size={12} />
+                                                                    <span>طالب مفوض</span>
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                        <div className="text-gray-400 text-sm flex items-center gap-2 mt-0.5 flex-wrap">
+                                                            <span>{evt.typeName}</span>
+                                                            {evt.venueId && <span>| {evt.venueId}</span>}
+                                                            {evt.isDelegate && evt.currentCount !== undefined && (
+                                                                <span className="text-slate-400 text-xs">({evt.currentCount} مسجل)</span>
+                                                            )}
+                                                        </div>
                                                     </div>
                                                 </div>
-                                                <div className="text-left">
-                                                    <div className="text-emerald-400 font-bold font-mono">{evt.date || evt.startTime?.toDate().toLocaleDateString('en-GB')}</div>
-                                                    <div className="text-xs text-gray-400 mt-1">{evt.startTime?.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                                                <div className="text-left flex flex-col items-end">
+                                                    <div className="text-emerald-400 font-bold font-mono">
+                                                        {evt.date || (evt.startTime?.toDate ? evt.startTime.toDate().toLocaleDateString('en-GB') : '-')}
+                                                    </div>
+                                                    {evt.isDelegate ? (
+                                                        <div className="mt-1">
+                                                            {evt.delegatePointsAwarded ? (
+                                                                <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950/60 border border-emerald-800/40 px-2 py-0.5 rounded-md inline-flex items-center gap-1">
+                                                                    <CheckCircle2 size={11} /> مكافأة ممنوحة {evt.delegateRewardPoints > 0 ? `(+${evt.delegateRewardPoints} ن)` : ''}
+                                                                </span>
+                                                            ) : (
+                                                                <span className="text-[10px] font-bold text-amber-400 bg-amber-950/60 border border-amber-800/40 px-2 py-0.5 rounded-md inline-flex items-center gap-1">
+                                                                    <Clock size={11} /> مكافأة محددة {evt.delegateRewardPoints > 0 ? `(+${evt.delegateRewardPoints} ن)` : ''}
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    ) : (
+                                                        <div className="text-xs text-gray-400 mt-1">
+                                                            {evt.startTime?.toDate ? evt.startTime.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                                                        </div>
+                                                    )}
                                                 </div>
                                             </div>
                                         )) : (
