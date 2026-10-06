@@ -17,15 +17,24 @@ ReactDOM.createRoot(document.getElementById('root')).render(
   </React.StrictMode>,
 );
 
-// Register Service Worker for PWA Background Push Notifications
+// Register Service Worker for PWA Background Push Notifications and automatic cache update
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js')
       .then((reg) => {
+        reg.update();
         console.log('PWA Service Worker registered successfully with scope:', reg.scope);
       })
       .catch((err) => {
         console.warn('PWA Service Worker registration notice:', err);
       });
+  });
+
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!refreshing) {
+      refreshing = true;
+      window.location.reload();
+    }
   });
 }
