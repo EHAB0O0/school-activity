@@ -519,32 +519,38 @@ export default function RegistrationLinksPage() {
             )}
 
             {/* Create / Edit Modal */}
-            <CreateLinkModal
-                isOpen={isCreateModalOpen}
-                onClose={() => { setIsCreateModalOpen(false); setLinkToEdit(null); }}
-                linkToEdit={linkToEdit}
-                onSuccess={() => {}}
-            />
+            {isCreateModalOpen && (
+                <CreateLinkModal
+                    isOpen={isCreateModalOpen}
+                    onClose={() => { setIsCreateModalOpen(false); setLinkToEdit(null); }}
+                    linkToEdit={linkToEdit}
+                    onSuccess={() => {}}
+                />
+            )}
 
             {/* QR Code Modal */}
-            <LinkQRCodeModal
-                isOpen={!!qrModalLink}
-                onClose={() => setQrModalLink(null)}
-                link={qrModalLink}
-            />
+            {qrModalLink && (
+                <LinkQRCodeModal
+                    isOpen={!!qrModalLink}
+                    onClose={() => setQrModalLink(null)}
+                    link={qrModalLink}
+                />
+            )}
 
             {/* Submissions Drawer */}
-            <LinkSubmissionsDrawer
-                isOpen={!!drawerLink}
-                onClose={() => setDrawerLink(null)}
-                link={drawerLink}
-                onLinkUpdated={() => {}}
-                onEditLink={(link) => {
-                    setDrawerLink(null);
-                    setLinkToEdit(link);
-                    setIsCreateModalOpen(true);
-                }}
-            />
+            {drawerLink && (
+                <LinkSubmissionsDrawer
+                    isOpen={!!drawerLink}
+                    onClose={() => setDrawerLink(null)}
+                    link={drawerLink}
+                    onLinkUpdated={() => {}}
+                    onEditLink={(link) => {
+                        setDrawerLink(null);
+                        setLinkToEdit(link);
+                        setIsCreateModalOpen(true);
+                    }}
+                />
+            )}
         </div>
     );
 }

@@ -111,13 +111,13 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
 
     // Sync link count with approved count
     useEffect(() => {
-        if (!link?.id || loading) return;
+        if (!isOpen || !link?.id || loading) return;
         const approvedCount = submissions.filter(s => s.status === 'approved').length;
         if (link.currentCount !== approvedCount) {
             updateDoc(doc(db, 'registration_links', link.id), { currentCount: approvedCount }).catch(console.error);
             if (onLinkUpdated) onLinkUpdated();
         }
-    }, [submissions, link?.id, link?.currentCount, loading, onLinkUpdated]);
+    }, [isOpen, submissions, link?.id, link?.currentCount, loading, onLinkUpdated]);
 
     // Arabic normalization helper
     const normalizeArabic = (str) => {
@@ -318,15 +318,17 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
     }, [submissions, students, linkedEvent, link?.customFields]);
 
     // Parse custom fields (backward compatible)
-    const customFields = Array.isArray(link?.customFields) && link.customFields.length > 0
-        ? link.customFields
-        : (link?.customFieldLabel ? [{ id: 'f_legacy', label: link.customFieldLabel, required: !!link.customFieldRequired }] : []);
+    const customFields = useMemo(() => {
+        return Array.isArray(link?.customFields) && link.customFields.length > 0
+            ? link.customFields
+            : (link?.customFieldLabel ? [{ id: 'f_legacy', label: link.customFieldLabel, required: !!link.customFieldRequired }] : []);
+    }, [link?.customFields, link?.customFieldLabel, link?.customFieldRequired]);
 
     // Initialize customFieldValues when opening or changing studentActionSub modal
     useEffect(() => {
-        if (!studentActionSub) {
+        if (!isOpen || !studentActionSub) {
             activeSubKeyRef.current = '';
-            setCustomFieldValues({});
+            setCustomFieldValues(prev => (Object.keys(prev).length === 0 ? prev : {}));
             return;
         }
 
@@ -379,7 +381,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
 
             setCustomFieldValues(initialValues);
         }
-    }, [studentActionSub, chosenStudentOverride, linkedEvent, customFields, link?.customFieldLabel, duplicateMap]);
+    }, [isOpen, studentActionSub, chosenStudentOverride, linkedEvent, customFields, link?.customFieldLabel, duplicateMap]);
 
     // Parse specializations display
     const specializationsDisplay = Array.isArray(link?.specializations) && link.specializations.length > 0
