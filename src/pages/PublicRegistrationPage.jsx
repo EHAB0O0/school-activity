@@ -1,14 +1,15 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { db } from '../firebase';
 import {
-    doc, collection, addDoc, query, where,
+    doc, collection, addDoc, query, where, getDocs,
     onSnapshot, updateDoc, deleteDoc, serverTimestamp, increment
 } from 'firebase/firestore';
 import {
     Lock, CheckCircle, AlertCircle, Users, Plus, Trash2,
     Edit2, Save, Sparkles, Clock, AlertTriangle, ArrowRight, X,
-    HelpCircle, RotateCcw
+    HelpCircle, RotateCcw, Clipboard, CheckCircle2, Zap,
+    ChevronDown, ChevronUp, Copy, Check
 } from 'lucide-react';
 import toast, { Toaster } from 'react-hot-toast';
 import AppLogo from '../components/ui/AppLogo';
@@ -47,6 +48,11 @@ export default function PublicRegistrationPage() {
         { studentName: '', isGradeUnknown: false, grade: '', section: '', customValues: {}, phone: '' },
         { studentName: '', isGradeUnknown: false, grade: '', section: '', customValues: {}, phone: '' }
     ]);
+
+    // Smart Bulk Paste state & students list from DB
+    const [students, setStudents] = useState([]);
+    const [smartPasteText, setSmartPasteText] = useState('');
+    const [isSmartPasteExpanded, setIsSmartPasteExpanded] = useState(true);
 
     // Submissions by this link listener
     const [submissions, setSubmissions] = useState([]);
@@ -100,6 +106,28 @@ export default function PublicRegistrationPage() {
 
         return () => unsubscribe();
     }, [linkId, isPasscodeVerified]);
+
+    // Fetch active students for smart matching in rapid mode
+    useEffect(() => {
+        let isMounted = true;
+        async function fetchStudents() {
+            try {
+                const snap = await getDocs(query(collection(db, 'students'), where('active', '==', true)));
+                let list = snap.docs.map(d => ({ ...d.data(), id: d.id }));
+                if (list.length === 0) {
+                    const fallbackSnap = await getDocs(collection(db, 'students'));
+                    list = fallbackSnap.docs.map(d => ({ ...d.data(), id: d.id })).filter(s => s.active !== false);
+                }
+                if (isMounted) {
+                    setStudents(list);
+                }
+            } catch (err) {
+                console.error("Error fetching students for smart match:", err);
+            }
+        }
+        fetchStudents();
+        return () => { isMounted = false; };
+    }, []);
 
     // Set default grade when linkData loads
     useEffect(() => {
@@ -426,6 +454,348 @@ export default function PublicRegistrationPage() {
         toast.success(`تم حذف ${removedCount} سطر فارغ`);
     };
 
+    // --- Smart Bulk Paste & Student Recognition Algorithms ---
+
+    // Enhanced Arabic text normalizer specifically tailored for names
+    const normalizeArabicForMatch = (str) => {
+        if (!str) return '';
+        return String(str)
+            .trim()
+            .toLowerCase()
+            .replace(/[\u064B-\u065F\u0670]/g, '') // Tashkeel
+            .replace(/[أإآٱ]/g, 'ا') // Alef forms
+            .replace(/ة/g, 'ه')
+            .replace(/ى/g, 'ي')
+            .replace(/[ؤئ]/g, 'ي')
+            .replace(/\u0640/g, '') // Tatweel
+            .replace(/\bعبد\s+/g, 'عبد')
+            .replace(/\bابو\s+/g, 'ابو')
+            .replace(/\bال\s+/g, 'ال')
+            .replace(/[\(\)\[\]{}.,،_+\-–—\\/|:;؛!?~*]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    };
+
+    // Filter out common connective prefixes in Arabic names (بن, ابن, بنت)
+    const getComparableTokens = (normStr) => {
+        return normStr
+            .split(' ')
+            .filter(t => t && t !== 'بن' && t !== 'ابن' && t !== 'ابنه' && t !== 'بنت');
+    };
+
+    // Pre-indexed students for fast and accurate matching
+    const preparedStudents = useMemo(() => {
+        return (students || []).map(s => {
+            const sNorm = normalizeArabicForMatch(s.name);
+            const sTokens = getComparableTokens(sNorm);
+            return {
+                ...s,
+                sNorm,
+                sTokens
+            };
+        });
+    }, [students]);
+
+    // Match a student name against pre-indexed school students
+    const findBestStudentMatch = (rawName) => {
+        if (!rawName || !preparedStudents.length) return null;
+        const queryNorm = normalizeArabicForMatch(rawName);
+        if (!queryNorm) return null;
+        const queryTokens = getComparableTokens(queryNorm);
+
+        // 1. Exact Normalized Name Match
+        let matched = preparedStudents.find(s => s.sNorm === queryNorm);
+        if (matched) return { student: matched, matchType: 'exact', confidence: 100 };
+
+        // 2. Exact Comparable Tokens Match (ignoring "بن" / "ابن")
+        if (queryTokens.length >= 2) {
+            matched = preparedStudents.find(s => s.sTokens.join(' ') === queryTokens.join(' '));
+            if (matched) return { student: matched, matchType: 'tokens_exact', confidence: 98 };
+        }
+
+        // 3. Substring / Prefix match
+        if (queryTokens.length >= 2) {
+            const queryTokensStr = queryTokens.join(' ');
+            matched = preparedStudents.find(s => {
+                const sTokensStr = s.sTokens.join(' ');
+                return sTokensStr.startsWith(queryTokensStr) || queryTokensStr.startsWith(sTokensStr);
+            });
+            if (matched) return { student: matched, matchType: 'prefix', confidence: 90 };
+        }
+
+        // 4. First Name + Last Name match with high token overlap
+        if (queryTokens.length >= 2) {
+            let bestCandidate = null;
+            let bestScore = 0;
+
+            for (const s of preparedStudents) {
+                if (s.sTokens.length < 2) continue;
+                const firstMatch = s.sTokens[0] === queryTokens[0];
+                const lastMatch = s.sTokens[s.sTokens.length - 1] === queryTokens[queryTokens.length - 1];
+                const sharedTokens = queryTokens.filter(t => s.sTokens.includes(t));
+
+                if (firstMatch && lastMatch && sharedTokens.length >= 2) {
+                    const score = (sharedTokens.length * 2) / (queryTokens.length + s.sTokens.length);
+                    if (score > bestScore && score >= 0.5) {
+                        bestScore = score;
+                        bestCandidate = s;
+                    }
+                } else if (firstMatch && sharedTokens.length >= 3) {
+                    const score = (sharedTokens.length * 2) / (queryTokens.length + s.sTokens.length);
+                    if (score > bestScore && score >= 0.6) {
+                        bestScore = score;
+                        bestCandidate = s;
+                    }
+                }
+            }
+
+            if (bestCandidate) {
+                return {
+                    student: bestCandidate,
+                    matchType: 'fuzzy',
+                    confidence: Math.round(bestScore * 100)
+                };
+            }
+        }
+
+        return null;
+    };
+
+    // Helper to resolve grade and section from matched student and/or hints
+    const resolveGradeAndSection = (matchedStudent, inlineGradeHint, inlineSectionHint) => {
+        const rawGrade = matchedStudent?.grade || inlineGradeHint || '';
+        const rawClass = matchedStudent?.class || inlineGradeHint || '';
+        const rawSection = matchedStudent?.section || inlineSectionHint || '';
+
+        let resolvedGrade = '';
+        let resolvedSection = '';
+
+        // Match with gradeOptions
+        if (rawGrade) {
+            const matchedGradeOpt = gradeOptions.find(g =>
+                normalizeArabicForMatch(g) === normalizeArabicForMatch(rawGrade) ||
+                g.includes(rawGrade) ||
+                rawGrade.includes(g)
+            ) || gradeOptions.find(g => {
+                if (/اول|أول|1/i.test(rawGrade) && /اول|أول|1/i.test(g)) return true;
+                if (/ثاني|2/i.test(rawGrade) && /ثاني|2/i.test(g)) return true;
+                if (/ثالث|3/i.test(rawGrade) && /ثالث|3/i.test(g)) return true;
+                return false;
+            });
+            resolvedGrade = matchedGradeOpt || '';
+        }
+
+        if (!resolvedGrade && rawClass) {
+            const matchedGradeOpt = gradeOptions.find(g => rawClass.includes(g)) ||
+                gradeOptions.find(g => {
+                    if (/اول|أول|1/i.test(rawClass) && /اول|أول|1/i.test(g)) return true;
+                    if (/ثاني|2/i.test(rawClass) && /ثاني|2/i.test(g)) return true;
+                    if (/ثالث|3/i.test(rawClass) && /ثالث|3/i.test(g)) return true;
+                    return false;
+                });
+            resolvedGrade = matchedGradeOpt || '';
+        }
+
+        if (!resolvedGrade) {
+            resolvedGrade = gradeOptions[0] || '';
+        }
+
+        // Resolve section
+        const availableSections = getSectionOptions(resolvedGrade);
+        let candidateSection = String(rawSection || '').trim();
+
+        if (!candidateSection && rawClass) {
+            const slashMatch = String(rawClass).match(/[\/\-]\s*(\d+)/);
+            if (slashMatch) {
+                candidateSection = slashMatch[1];
+            } else {
+                const anyDigit = String(rawClass).match(/(\d+)/);
+                if (anyDigit) candidateSection = anyDigit[1];
+            }
+        }
+
+        if (candidateSection && availableSections.includes(candidateSection)) {
+            resolvedSection = candidateSection;
+        } else if (availableSections.length > 0) {
+            resolvedSection = candidateSection || availableSections[0] || '1';
+        } else {
+            resolvedSection = '1';
+        }
+
+        return {
+            grade: resolvedGrade,
+            section: resolvedSection
+        };
+    };
+
+    // Clean raw pasted text into student name candidates & hints
+    const parsePastedStudentsText = (rawText) => {
+        if (!rawText || !rawText.trim()) return [];
+
+        let rawLines = rawText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+
+        // If only 1 line but separated by commas:
+        if (rawLines.length === 1 && (rawLines[0].includes('،') || rawLines[0].includes(','))) {
+            const commaSplit = rawLines[0].split(/[،,]/).map(s => s.trim()).filter(Boolean);
+            if (commaSplit.length > 1) {
+                rawLines = commaSplit;
+            }
+        }
+
+        const results = [];
+
+        rawLines.forEach(line => {
+            let clean = line;
+
+            // 1. Remove leading numbering (Western 123 and Arabic-Indic ١٢٣)
+            clean = clean.replace(/^[\(\[]?[\d\u0660-\u0669]+[\)\]]?[\.\-\:\/]?\s*/, '');
+
+            // 2. Remove leading bullets or icons
+            clean = clean.replace(/^[•●○■▪️▫️\-*~–—✦★✓✔👉👤]+\s*/, '');
+
+            // 3. Remove labels like "الطالب:" or "الاسم:"
+            clean = clean.replace(/^(اسم\s+الطالب|الطالب|الاسم)\s*[:：\-]\s*/i, '');
+
+            // 4. Handle Excel tab separation
+            let tabGrade = '';
+            let tabSection = '';
+            if (clean.includes('\t')) {
+                const tabParts = clean.split('\t').map(p => p.trim()).filter(Boolean);
+                if (tabParts.length > 0) {
+                    clean = tabParts[0];
+                    if (tabParts[1]) tabGrade = tabParts[1];
+                    if (tabParts[2]) tabSection = tabParts[2];
+                }
+            }
+
+            // 5. Handle inline class annotation
+            let inlineGradeHint = tabGrade;
+            let inlineSectionHint = tabSection;
+
+            const classMatch = clean.match(/[\(\[\-–—]([^\)\]]+)[\)\]]?$/);
+            if (classMatch && !inlineGradeHint) {
+                const potentialClass = classMatch[1].trim();
+                if (/(ثانوي|اول|أول|ثاني|ثالث|\d\s*[\/\-]\s*\d)/i.test(potentialClass)) {
+                    inlineGradeHint = potentialClass;
+                    clean = clean.replace(/[\(\[\-–—]([^\)\]]+)[\)\]]?$/, '').trim();
+                }
+            }
+
+            // 6. Clean extra quotes or trailing punctuation
+            clean = clean.replace(/^["'«]+|["'»]+$/g, '').trim();
+            clean = clean.replace(/[\.\:\-–—]$/, '').trim();
+
+            if (clean.length >= 2) {
+                results.push({
+                    rawName: clean,
+                    inlineGradeHint,
+                    inlineSectionHint
+                });
+            }
+        });
+
+        return results;
+    };
+
+    // Memoized live analysis stats of pasted text
+    const smartAnalysisStats = useMemo(() => {
+        if (!smartPasteText || !smartPasteText.trim()) {
+            return { total: 0, matched: 0, unmatched: 0, candidates: [] };
+        }
+
+        const parsed = parsePastedStudentsText(smartPasteText);
+        let matchedCount = 0;
+
+        const candidates = parsed.map(item => {
+            const matchRes = findBestStudentMatch(item.rawName);
+            if (matchRes) matchedCount++;
+            return {
+                ...item,
+                matchResult: matchRes
+            };
+        });
+
+        return {
+            total: candidates.length,
+            matched: matchedCount,
+            unmatched: candidates.length - matchedCount,
+            candidates
+        };
+    }, [smartPasteText, preparedStudents, gradeOptions]);
+
+    // Apply smart paste text to rapidRows
+    const handleApplySmartPaste = (customText = null) => {
+        const textToUse = customText !== null ? customText : smartPasteText;
+        if (!textToUse || !textToUse.trim()) {
+            toast.error("يرجى لصق أو إدخال أسماء الطلاب أولاً");
+            return;
+        }
+
+        const parsed = parsePastedStudentsText(textToUse);
+        if (parsed.length === 0) {
+            toast.error("لم يتم العثور على أي أسماء في النص المدخل");
+            return;
+        }
+
+        const initialCustomValues = {};
+        customFields.forEach(field => {
+            if (field.isFixed && field.fixedValue) {
+                initialCustomValues[field.id] = field.fixedValue;
+            }
+        });
+
+        let matchedCount = 0;
+        const newRows = parsed.map(item => {
+            const matchRes = findBestStudentMatch(item.rawName);
+            const matched = matchRes?.student;
+            if (matched) matchedCount++;
+
+            const { grade, section } = resolveGradeAndSection(matched, item.inlineGradeHint, item.inlineSectionHint);
+
+            return {
+                studentName: matched ? matched.name : item.rawName,
+                isGradeUnknown: false,
+                grade,
+                section,
+                phone: matched?.phone || '',
+                matchedStudentId: matched?.id || null,
+                matchedStudentName: matched?.name || null,
+                customValues: { ...initialCustomValues }
+            };
+        });
+
+        // Replace blank rows or append
+        const currentFilled = rapidRows.filter(r => r.studentName && r.studentName.trim().length > 0);
+        if (currentFilled.length === 0) {
+            setRapidRows(newRows);
+        } else {
+            setRapidRows([...currentFilled, ...newRows]);
+        }
+
+        toast.success(`تم التعرف على ${newRows.length} طالب بنجاح (${matchedCount} مطابق بالسجل المدرسي)`);
+        setSmartPasteText('');
+    };
+
+    // Direct paste from clipboard
+    const handlePasteFromClipboard = async () => {
+        try {
+            if (!navigator.clipboard?.readText) {
+                toast.error("متصفحك لا يدعم القراءة المباشرة من الحافظة، يرجى اللصق يدوياً في المربع");
+                return;
+            }
+            const text = await navigator.clipboard.readText();
+            if (!text || !text.trim()) {
+                toast("الحافظة فارغة، يرجى نسخ الأسماء أولاً", { icon: '📋' });
+                return;
+            }
+            setSmartPasteText(text);
+            handleApplySmartPaste(text);
+        } catch (err) {
+            console.warn("Clipboard access denied or failed:", err);
+            toast.error("تعذر الوصول للحافظة، يرجى لصق النص يدوياً داخل المربع");
+        }
+    };
+
     // Rapid Entry live metrics
     const totalRapidRows = rapidRows.length;
     const filledRapidRows = rapidRows.filter(r => r.studentName && r.studentName.trim().length > 0).length;
@@ -491,6 +861,7 @@ export default function PublicRegistrationPage() {
                     customValues,
                     customFieldValue,
                     status: submissionStatus,
+                    matchedStudentId: row.matchedStudentId || null,
                     createdAt: serverTimestamp()
                 });
 
@@ -509,6 +880,7 @@ export default function PublicRegistrationPage() {
                 { studentName: '', isGradeUnknown: false, grade: defaultGrade, section: defaultSection, customValues: {}, phone: '' },
                 { studentName: '', isGradeUnknown: false, grade: defaultGrade, section: defaultSection, customValues: {}, phone: '' }
             ]);
+            setSmartPasteText('');
         } catch (err) {
             console.error("Rapid submit error:", err);
             toast.error("حدث خطأ أثناء الحفظ", { id: toastId });
@@ -932,6 +1304,118 @@ export default function PublicRegistrationPage() {
                         {/* Mode 2: Rapid Multi-row Entry */}
                         {entryMode === 'rapid' && (
                             <div className="space-y-4">
+                                {/* صندوق اللصق والادخال الذكي المجمع مع التعرف التلقائي على الفصول */}
+                                <div className="bg-gradient-to-br from-indigo-950/40 via-slate-900/95 to-slate-950/95 border-2 border-indigo-500/30 rounded-3xl p-4 sm:p-5 shadow-2xl relative overflow-hidden space-y-3.5">
+                                    <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none -mr-20 -mt-20"></div>
+
+                                    {/* رأس الصندوق */}
+                                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 relative z-10">
+                                        <div className="flex items-start gap-3">
+                                            <div className="w-10 h-10 rounded-2xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shrink-0 shadow-inner">
+                                                <Sparkles size={20} className="animate-pulse" />
+                                            </div>
+                                            <div>
+                                                <div className="flex items-center gap-2 flex-wrap">
+                                                    <h3 className="text-sm sm:text-base font-bold text-white flex items-center gap-1.5">
+                                                        الادخال واللصق الذكي المجمع للأسماء
+                                                    </h3>
+                                                    <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300">
+                                                        ⚡ يتعرف على الفصول والشعب فورياً
+                                                    </span>
+                                                </div>
+                                                <p className="text-[11px] sm:text-xs text-slate-400 mt-0.5 leading-relaxed">
+                                                    الصق أسماء الطلاب دفعة واحدة (من الواتساب، إكسل، أو كشف مرقم) وسيتعرف النظام عليهم ويعبئ فصولهم وشعبهم تلقائياً.
+                                                </p>
+                                            </div>
+                                        </div>
+
+                                        {/* الأزرار العلوية */}
+                                        <div className="flex items-center gap-2 self-end sm:self-center">
+                                            <button
+                                                type="button"
+                                                onClick={handlePasteFromClipboard}
+                                                className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white rounded-xl text-xs font-bold shadow-lg shadow-indigo-600/30 flex items-center gap-1.5 transition-all"
+                                                title="قراءة الأسماء مباشرة من الحافظة وتعبئة الجدول فورياً"
+                                            >
+                                                <Clipboard size={14} />
+                                                <span>📋 لصق فوري من الحافظة</span>
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setIsSmartPasteExpanded(!isSmartPasteExpanded)}
+                                                className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs transition-colors"
+                                                title={isSmartPasteExpanded ? "تصغير المربع" : "توسيع المربع"}
+                                            >
+                                                {isSmartPasteExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {/* مربع النص والتحليل الذكي */}
+                                    {isSmartPasteExpanded && (
+                                        <div className="space-y-3 relative z-10 pt-1">
+                                            <div className="relative">
+                                                <textarea
+                                                    rows={4}
+                                                    value={smartPasteText}
+                                                    onChange={(e) => setSmartPasteText(e.target.value)}
+                                                    placeholder={`الصق قائمة الطلاب هنا...\nمثال:\n1- محمد أحمد علي الزهراني\n2- خالد عبدالله القحطاني\n• سعد فهد العتيبي (ثاني ثانوي 1)\nعبدالعزيز صالح`}
+                                                    className="w-full px-3.5 py-3 bg-slate-950/80 border border-slate-700/80 rounded-2xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 leading-relaxed font-sans transition-all resize-y min-h-[90px]"
+                                                    dir="rtl"
+                                                />
+                                            </div>
+
+                                            {/* إحصائيات التعرف والإجراءات */}
+                                            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 pt-1">
+                                                <div className="flex items-center gap-2 flex-wrap text-xs">
+                                                    {smartAnalysisStats.total > 0 ? (
+                                                        <>
+                                                            <span className="px-2.5 py-1 rounded-xl bg-slate-800/80 border border-slate-700 text-slate-300 font-medium">
+                                                                تم رصد <strong className="text-white font-mono">{smartAnalysisStats.total}</strong> اسم
+                                                            </span>
+                                                            <span className="px-2.5 py-1 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-medium flex items-center gap-1">
+                                                                <CheckCircle2 size={12} className="text-emerald-400" />
+                                                                <strong className="font-mono">{smartAnalysisStats.matched}</strong> مطابق بالسجل
+                                                            </span>
+                                                            {smartAnalysisStats.unmatched > 0 && (
+                                                                <span className="px-2.5 py-1 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 font-medium flex items-center gap-1">
+                                                                    <AlertCircle size={12} className="text-amber-400" />
+                                                                    <strong className="font-mono">{smartAnalysisStats.unmatched}</strong> غير مسجل
+                                                                </span>
+                                                            )}
+                                                        </>
+                                                    ) : (
+                                                        <span className="text-[11px] text-slate-400">
+                                                            💡 يتعرف تلقائياً على الأرقام، الشرطات، النقاط، الإكسل، وتنسيقات الواتساب.
+                                                        </span>
+                                                    )}
+                                                </div>
+
+                                                <div className="flex items-center gap-2">
+                                                    {smartPasteText.trim().length > 0 && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setSmartPasteText('')}
+                                                            className="px-3 py-1.5 text-slate-400 hover:text-slate-200 text-xs font-semibold rounded-xl bg-slate-800/60 hover:bg-slate-800 transition-colors"
+                                                        >
+                                                            مسح
+                                                        </button>
+                                                    )}
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleApplySmartPaste()}
+                                                        disabled={!smartPasteText.trim()}
+                                                        className="flex-1 sm:flex-none px-4 py-2 bg-gradient-to-r from-indigo-600 to-emerald-600 hover:from-indigo-500 hover:to-emerald-500 active:scale-95 text-white font-bold rounded-xl text-xs shadow-md shadow-indigo-600/30 flex items-center justify-center gap-1.5 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                                                    >
+                                                        <Zap size={14} className="fill-current" />
+                                                        <span>تعبئة وتحديث الجدول ({smartAnalysisStats.total || 0})</span>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+
                                 {/* شريط التحكم الجماعي لتعيين / إلغاء الصف غير معروف */}
                                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-slate-950/80 border border-slate-800 p-3 rounded-2xl">
                                     <div className="flex items-center gap-2">
@@ -1053,17 +1537,44 @@ export default function PublicRegistrationPage() {
                                                 {idx + 1}
                                             </span>
 
-                                            <input
-                                                type="text"
-                                                placeholder="اسم الطالب..."
-                                                value={row.studentName}
-                                                onChange={(e) => {
-                                                    const updated = [...rapidRows];
-                                                    updated[idx].studentName = e.target.value;
-                                                    setRapidRows(updated);
-                                                }}
-                                                className="flex-2 min-w-[150px] px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white"
-                                            />
+                                            <div className="flex-2 min-w-[150px] flex flex-col gap-1">
+                                                <input
+                                                    type="text"
+                                                    placeholder="اسم الطالب..."
+                                                    value={row.studentName}
+                                                    onChange={(e) => {
+                                                        const updated = [...rapidRows];
+                                                        const newName = e.target.value;
+                                                        updated[idx].studentName = newName;
+                                                        const matchRes = findBestStudentMatch(newName);
+                                                        if (matchRes?.student) {
+                                                            updated[idx].matchedStudentId = matchRes.student.id;
+                                                            updated[idx].matchedStudentName = matchRes.student.name;
+                                                            const { grade, section } = resolveGradeAndSection(matchRes.student);
+                                                            if (!updated[idx].isGradeUnknown) {
+                                                                updated[idx].grade = grade;
+                                                                updated[idx].section = section;
+                                                            }
+                                                        } else {
+                                                            updated[idx].matchedStudentId = null;
+                                                            updated[idx].matchedStudentName = null;
+                                                        }
+                                                        setRapidRows(updated);
+                                                    }}
+                                                    className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white"
+                                                />
+                                                {row.matchedStudentId ? (
+                                                    <div className="flex items-center gap-1 text-[10px] text-emerald-400 font-semibold px-1">
+                                                        <CheckCircle2 size={11} className="shrink-0 text-emerald-400" />
+                                                        <span>مطابق بالسجل ({row.grade} / {row.section})</span>
+                                                    </div>
+                                                ) : (row.studentName && row.studentName.trim().length > 0) ? (
+                                                    <div className="flex items-center gap-1 text-[10px] text-amber-400/80 font-medium px-1">
+                                                        <AlertCircle size={11} className="shrink-0 text-amber-400" />
+                                                        <span>اسم جديد</span>
+                                                    </div>
+                                                ) : null}
+                                            </div>
 
                                             {/* خيار الصف غير معروف بين خانة الاسم والصف */}
                                             <label
