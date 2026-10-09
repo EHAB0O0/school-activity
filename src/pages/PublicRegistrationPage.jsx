@@ -15,6 +15,114 @@ import toast, { Toaster } from 'react-hot-toast';
 import AppLogo from '../components/ui/AppLogo';
 import { useSettings } from '../contexts/SettingsContext';
 
+// --- Pure Arabic Normalization & Text Parsing Utilities ---
+
+const normalizeArabic = (str) => {
+    if (!str) return '';
+    return str
+        .trim()
+        .toLowerCase()
+        .replace(/[\u064B-\u065F\u0670]/g, '')
+        .replace(/[أإآٱ]/g, 'ا')
+        .replace(/ة/g, 'ه')
+        .replace(/ى/g, 'ي')
+        .replace(/\u0640/g, '')
+        .replace(/\s+/g, ' ');
+};
+
+const normalizeArabicForMatch = (str) => {
+    if (!str) return '';
+    return String(str)
+        .trim()
+        .toLowerCase()
+        .replace(/[\u064B-\u065F\u0670]/g, '') // Tashkeel
+        .replace(/[أإآٱ]/g, 'ا') // Alef forms
+        .replace(/ة/g, 'ه')
+        .replace(/ى/g, 'ي')
+        .replace(/[ؤئ]/g, 'ي')
+        .replace(/\u0640/g, '') // Tatweel
+        .replace(/\bعبد\s+/g, 'عبد')
+        .replace(/\bابو\s+/g, 'ابو')
+        .replace(/\bال\s+/g, 'ال')
+        .replace(/[\(\)\[\]{}.,،_+\-–—\\/|:;؛!?~*]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+};
+
+const getComparableTokens = (normStr) => {
+    return normStr
+        .split(' ')
+        .filter(t => t && t !== 'بن' && t !== 'ابن' && t !== 'ابنه' && t !== 'بنت');
+};
+
+const parsePastedStudentsText = (rawText) => {
+    if (!rawText || !rawText.trim()) return [];
+
+    let rawLines = rawText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+
+    // If only 1 line but separated by commas:
+    if (rawLines.length === 1 && (rawLines[0].includes('،') || rawLines[0].includes(','))) {
+        const commaSplit = rawLines[0].split(/[،,]/).map(s => s.trim()).filter(Boolean);
+        if (commaSplit.length > 1) {
+            rawLines = commaSplit;
+        }
+    }
+
+    const results = [];
+
+    rawLines.forEach(line => {
+        let clean = line;
+
+        // 1. Remove leading numbering (Western 123 and Arabic-Indic ١٢٣)
+        clean = clean.replace(/^[\(\[]?[\d\u0660-\u0669]+[\)\]]?[\.\-\:\/]?\s*/, '');
+
+        // 2. Remove leading bullets or icons
+        clean = clean.replace(/^[•●○■▪️▫️\-*~–—✦★✓✔👉👤]+\s*/, '');
+
+        // 3. Remove labels like "الطالب:" or "الاسم:"
+        clean = clean.replace(/^(اسم\s+الطالب|الطالب|الاسم)\s*[:：\-]\s*/i, '');
+
+        // 4. Handle Excel tab separation
+        let tabGrade = '';
+        let tabSection = '';
+        if (clean.includes('\t')) {
+            const tabParts = clean.split('\t').map(p => p.trim()).filter(Boolean);
+            if (tabParts.length > 0) {
+                clean = tabParts[0];
+                if (tabParts[1]) tabGrade = tabParts[1];
+                if (tabParts[2]) tabSection = tabParts[2];
+            }
+        }
+
+        // 5. Handle inline class annotation
+        let inlineGradeHint = tabGrade;
+        let inlineSectionHint = tabSection;
+
+        const classMatch = clean.match(/[\(\[\-–—]([^\)\]]+)[\)\]]?$/);
+        if (classMatch && !inlineGradeHint) {
+            const potentialClass = classMatch[1].trim();
+            if (/(ثانوي|اول|أول|ثاني|ثالث|\d\s*[\/\-]\s*\d)/i.test(potentialClass)) {
+                inlineGradeHint = potentialClass;
+                clean = clean.replace(/[\(\[\-–—]([^\)\]]+)[\)\]]?$/, '').trim();
+            }
+        }
+
+        // 6. Clean extra quotes or trailing punctuation
+        clean = clean.replace(/^["'«]+|["'»]+$/g, '').trim();
+        clean = clean.replace(/[\.\:\-–—]$/, '').trim();
+
+        if (clean.length >= 2) {
+            results.push({
+                rawName: clean,
+                inlineGradeHint,
+                inlineSectionHint
+            });
+        }
+    });
+
+    return results;
+};
+
 export default function PublicRegistrationPage() {
     const { linkId } = useParams();
     const { schoolInfo, grades } = useSettings();
@@ -142,88 +250,16 @@ export default function PublicRegistrationPage() {
         }
     }, [linkData, grades]);
 
-    // Verify Passcode
-    const handleVerifyPasscode = (e) => {
-        e.preventDefault();
-        if (enteredPasscode.trim() === linkData.passcode?.trim()) {
-            setIsPasscodeVerified(true);
-            setPasscodeError('');
-            toast.success("تم الدخول بنجاح");
-        } else {
-            setPasscodeError("رمز المرور غير صحيح، يرجى التأكد من الرمز والمحاولة مجدداً.");
-        }
-    };
-
-    if (loading) {
-        return (
-            <div className="min-h-screen bg-slate-950 flex items-center justify-center text-white">
-                <div className="flex flex-col items-center gap-3">
-                    <div className="w-10 h-10 border-3 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-                    <span className="text-xs text-slate-400">جاري تحميل صفحة التسجيل...</span>
-                </div>
-            </div>
-        );
-    }
-
-    if (notFound || !linkData) {
-        return (
-            <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-white p-4 font-cairo text-right" dir="rtl">
-                <div className="bg-slate-900 border border-slate-800 p-8 rounded-3xl max-w-md w-full shadow-2xl text-center space-y-4">
-                    <div className="w-16 h-16 bg-rose-500/10 border border-rose-500/30 rounded-2xl flex items-center justify-center mx-auto text-rose-400">
-                        <AlertCircle size={32} />
-                    </div>
-                    <h2 className="text-xl font-bold text-white">رابط التسجيل غير موجود</h2>
-                    <p className="text-xs text-slate-400 leading-relaxed">
-                        عذراً، هذا الرابط غير متاح أو قد تم حذفه من قِبل إدارة النشاط المدرسي. يرجى التواصل مع رائد النشاط أو الطالب المفوض.
-                    </p>
-                </div>
-            </div>
-        );
-    }
-
-    // Arabic string normalization helper
-    const normalizeArabic = (str) => {
-        if (!str) return '';
-        return str
-            .trim()
-            .toLowerCase()
-            .replace(/[\u064B-\u065F\u0670]/g, '')
-            .replace(/[أإآٱ]/g, 'ا')
-            .replace(/ة/g, 'ه')
-            .replace(/ى/g, 'ي')
-            .replace(/\u0640/g, '')
-            .replace(/\s+/g, ' ');
-    };
-
-    // Parse Custom Fields
-    const customFields = Array.isArray(linkData.customFields)
-        ? linkData.customFields
-        : (linkData.customFieldLabel ? [{ id: 'f_legacy', label: linkData.customFieldLabel, required: !!linkData.customFieldRequired }] : []);
-
-    // Status checks
-    const now = new Date();
-    const isExpired = linkData.endAt && new Date(linkData.endAt) < now;
-    const isNotStarted = linkData.startAt && new Date(linkData.startAt) > now;
-    const isPaused = linkData.status === 'paused';
-
-    const hasMaxCap = linkData.maxCapacity !== null && linkData.maxCapacity !== undefined && linkData.maxCapacity !== '' && Number(linkData.maxCapacity) > 0;
-    const maxCap = hasMaxCap ? Number(linkData.maxCapacity) : null;
-    const approvedCount = submissions.filter(s => s.status === 'approved').length;
-    const pendingCount = submissions.filter(s => s.status === 'pending').length;
-    // In review mode, pending submissions occupy seats until reviewed; in immediate mode, approved count is used
-    const activeCount = linkData.approvalMode === 'immediate' ? approvedCount : (approvedCount + pendingCount);
-    const isFull = hasMaxCap ? activeCount >= maxCap : false;
-    const canWaitlist = !!linkData.allowWaitlist;
-
-    // Remaining Seats
-    const remainingSeats = hasMaxCap ? Math.max(0, maxCap - activeCount) : null;
-    const capacityPercent = hasMaxCap ? Math.min(100, Math.round((activeCount / maxCap) * 100)) : 100;
-
     // Allowed grade options (always strings)
-    const gradeOptions = (linkData.allowedGrades?.includes('all') || !linkData.allowedGrades?.length
-        ? (grades?.map(g => typeof g === 'object' ? (g.name || g.id) : g) || ['أول ثانوي', 'ثاني ثانوي', 'ثالث ثانوي'])
-        : linkData.allowedGrades.map(g => typeof g === 'object' ? (g.name || g.id) : g)
-    ).filter(Boolean);
+    const gradeOptions = useMemo(() => {
+        if (!linkData) {
+            return (grades?.map(g => typeof g === 'object' ? (g.name || g.id) : g) || ['أول ثانوي', 'ثاني ثانوي', 'ثالث ثانوي']).filter(Boolean);
+        }
+        return (linkData.allowedGrades?.includes('all') || !linkData.allowedGrades?.length
+            ? (grades?.map(g => typeof g === 'object' ? (g.name || g.id) : g) || ['أول ثانوي', 'ثاني ثانوي', 'ثالث ثانوي'])
+            : linkData.allowedGrades.map(g => typeof g === 'object' ? (g.name || g.id) : g)
+        ).filter(Boolean);
+    }, [linkData, grades]);
 
     // Section options helper (always returns array of strings)
     const getSectionOptions = (gradeName) => {
@@ -237,250 +273,6 @@ export default function PublicRegistrationPage() {
             }).filter(Boolean);
         }
         return ['1', '2', '3', '4', '5', '6'];
-    };
-
-    // Passcode Screen
-    if (!isPasscodeVerified && linkData.passcode) {
-        return (
-            <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-white p-4 font-cairo text-right" dir="rtl">
-                <Toaster position="top-center" />
-                <div className="bg-slate-900 border border-slate-800 p-8 rounded-3xl max-w-md w-full shadow-2xl text-center space-y-6">
-                    <AppLogo size="normal" className="justify-center" />
-                    <div>
-                        <div className="w-14 h-14 bg-indigo-500/10 border border-indigo-500/30 rounded-2xl flex items-center justify-center mx-auto text-indigo-400 mb-3">
-                            <Lock size={28} />
-                        </div>
-                        <h2 className="text-xl font-bold text-white mb-1">{linkData.title}</h2>
-                        <p className="text-xs text-indigo-300 font-semibold">
-                            إشراف الطالب: {linkData.delegateName}
-                        </p>
-                    </div>
-
-                    <div className="bg-slate-800/60 p-4 rounded-2xl border border-slate-800 text-xs text-slate-300 leading-relaxed">
-                        هذا الرابط محمي برمز مرور سري. يرجى إدخال الرمز الممنوح لك من الطالب المفوض للدخول.
-                    </div>
-
-                    <form onSubmit={handleVerifyPasscode} className="space-y-4">
-                        <div>
-                            <input
-                                type="text"
-                                required
-                                autoFocus
-                                placeholder="أدخل رمز المرور..."
-                                value={enteredPasscode}
-                                onChange={(e) => setEnteredPasscode(e.target.value)}
-                                className="w-full text-center tracking-widest text-lg font-mono px-4 py-3 bg-slate-950 border border-slate-700 rounded-xl text-white focus:outline-none focus:border-indigo-500"
-                            />
-                            {passcodeError && (
-                                <p className="text-xs text-rose-400 mt-2">{passcodeError}</p>
-                            )}
-                        </div>
-
-                        <button
-                            type="submit"
-                            className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl shadow-lg shadow-indigo-600/30 transition-all text-sm"
-                        >
-                            تأكيد والدخول
-                        </button>
-                    </form>
-                </div>
-            </div>
-        );
-    }
-
-    // Submit Single Entry
-    const handleSaveSingle = async (e, addAnother = false) => {
-        if (e) e.preventDefault();
-
-        if (!singleForm.studentName.trim()) {
-            toast.error("يرجى إدخال اسم الطالب");
-            return;
-        }
-
-        // Validate multiple custom fields (skip required validation if field has fixed value)
-        for (const field of customFields) {
-            const hasFixed = field.isFixed && field.fixedValue;
-            if (field.required && !hasFixed && !singleForm.customValues?.[field.id]?.trim()) {
-                toast.error(`يرجى تحديد ${field.label}`);
-                return;
-            }
-        }
-
-        const normInput = normalizeArabic(singleForm.studentName);
-        const isDupInLink = submissions.some(s => normalizeArabic(s.studentName) === normInput);
-        if (isDupInLink) {
-            if (!window.confirm(`تنبيه: الطالب "${singleForm.studentName.trim()}" مسجل مسبقاً في هذا الرابط. هل ترغب في المتابعة وتأكيد تسجيله مرة أخرى؟`)) {
-                return;
-            }
-        }
-
-        setIsSubmitting(true);
-        try {
-            const submissionStatus = isFull
-                ? (canWaitlist ? 'waitlist' : 'rejected')
-                : (linkData.approvalMode === 'immediate' ? 'approved' : 'pending');
-
-            const customValues = { ...(singleForm.customValues || {}) };
-            customFields.forEach(f => {
-                if (f.isFixed && f.fixedValue) {
-                    customValues[f.id] = f.fixedValue;
-                }
-            });
-            const customFieldValue = Object.values(customValues).filter(Boolean).join(' | ');
-
-            const isUnknown = !!singleForm.isGradeUnknown;
-            const finalGrade = isUnknown ? 'غير معروف' : (singleForm.grade || gradeOptions[0] || '');
-            const finalSection = isUnknown ? '' : (singleForm.section || '1');
-            const finalClass = isUnknown ? 'غير معروف' : `${finalGrade} / ${finalSection}`.trim();
-
-            const payload = {
-                linkId: linkData.id,
-                studentName: singleForm.studentName.trim(),
-                grade: finalGrade,
-                section: finalSection,
-                class: finalClass,
-                isGradeUnknown: isUnknown,
-                phone: singleForm.phone || '',
-                customValues,
-                customFieldValue,
-                status: submissionStatus,
-                createdAt: serverTimestamp()
-            };
-
-            await addDoc(collection(db, 'link_submissions'), payload);
-
-            if (submissionStatus === 'approved') {
-                await updateDoc(doc(db, 'registration_links', linkData.id), {
-                    currentCount: increment(1)
-                }).catch(console.warn);
-            }
-
-            if (submissionStatus === 'waitlist') {
-                toast.success("تم تسجيلك في قائمة الانتظار لاكتمال المقاعد");
-            } else {
-                toast.success("تم تسجيل بيانات الطالب بنجاح");
-            }
-
-            if (addAnother) {
-                setSingleForm(prev => ({
-                    ...prev,
-                    studentName: '',
-                    isGradeUnknown: false,
-                    phone: '',
-                    customValues: {}
-                }));
-            } else {
-                setSingleForm({
-                    studentName: '',
-                    isGradeUnknown: false,
-                    grade: gradeOptions[0] || '',
-                    section: '1',
-                    phone: '',
-                    customValues: {}
-                });
-            }
-        } catch (err) {
-            console.error("Submission error:", err);
-            toast.error("حدث خطأ أثناء الإرسال: " + err.message);
-        } finally {
-            setIsSubmitting(false);
-        }
-    };
-
-    // Bulk toggle unknown grades in Rapid Mode
-    const handleSetAllRapidUnknown = () => {
-        setRapidRows(prev => prev.map(row => ({
-            ...row,
-            isGradeUnknown: true,
-            grade: 'غير معروف',
-            section: ''
-        })));
-        toast.success('تم تعيين "الصف غير معروف" لجميع الطلاب في القائمة');
-    };
-
-    const handleClearAllRapidUnknown = () => {
-        const defaultGrade = gradeOptions[0] || '';
-        const defaultSection = getSectionOptions(defaultGrade)[0] || '1';
-        setRapidRows(prev => prev.map(row => {
-            const targetGrade = (row.grade && row.grade !== 'غير معروف') ? row.grade : defaultGrade;
-            const availableSecs = getSectionOptions(targetGrade);
-            const targetSection = (row.section && row.grade !== 'غير معروف' && availableSecs.includes(row.section))
-                ? row.section
-                : (availableSecs[0] || defaultSection);
-            return {
-                ...row,
-                isGradeUnknown: false,
-                grade: targetGrade,
-                section: targetSection
-            };
-        }));
-        toast.success('تم إلغاء خيار "غير معروف" واستعادة الصفوف لجميع الطلاب');
-    };
-
-    // Rapid Entry row management helpers
-    const handleAddRapidRow = (count = 1) => {
-        const allCurrentlyUnknown = rapidRows.length > 0 && rapidRows.every(r => r.isGradeUnknown);
-        const defaultGrade = gradeOptions[0] || '';
-        const defaultSection = getSectionOptions(defaultGrade)[0] || '1';
-        const newRows = Array.from({ length: count }, () => ({
-            studentName: '',
-            isGradeUnknown: allCurrentlyUnknown,
-            grade: allCurrentlyUnknown ? 'غير معروف' : defaultGrade,
-            section: allCurrentlyUnknown ? '' : defaultSection,
-            customValues: {},
-            phone: ''
-        }));
-        setRapidRows(prev => [...prev, ...newRows]);
-    };
-
-    const handleRemoveEmptyRapidRows = () => {
-        const filled = rapidRows.filter(r => r.studentName && r.studentName.trim().length > 0);
-        if (filled.length === 0) {
-            const defaultGrade = gradeOptions[0] || '';
-            const defaultSection = getSectionOptions(defaultGrade)[0] || '1';
-            setRapidRows([{
-                studentName: '',
-                isGradeUnknown: false,
-                grade: defaultGrade,
-                section: defaultSection,
-                customValues: {},
-                phone: ''
-            }]);
-            toast('تمت إعادة تعيين القائمة إلى سطر فارغ واحد', { icon: 'ℹ️' });
-            return;
-        }
-        const removedCount = rapidRows.length - filled.length;
-        setRapidRows(filled);
-        toast.success(`تم حذف ${removedCount} سطر فارغ`);
-    };
-
-    // --- Smart Bulk Paste & Student Recognition Algorithms ---
-
-    // Enhanced Arabic text normalizer specifically tailored for names
-    const normalizeArabicForMatch = (str) => {
-        if (!str) return '';
-        return String(str)
-            .trim()
-            .toLowerCase()
-            .replace(/[\u064B-\u065F\u0670]/g, '') // Tashkeel
-            .replace(/[أإآٱ]/g, 'ا') // Alef forms
-            .replace(/ة/g, 'ه')
-            .replace(/ى/g, 'ي')
-            .replace(/[ؤئ]/g, 'ي')
-            .replace(/\u0640/g, '') // Tatweel
-            .replace(/\bعبد\s+/g, 'عبد')
-            .replace(/\bابو\s+/g, 'ابو')
-            .replace(/\bال\s+/g, 'ال')
-            .replace(/[\(\)\[\]{}.,،_+\-–—\\/|:;؛!?~*]/g, ' ')
-            .replace(/\s+/g, ' ')
-            .trim();
-    };
-
-    // Filter out common connective prefixes in Arabic names (بن, ابن, بنت)
-    const getComparableTokens = (normStr) => {
-        return normStr
-            .split(' ')
-            .filter(t => t && t !== 'بن' && t !== 'ابن' && t !== 'ابنه' && t !== 'بنت');
     };
 
     // Pre-indexed students for fast and accurate matching
@@ -628,75 +420,6 @@ export default function PublicRegistrationPage() {
         };
     };
 
-    // Clean raw pasted text into student name candidates & hints
-    const parsePastedStudentsText = (rawText) => {
-        if (!rawText || !rawText.trim()) return [];
-
-        let rawLines = rawText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-
-        // If only 1 line but separated by commas:
-        if (rawLines.length === 1 && (rawLines[0].includes('،') || rawLines[0].includes(','))) {
-            const commaSplit = rawLines[0].split(/[،,]/).map(s => s.trim()).filter(Boolean);
-            if (commaSplit.length > 1) {
-                rawLines = commaSplit;
-            }
-        }
-
-        const results = [];
-
-        rawLines.forEach(line => {
-            let clean = line;
-
-            // 1. Remove leading numbering (Western 123 and Arabic-Indic ١٢٣)
-            clean = clean.replace(/^[\(\[]?[\d\u0660-\u0669]+[\)\]]?[\.\-\:\/]?\s*/, '');
-
-            // 2. Remove leading bullets or icons
-            clean = clean.replace(/^[•●○■▪️▫️\-*~–—✦★✓✔👉👤]+\s*/, '');
-
-            // 3. Remove labels like "الطالب:" or "الاسم:"
-            clean = clean.replace(/^(اسم\s+الطالب|الطالب|الاسم)\s*[:：\-]\s*/i, '');
-
-            // 4. Handle Excel tab separation
-            let tabGrade = '';
-            let tabSection = '';
-            if (clean.includes('\t')) {
-                const tabParts = clean.split('\t').map(p => p.trim()).filter(Boolean);
-                if (tabParts.length > 0) {
-                    clean = tabParts[0];
-                    if (tabParts[1]) tabGrade = tabParts[1];
-                    if (tabParts[2]) tabSection = tabParts[2];
-                }
-            }
-
-            // 5. Handle inline class annotation
-            let inlineGradeHint = tabGrade;
-            let inlineSectionHint = tabSection;
-
-            const classMatch = clean.match(/[\(\[\-–—]([^\)\]]+)[\)\]]?$/);
-            if (classMatch && !inlineGradeHint) {
-                const potentialClass = classMatch[1].trim();
-                if (/(ثانوي|اول|أول|ثاني|ثالث|\d\s*[\/\-]\s*\d)/i.test(potentialClass)) {
-                    inlineGradeHint = potentialClass;
-                    clean = clean.replace(/[\(\[\-–—]([^\)\]]+)[\)\]]?$/, '').trim();
-                }
-            }
-
-            // 6. Clean extra quotes or trailing punctuation
-            clean = clean.replace(/^["'«]+|["'»]+$/g, '').trim();
-            clean = clean.replace(/[\.\:\-–—]$/, '').trim();
-
-            if (clean.length >= 2) {
-                results.push({
-                    rawName: clean,
-                    inlineGradeHint,
-                    inlineSectionHint
-                });
-            }
-        });
-
-        return results;
-    };
-
     // Memoized live analysis stats of pasted text
     const smartAnalysisStats = useMemo(() => {
         if (!smartPasteText || !smartPasteText.trim()) {
@@ -722,6 +445,42 @@ export default function PublicRegistrationPage() {
             candidates
         };
     }, [smartPasteText, preparedStudents, gradeOptions]);
+
+    // Parse Custom Fields
+    const customFields = linkData ? (Array.isArray(linkData.customFields)
+        ? linkData.customFields
+        : (linkData.customFieldLabel ? [{ id: 'f_legacy', label: linkData.customFieldLabel, required: !!linkData.customFieldRequired }] : [])) : [];
+
+    // Status checks
+    const now = new Date();
+    const isExpired = linkData?.endAt && new Date(linkData.endAt) < now;
+    const isNotStarted = linkData?.startAt && new Date(linkData.startAt) > now;
+    const isPaused = linkData?.status === 'paused';
+
+    const hasMaxCap = linkData?.maxCapacity !== null && linkData?.maxCapacity !== undefined && linkData?.maxCapacity !== '' && Number(linkData?.maxCapacity) > 0;
+    const maxCap = hasMaxCap ? Number(linkData.maxCapacity) : null;
+    const approvedCount = submissions.filter(s => s.status === 'approved').length;
+    const pendingCount = submissions.filter(s => s.status === 'pending').length;
+    // In review mode, pending submissions occupy seats until reviewed; in immediate mode, approved count is used
+    const activeCount = linkData?.approvalMode === 'immediate' ? approvedCount : (approvedCount + pendingCount);
+    const isFull = hasMaxCap ? activeCount >= maxCap : false;
+    const canWaitlist = !!linkData?.allowWaitlist;
+
+    // Remaining Seats
+    const remainingSeats = hasMaxCap ? Math.max(0, maxCap - activeCount) : null;
+    const capacityPercent = hasMaxCap ? Math.min(100, Math.round((activeCount / maxCap) * 100)) : 100;
+
+    // Verify Passcode Handler
+    const handleVerifyPasscode = (e) => {
+        e.preventDefault();
+        if (enteredPasscode.trim() === linkData?.passcode?.trim()) {
+            setIsPasscodeVerified(true);
+            setPasscodeError('');
+            toast.success("تم الدخول بنجاح");
+        } else {
+            setPasscodeError("رمز المرور غير صحيح، يرجى التأكد من الرمز والمحاولة مجدداً.");
+        }
+    };
 
     // Apply smart paste text to rapidRows
     const handleApplySmartPaste = (customText = null) => {
@@ -794,6 +553,174 @@ export default function PublicRegistrationPage() {
             console.warn("Clipboard access denied or failed:", err);
             toast.error("تعذر الوصول للحافظة، يرجى لصق النص يدوياً داخل المربع");
         }
+    };
+
+    // Submit Single Entry
+    const handleSaveSingle = async (e, addAnother = false) => {
+        if (e) e.preventDefault();
+
+        if (!singleForm.studentName.trim()) {
+            toast.error("يرجى إدخال اسم الطالب");
+            return;
+        }
+
+        // Validate multiple custom fields (skip required validation if field has fixed value)
+        for (const field of customFields) {
+            const hasFixed = field.isFixed && field.fixedValue;
+            if (field.required && !hasFixed && !singleForm.customValues?.[field.id]?.trim()) {
+                toast.error(`يرجى تحديد ${field.label}`);
+                return;
+            }
+        }
+
+        const normInput = normalizeArabic(singleForm.studentName);
+        const isDupInLink = submissions.some(s => normalizeArabic(s.studentName) === normInput);
+        if (isDupInLink) {
+            if (!window.confirm(`تنبيه: الطالب "${singleForm.studentName.trim()}" مسجل مسبقاً في هذا الرابط. هل ترغب في المتابعة وتأكيد تسجيله مرة أخرى؟`)) {
+                return;
+            }
+        }
+
+        setIsSubmitting(true);
+        try {
+            const submissionStatus = isFull
+                ? (canWaitlist ? 'waitlist' : 'rejected')
+                : (linkData.approvalMode === 'immediate' ? 'approved' : 'pending');
+
+            const customValues = { ...(singleForm.customValues || {}) };
+            customFields.forEach(f => {
+                if (f.isFixed && f.fixedValue) {
+                    customValues[f.id] = f.fixedValue;
+                }
+            });
+            const customFieldValue = Object.values(customValues).filter(Boolean).join(' | ');
+
+            const isUnknown = !!singleForm.isGradeUnknown;
+            const finalGrade = isUnknown ? 'غير معروف' : (singleForm.grade || gradeOptions[0] || '');
+            const finalSection = isUnknown ? '' : (singleForm.section || '1');
+            const finalClass = isUnknown ? 'غير معروف' : `${finalGrade} / ${finalSection}`.trim();
+
+            const payload = {
+                linkId: linkData.id,
+                studentName: singleForm.studentName.trim(),
+                grade: finalGrade,
+                section: finalSection,
+                class: finalClass,
+                isGradeUnknown: isUnknown,
+                phone: singleForm.phone || '',
+                customValues,
+                customFieldValue,
+                status: submissionStatus,
+                createdAt: serverTimestamp()
+            };
+
+            await addDoc(collection(db, 'link_submissions'), payload);
+
+            if (submissionStatus === 'approved') {
+                await updateDoc(doc(db, 'registration_links', linkData.id), {
+                    currentCount: increment(1)
+                }).catch(console.warn);
+            }
+
+            if (submissionStatus === 'waitlist') {
+                toast.success("تم تسجيلك في قائمة الانتظار لاكتمال المقاعد");
+            } else {
+                toast.success("تم تسجيل بيانات الطالب بنجاح");
+            }
+
+            if (addAnother) {
+                setSingleForm(prev => ({
+                    ...prev,
+                    studentName: '',
+                    isGradeUnknown: false,
+                    phone: '',
+                    customValues: {}
+                }));
+            } else {
+                setSingleForm({
+                    studentName: '',
+                    isGradeUnknown: false,
+                    grade: gradeOptions[0] || '',
+                    section: '1',
+                    phone: '',
+                    customValues: {}
+                });
+            }
+        } catch (err) {
+            console.error("Submission error:", err);
+            toast.error("حدث خطأ أثناء الإرسال: " + err.message);
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+
+    // Bulk toggle unknown grades in Rapid Mode
+    const handleSetAllRapidUnknown = () => {
+        setRapidRows(prev => prev.map(row => ({
+            ...row,
+            isGradeUnknown: true,
+            grade: 'غير معروف',
+            section: ''
+        })));
+        toast.success('تم تعيين "الصف غير معروف" لجميع الطلاب في القائمة');
+    };
+
+    const handleClearAllRapidUnknown = () => {
+        const defaultGrade = gradeOptions[0] || '';
+        const defaultSection = getSectionOptions(defaultGrade)[0] || '1';
+        setRapidRows(prev => prev.map(row => {
+            const targetGrade = (row.grade && row.grade !== 'غير معروف') ? row.grade : defaultGrade;
+            const availableSecs = getSectionOptions(targetGrade);
+            const targetSection = (row.section && row.grade !== 'غير معروف' && availableSecs.includes(row.section))
+                ? row.section
+                : (availableSecs[0] || defaultSection);
+            return {
+                ...row,
+                isGradeUnknown: false,
+                grade: targetGrade,
+                section: targetSection
+            };
+        }));
+        toast.success('تم إلغاء خيار "غير معروف" واستعادة الصفوف لجميع الطلاب');
+    };
+
+    // Rapid Entry row management helpers
+    const handleAddRapidRow = (count = 1) => {
+        const allCurrentlyUnknown = rapidRows.length > 0 && rapidRows.every(r => r.isGradeUnknown);
+        const defaultGrade = gradeOptions[0] || '';
+        const defaultSection = getSectionOptions(defaultGrade)[0] || '1';
+        const newRows = Array.from({ length: count }, () => ({
+            studentName: '',
+            isGradeUnknown: allCurrentlyUnknown,
+            grade: allCurrentlyUnknown ? 'غير معروف' : defaultGrade,
+            section: allCurrentlyUnknown ? '' : defaultSection,
+            customValues: {},
+            phone: '',
+            matchedStudentId: null
+        }));
+        setRapidRows(prev => [...prev, ...newRows]);
+    };
+
+    const handleRemoveEmptyRapidRows = () => {
+        const filled = rapidRows.filter(r => r.studentName && r.studentName.trim().length > 0);
+        if (filled.length === 0) {
+            const defaultGrade = gradeOptions[0] || '';
+            const defaultSection = getSectionOptions(defaultGrade)[0] || '1';
+            setRapidRows([{
+                studentName: '',
+                isGradeUnknown: false,
+                grade: defaultGrade,
+                section: defaultSection,
+                customValues: {},
+                phone: '',
+                matchedStudentId: null
+            }]);
+            toast('تمت إعادة تعيين القائمة إلى سطر فارغ واحد', { icon: 'ℹ️' });
+            return;
+        }
+        const removedCount = rapidRows.length - filled.length;
+        setRapidRows(filled);
+        toast.success(`تم حذف ${removedCount} سطر فارغ`);
     };
 
     // Rapid Entry live metrics
@@ -938,6 +865,84 @@ export default function PublicRegistrationPage() {
             toast.error("فشل في الحفظ: " + err.message);
         }
     };
+
+    // Early return: Loading
+    if (loading) {
+        return (
+            <div className="min-h-screen bg-slate-950 flex items-center justify-center text-white">
+                <div className="flex flex-col items-center gap-3">
+                    <div className="w-10 h-10 border-3 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                    <span className="text-xs text-slate-400">جاري تحميل صفحة التسجيل...</span>
+                </div>
+            </div>
+        );
+    }
+
+    // Early return: Link Not Found
+    if (notFound || !linkData) {
+        return (
+            <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-white p-4 font-cairo text-right" dir="rtl">
+                <div className="bg-slate-900 border border-slate-800 p-8 rounded-3xl max-w-md w-full shadow-2xl text-center space-y-4">
+                    <div className="w-16 h-16 bg-rose-500/10 border border-rose-500/30 rounded-2xl flex items-center justify-center mx-auto text-rose-400">
+                        <AlertCircle size={32} />
+                    </div>
+                    <h2 className="text-xl font-bold text-white">رابط التسجيل غير موجود</h2>
+                    <p className="text-xs text-slate-400 leading-relaxed">
+                        عذراً، هذا الرابط غير متاح أو قد تم حذفه من قِبل إدارة النشاط المدرسي. يرجى التواصل مع رائد النشاط أو الطالب المفوض.
+                    </p>
+                </div>
+            </div>
+        );
+    }
+
+    // Early return: Passcode Screen
+    if (!isPasscodeVerified && linkData.passcode) {
+        return (
+            <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-white p-4 font-cairo text-right" dir="rtl">
+                <Toaster position="top-center" />
+                <div className="bg-slate-900 border border-slate-800 p-8 rounded-3xl max-w-md w-full shadow-2xl text-center space-y-6">
+                    <AppLogo size="normal" className="justify-center" />
+                    <div>
+                        <div className="w-14 h-14 bg-indigo-500/10 border border-indigo-500/30 rounded-2xl flex items-center justify-center mx-auto text-indigo-400 mb-3">
+                            <Lock size={28} />
+                        </div>
+                        <h2 className="text-xl font-bold text-white mb-1">{linkData.title}</h2>
+                        <p className="text-xs text-indigo-300 font-semibold">
+                            إشراف الطالب: {linkData.delegateName}
+                        </p>
+                    </div>
+
+                    <div className="bg-slate-800/60 p-4 rounded-2xl border border-slate-800 text-xs text-slate-300 leading-relaxed">
+                        هذا الرابط محمي برمز مرور سري. يرجى إدخال الرمز الممنوح لك من الطالب المفوض للدخول.
+                    </div>
+
+                    <form onSubmit={handleVerifyPasscode} className="space-y-4">
+                        <div>
+                            <input
+                                type="text"
+                                required
+                                autoFocus
+                                placeholder="أدخل رمز المرور..."
+                                value={enteredPasscode}
+                                onChange={(e) => setEnteredPasscode(e.target.value)}
+                                className="w-full text-center tracking-widest text-lg font-mono px-4 py-3 bg-slate-950 border border-slate-700 rounded-xl text-white focus:outline-none focus:border-indigo-500"
+                            />
+                            {passcodeError && (
+                                <p className="text-xs text-rose-400 mt-2">{passcodeError}</p>
+                            )}
+                        </div>
+
+                        <button
+                            type="submit"
+                            className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl shadow-lg shadow-indigo-600/30 transition-all text-sm"
+                        >
+                            تأكيد والدخول
+                        </button>
+                    </form>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="min-h-screen w-full bg-slate-950 text-white font-cairo text-right py-8 px-4 sm:px-6 lg:px-8 flex flex-col items-center overflow-y-auto" dir="rtl">
