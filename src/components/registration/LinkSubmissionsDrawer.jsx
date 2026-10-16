@@ -5,7 +5,7 @@ import {
     Clock, CheckSquare, Square, RefreshCw, Calendar, Link2,
     UserPlus, ArrowRightLeft, Sparkles, Filter, ChevronDown, Check,
     Phone, GraduationCap, AlertCircle, Award, UserX, ExternalLink, HelpCircle,
-    Zap, Users, FileText, GitMerge
+    Zap, Users, FileText, GitMerge, Layers, Tag
 } from 'lucide-react';
 import { db } from '../../firebase';
 import {
@@ -19,6 +19,57 @@ import { logPointsChange } from '../../utils/pointsLedger';
 import { sortStudentsArabic, sortStudentsByMode, STUDENT_SORT_OPTIONS, cleanClassString, getOfficialReportHeaderHtml, getStandardPrintStyles, printHtmlDocument, getOfficialReportFooterHtml } from '../../utils/reportUtils';
 import AdvancedPrintModal from '../ui/AdvancedPrintModal';
 
+const GROUP_COLOR_THEMES = [
+    {
+        badge: 'bg-violet-500/20 text-violet-300 border-violet-500/40',
+        pillActive: 'bg-violet-600 text-white border-violet-400 shadow-lg shadow-violet-600/30',
+        pillInactive: 'bg-violet-950/40 text-violet-300 border-violet-700/50 hover:bg-violet-900/50',
+        cardBorder: 'border-r-4 border-r-violet-500',
+        headerBg: 'bg-gradient-to-l from-violet-950/70 via-violet-950/30 to-slate-900/60 border-violet-500/40 text-violet-200',
+        dot: 'bg-violet-400'
+    },
+    {
+        badge: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40',
+        pillActive: 'bg-cyan-600 text-white border-cyan-400 shadow-lg shadow-cyan-600/30',
+        pillInactive: 'bg-cyan-950/40 text-cyan-300 border-cyan-700/50 hover:bg-cyan-900/50',
+        cardBorder: 'border-r-4 border-r-cyan-500',
+        headerBg: 'bg-gradient-to-l from-cyan-950/70 via-cyan-950/30 to-slate-900/60 border-cyan-500/40 text-cyan-200',
+        dot: 'bg-cyan-400'
+    },
+    {
+        badge: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
+        pillActive: 'bg-amber-600 text-white border-amber-400 shadow-lg shadow-amber-600/30',
+        pillInactive: 'bg-amber-950/40 text-amber-300 border-amber-700/50 hover:bg-amber-900/50',
+        cardBorder: 'border-r-4 border-r-amber-500',
+        headerBg: 'bg-gradient-to-l from-amber-950/70 via-amber-950/30 to-slate-900/60 border-amber-500/40 text-amber-200',
+        dot: 'bg-amber-400'
+    },
+    {
+        badge: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
+        pillActive: 'bg-emerald-600 text-white border-emerald-400 shadow-lg shadow-emerald-600/30',
+        pillInactive: 'bg-emerald-950/40 text-emerald-300 border-emerald-700/50 hover:bg-emerald-900/50',
+        cardBorder: 'border-r-4 border-r-emerald-500',
+        headerBg: 'bg-gradient-to-l from-emerald-950/70 via-emerald-950/30 to-slate-900/60 border-emerald-500/40 text-emerald-200',
+        dot: 'bg-emerald-400'
+    },
+    {
+        badge: 'bg-fuchsia-500/20 text-fuchsia-300 border-fuchsia-500/40',
+        pillActive: 'bg-fuchsia-600 text-white border-fuchsia-400 shadow-lg shadow-fuchsia-600/30',
+        pillInactive: 'bg-fuchsia-950/40 text-fuchsia-300 border-fuchsia-700/50 hover:bg-fuchsia-900/50',
+        cardBorder: 'border-r-4 border-r-fuchsia-500',
+        headerBg: 'bg-gradient-to-l from-fuchsia-950/70 via-fuchsia-950/30 to-slate-900/60 border-fuchsia-500/40 text-fuchsia-200',
+        dot: 'bg-fuchsia-400'
+    },
+    {
+        badge: 'bg-blue-500/20 text-blue-300 border-blue-500/40',
+        pillActive: 'bg-blue-600 text-white border-blue-400 shadow-lg shadow-blue-600/30',
+        pillInactive: 'bg-blue-950/40 text-blue-300 border-blue-700/50 hover:bg-blue-900/50',
+        cardBorder: 'border-r-4 border-r-blue-500',
+        headerBg: 'bg-gradient-to-l from-blue-950/70 via-blue-950/30 to-slate-900/60 border-blue-500/40 text-blue-200',
+        dot: 'bg-blue-400'
+    }
+];
+
 export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpdated, onEditLink }) {
     const { schoolInfo } = useSettings();
     const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
@@ -31,6 +82,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
     const [searchTerm, setSearchTerm] = useState('');
     const [statusFilter, setStatusFilter] = useState('all'); // all | pending | approved | rejected | waitlist | matched | unregistered | discrepancy | duplicate
     const [gradeFilter, setGradeFilter] = useState('all'); // all | unknown | specific grade
+    const [groupFilter, setGroupFilter] = useState('all'); // all | __ungrouped__ | normalized group name
     const [selectedIds, setSelectedIds] = useState([]);
     const [lastSelectedId, setLastSelectedId] = useState(null);
     const [editingSubmission, setEditingSubmission] = useState(null);
@@ -50,6 +102,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
     // Real-time Submissions Listener
     useEffect(() => {
         if (!isOpen || !link?.id) return;
+        setGroupFilter('all');
 
         const q = query(
             collection(db, 'link_submissions'),
@@ -403,6 +456,46 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
         return submissions.filter(s => !s.grade || s.grade === 'غير معروف' || !!s.isGradeUnknown).length;
     }, [submissions]);
 
+    // Available batch groups in this link (ordered by earliest submission so group 1 gets color 0, etc.)
+    const availableGroups = useMemo(() => {
+        const chronological = [...submissions].reverse();
+        const map = new Map();
+        chronological.forEach(s => {
+            const rawG = (s.batchGroupName || '').trim();
+            if (!rawG) return;
+            const norm = normalizeArabic(rawG);
+            if (!map.has(norm)) {
+                const themeIdx = map.size % GROUP_COLOR_THEMES.length;
+                map.set(norm, {
+                    name: rawG,
+                    normName: norm,
+                    count: 1,
+                    approvedCount: s.status === 'approved' ? 1 : 0,
+                    pendingCount: s.status === 'pending' ? 1 : 0,
+                    theme: GROUP_COLOR_THEMES[themeIdx]
+                });
+            } else {
+                const entry = map.get(norm);
+                entry.count += 1;
+                if (s.status === 'approved') entry.approvedCount += 1;
+                if (s.status === 'pending') entry.pendingCount += 1;
+            }
+        });
+        return Array.from(map.values());
+    }, [submissions]);
+
+    const groupThemeByNorm = useMemo(() => {
+        const lookup = {};
+        availableGroups.forEach(g => {
+            lookup[g.normName] = g.theme;
+        });
+        return lookup;
+    }, [availableGroups]);
+
+    const ungroupedCount = useMemo(() => {
+        return submissions.filter(s => !(s.batchGroupName || '').trim()).length;
+    }, [submissions]);
+
     // Dynamic Columns for Print
     const printColumnsDefinition = useMemo(() => {
         const cols = [
@@ -410,6 +503,14 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
             { id: 'studentName', label: 'اسم الطالب', defaultVisible: true },
             { id: 'class', label: 'الصف والشعبة', defaultVisible: true }
         ];
+
+        if (availableGroups.length > 0) {
+            cols.push({
+                id: 'batchGroupName',
+                label: 'المجموعة / الدفعة',
+                defaultVisible: true
+            });
+        }
 
         if (customFields.length > 0) {
             customFields.forEach(f => {
@@ -432,41 +533,69 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
         cols.push({ id: 'date', label: 'تاريخ التسجيل', defaultVisible: false });
 
         return cols;
-    }, [customFields, link?.customFieldLabel]);
+    }, [customFields, link?.customFieldLabel, availableGroups.length]);
 
     if (!isOpen || !link) return null;
 
-    // Filtered Submissions
-    const filteredSubmissions = submissions.filter(sub => {
-        const matchesSearch =
-            (sub.studentName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-            (sub.grade || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-            (sub.section || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-            (sub.phone || '').includes(searchTerm) ||
-            (sub.customFieldValue || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-            (sub.customValues && Object.values(sub.customValues).some(v => String(v).toLowerCase().includes(searchTerm.toLowerCase())));
+    // Filtered Submissions (sorted so members of the same group appear consecutively under each other)
+    const filteredSubmissions = (() => {
+        const filtered = submissions.filter(sub => {
+            const matchesSearch =
+                (sub.studentName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                (sub.grade || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                (sub.section || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                (sub.phone || '').includes(searchTerm) ||
+                (sub.batchGroupName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                (sub.customFieldValue || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                (sub.customValues && Object.values(sub.customValues).some(v => String(v).toLowerCase().includes(searchTerm.toLowerCase())));
 
-        const dup = duplicateMap[sub.id] || {};
-        let matchesStatus = true;
-        if (statusFilter === 'all') matchesStatus = true;
-        else if (statusFilter === 'pending') matchesStatus = sub.status === 'pending';
-        else if (statusFilter === 'approved') matchesStatus = sub.status === 'approved';
-        else if (statusFilter === 'waitlist') matchesStatus = sub.status === 'waitlist';
-        else if (statusFilter === 'rejected') matchesStatus = sub.status === 'rejected';
-        else if (statusFilter === 'matched') matchesStatus = !!dup.matchedStudent;
-        else if (statusFilter === 'unregistered') matchesStatus = !dup.matchedStudent;
-        else if (statusFilter === 'discrepancy') matchesStatus = !!dup.hasDiscrepancy;
-        else if (statusFilter === 'duplicate') matchesStatus = !!dup.duplicateInLink;
+            const dup = duplicateMap[sub.id] || {};
+            let matchesStatus = true;
+            if (statusFilter === 'all') matchesStatus = true;
+            else if (statusFilter === 'pending') matchesStatus = sub.status === 'pending';
+            else if (statusFilter === 'approved') matchesStatus = sub.status === 'approved';
+            else if (statusFilter === 'waitlist') matchesStatus = sub.status === 'waitlist';
+            else if (statusFilter === 'rejected') matchesStatus = sub.status === 'rejected';
+            else if (statusFilter === 'matched') matchesStatus = !!dup.matchedStudent;
+            else if (statusFilter === 'unregistered') matchesStatus = !dup.matchedStudent;
+            else if (statusFilter === 'discrepancy') matchesStatus = !!dup.hasDiscrepancy;
+            else if (statusFilter === 'duplicate') matchesStatus = !!dup.duplicateInLink;
 
-        let matchesGrade = true;
-        if (gradeFilter === 'unknown') {
-            matchesGrade = !sub.grade || sub.grade === 'غير معروف' || !!sub.isGradeUnknown;
-        } else if (gradeFilter !== 'all') {
-            matchesGrade = sub.grade === gradeFilter;
-        }
+            let matchesGrade = true;
+            if (gradeFilter === 'unknown') {
+                matchesGrade = !sub.grade || sub.grade === 'غير معروف' || !!sub.isGradeUnknown;
+            } else if (gradeFilter !== 'all') {
+                matchesGrade = sub.grade === gradeFilter;
+            }
 
-        return matchesSearch && matchesStatus && matchesGrade;
-    });
+            let matchesGroup = true;
+            if (groupFilter === '__ungrouped__') {
+                matchesGroup = !(sub.batchGroupName || '').trim();
+            } else if (groupFilter !== 'all') {
+                matchesGroup = normalizeArabic(sub.batchGroupName || '') === groupFilter;
+            }
+
+            return matchesSearch && matchesStatus && matchesGrade && matchesGroup;
+        });
+
+        if (availableGroups.length === 0) return filtered;
+
+        const groupOrder = new Map();
+        availableGroups.forEach((g, idx) => groupOrder.set(g.normName, idx));
+
+        return [...filtered].sort((a, b) => {
+            const gA = normalizeArabic(a.batchGroupName || '');
+            const gB = normalizeArabic(b.batchGroupName || '');
+            if (gA !== gB) {
+                if (!gA) return 1;
+                if (!gB) return -1;
+                return (groupOrder.get(gA) ?? 999) - (groupOrder.get(gB) ?? 999);
+            }
+            const tA = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
+            const tB = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
+            return tA - tB;
+        });
+    })();
 
     // Counts
     const counts = {
@@ -1034,6 +1163,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                 section: editingSubmission.section,
                 class: `${editingSubmission.grade || ''} / ${editingSubmission.section || ''}`.trim(),
                 phone: editingSubmission.phone || '',
+                batchGroupName: (editingSubmission.batchGroupName || '').trim() || null,
                 customValues: editingSubmission.customValues || {},
                 customFieldValue: editingSubmission.customFieldValue || '',
                 updatedAt: serverTimestamp()
@@ -1059,7 +1189,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
             : [link.customFieldLabel || "الملاحظة/الصنف"];
 
         const data = [
-            ["م", "اسم الطالب", "المرحلة", "الشعبة", ...customHeaders, "رقم الجوال", "الحالة", "تاريخ الإدخال"],
+            ["م", "اسم الطالب", "المرحلة", "الشعبة", "المجموعة / الدفعة", ...customHeaders, "رقم الجوال", "الحالة", "تاريخ الإدخال"],
             ...submissions.map((s, idx) => {
                 const customVals = customFields.length > 0
                     ? customFields.map(f => s.customValues?.[f.id] || (f.id === 'f_legacy' ? s.customFieldValue : '') || (customFields.length === 1 ? s.customFieldValue : '') || '-')
@@ -1074,6 +1204,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                     s.studentName || '',
                     gradeStr,
                     sectionStr,
+                    s.batchGroupName || '-',
                     ...customVals,
                     s.phone || '',
                     s.status === 'approved' ? 'معتمد' : s.status === 'pending' ? 'بانتظار المراجعة' : s.status === 'waitlist' ? 'قائمة انتظار' : 'مرفوض',
@@ -1147,6 +1278,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
             if (columns.includes('index')) ths.push('<th style="width: 40px; text-align: center;">#</th>');
             if (columns.includes('studentName')) ths.push('<th>اسم الطالب</th>');
             if (columns.includes('class')) ths.push('<th style="width: 120px; text-align: center;">الصف والشعبة</th>');
+            if (columns.includes('batchGroupName')) ths.push('<th style="width: 100px; text-align: center;">المجموعة / الدفعة</th>');
 
             if (customFields.length > 0) {
                 customFields.forEach(f => {
@@ -1169,6 +1301,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                 if (columns.includes('index')) tds.push(`<td style="text-align: center; font-weight: bold;">${idx + 1}</td>`);
                 if (columns.includes('studentName')) tds.push(`<td style="font-weight: bold;">${s.studentName || ''}</td>`);
                 if (columns.includes('class')) tds.push(`<td style="text-align: center;">${cleanClassString(s)}</td>`);
+                if (columns.includes('batchGroupName')) tds.push(`<td style="text-align: center; font-weight: bold;">${s.batchGroupName || '-'}</td>`);
 
                 if (customFields.length > 0) {
                     customFields.forEach(f => {
@@ -1384,71 +1517,147 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                 </div>
 
                 {/* Toolbar */}
-                <div className="p-4 border-b border-slate-800 bg-slate-900 flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex items-center gap-2 flex-1 min-w-[240px]">
-                        <div className="relative flex-1">
-                            <Search size={16} className="absolute right-3 top-2.5 text-slate-400" />
-                            <input
-                                type="text"
-                                placeholder="بحث بالاسم، الصف، أو المساهمة..."
-                                value={searchTerm}
-                                onChange={(e) => setSearchTerm(e.target.value)}
-                                className="w-full pl-3 pr-9 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white placeholder-slate-400 focus:outline-none focus:border-indigo-500"
-                            />
+                <div className="p-4 border-b border-slate-800 bg-slate-900 flex flex-col gap-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex items-center gap-2 flex-1 min-w-[240px] flex-wrap">
+                            <div className="relative flex-1 min-w-[180px]">
+                                <Search size={16} className="absolute right-3 top-2.5 text-slate-400" />
+                                <input
+                                    type="text"
+                                    placeholder="بحث بالاسم، الصف، المجموعة، أو المساهمة..."
+                                    value={searchTerm}
+                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                    className="w-full pl-3 pr-9 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white placeholder-slate-400 focus:outline-none focus:border-indigo-500"
+                                />
+                            </div>
+
+                            {/* Status Filter */}
+                            <select
+                                value={statusFilter}
+                                onChange={(e) => setStatusFilter(e.target.value)}
+                                className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-500 font-semibold"
+                            >
+                                <option value="all">كل الحالات ({counts.total})</option>
+                                <option value="pending">بانتظار الاعتماد ({counts.pending})</option>
+                                <option value="approved">المعتمدون ({counts.approved})</option>
+                                <option value="matched">🟢 مقيدون بالمدرسة ({counts.matched})</option>
+                                <option value="unregistered">✨ غير مقيدين (جدد) ({counts.unregistered})</option>
+                                {counts.discrepancy > 0 && (
+                                    <option value="discrepancy">⚠️ اختلاف بالصف/الشعبة ({counts.discrepancy})</option>
+                                )}
+                                {counts.duplicate > 0 && (
+                                    <option value="duplicate">⚠️ مكرر بالرابط ({counts.duplicate})</option>
+                                )}
+                                <option value="waitlist">قائمة انتظار ({counts.waitlist})</option>
+                                <option value="rejected">مرفوض ({counts.rejected})</option>
+                            </select>
+
+                            {/* Grade Filter */}
+                            <select
+                                value={gradeFilter}
+                                onChange={(e) => setGradeFilter(e.target.value)}
+                                className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-500 font-semibold"
+                            >
+                                <option value="all">كل الصفوف</option>
+                                <option value="unknown">❓ غير معروف ({unknownGradesCount})</option>
+                                {availableGrades.map(g => (
+                                    <option key={g} value={g}>{g}</option>
+                                ))}
+                            </select>
+
+                            {/* Group / Batch Filter Dropdown */}
+                            {availableGroups.length > 0 && (
+                                <select
+                                    value={groupFilter}
+                                    onChange={(e) => setGroupFilter(e.target.value)}
+                                    className="px-3 py-2 bg-indigo-950/60 border border-indigo-500/40 rounded-xl text-xs text-indigo-200 focus:outline-none focus:border-indigo-400 font-bold"
+                                >
+                                    <option value="all">📂 كل المجموعات ({counts.total})</option>
+                                    {availableGroups.map(g => (
+                                        <option key={g.norm} value={g.norm}>
+                                            🏷️ مجموعة: {g.name} ({g.count})
+                                        </option>
+                                    ))}
+                                    {ungroupedCount > 0 && (
+                                        <option value="ungrouped">بدون مجموعة ({ungroupedCount})</option>
+                                    )}
+                                </select>
+                            )}
                         </div>
 
-                        {/* Status Filter */}
-                        <select
-                            value={statusFilter}
-                            onChange={(e) => setStatusFilter(e.target.value)}
-                            className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-500 font-semibold"
-                        >
-                            <option value="all">كل الحالات ({counts.total})</option>
-                            <option value="pending">بانتظار الاعتماد ({counts.pending})</option>
-                            <option value="approved">المعتمدون ({counts.approved})</option>
-                            <option value="matched">🟢 مقيدون بالمدرسة ({counts.matched})</option>
-                            <option value="unregistered">✨ غير مقيدين (جدد) ({counts.unregistered})</option>
-                            {counts.discrepancy > 0 && (
-                                <option value="discrepancy">⚠️ اختلاف بالصف/الشعبة ({counts.discrepancy})</option>
-                            )}
-                            {counts.duplicate > 0 && (
-                                <option value="duplicate">⚠️ مكرر بالرابط ({counts.duplicate})</option>
-                            )}
-                            <option value="waitlist">قائمة انتظار ({counts.waitlist})</option>
-                            <option value="rejected">مرفوض ({counts.rejected})</option>
-                        </select>
-
-                        {/* Grade Filter */}
-                        <select
-                            value={gradeFilter}
-                            onChange={(e) => setGradeFilter(e.target.value)}
-                            className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-500 font-semibold"
-                        >
-                            <option value="all">كل الصفوف</option>
-                            <option value="unknown">❓ غير معروف ({unknownGradesCount})</option>
-                            {availableGrades.map(g => (
-                                <option key={g} value={g}>{g}</option>
-                            ))}
-                        </select>
+                        {/* Export & Print */}
+                        <div className="flex items-center gap-2">
+                            <button
+                                onClick={handleExportExcel}
+                                className="px-3 py-2 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 text-emerald-300 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                            >
+                                <Download size={14} />
+                                <span>تصدير Excel</span>
+                            </button>
+                            <button
+                                onClick={() => setIsPrintModalOpen(true)}
+                                className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                            >
+                                <Printer size={14} />
+                                <span>طباعة الكشف</span>
+                            </button>
+                        </div>
                     </div>
 
-                    {/* Export & Print */}
-                    <div className="flex items-center gap-2">
-                        <button
-                            onClick={handleExportExcel}
-                            className="px-3 py-2 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 text-emerald-300 text-xs font-semibold flex items-center gap-1.5 transition-colors"
-                        >
-                            <Download size={14} />
-                            <span>تصدير Excel</span>
-                        </button>
-                        <button
-                            onClick={() => setIsPrintModalOpen(true)}
-                            className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors"
-                        >
-                            <Printer size={14} />
-                            <span>طباعة الكشف</span>
-                        </button>
-                    </div>
+                    {/* Quick Group Filter Pills Bar */}
+                    {availableGroups.length > 0 && (
+                        <div className="flex items-center gap-1.5 flex-wrap pt-2 border-t border-slate-800/80">
+                            <span className="text-[11px] font-bold text-slate-400 flex items-center gap-1 ml-1">
+                                <Layers size={13} className="text-indigo-400" />
+                                <span>فلترة سريعة بالمجموعات:</span>
+                            </span>
+                            <button
+                                type="button"
+                                onClick={() => setGroupFilter('all')}
+                                className={`text-[11px] px-2.5 py-1 rounded-lg border font-bold transition-all ${
+                                    groupFilter === 'all'
+                                        ? 'bg-white text-slate-900 border-white shadow-sm'
+                                        : 'bg-slate-800/80 text-slate-300 border-slate-700 hover:border-slate-500'
+                                }`}
+                            >
+                                الكل ({counts.total})
+                            </button>
+                            {availableGroups.map((grp) => {
+                                const isActive = groupFilter === grp.norm;
+                                return (
+                                    <button
+                                        key={grp.norm}
+                                        type="button"
+                                        onClick={() => setGroupFilter(isActive ? 'all' : grp.norm)}
+                                        className={`text-[11px] px-2.5 py-1 rounded-lg border font-bold flex items-center gap-1.5 transition-all ${
+                                            isActive
+                                                ? `${grp.theme.activePill} ring-2 ring-white/20`
+                                                : `${grp.theme.badge} hover:opacity-90`
+                                        }`}
+                                    >
+                                        <span className={`w-2 h-2 rounded-full ${isActive ? 'bg-white' : grp.theme.dot}`} />
+                                        <span>{grp.name}</span>
+                                        <span className={`px-1.5 py-0.2 rounded text-[10px] ${isActive ? 'bg-black/25 text-white' : 'bg-black/30'}`}>
+                                            {grp.count}
+                                        </span>
+                                    </button>
+                                );
+                            })}
+                            {ungroupedCount > 0 && (
+                                <button
+                                    type="button"
+                                    onClick={() => setGroupFilter(groupFilter === 'ungrouped' ? 'all' : 'ungrouped')}
+                                    className={`text-[11px] px-2.5 py-1 rounded-lg border font-bold transition-all ${
+                                        groupFilter === 'ungrouped'
+                                            ? 'bg-slate-600 text-white border-slate-400'
+                                            : 'bg-slate-800/60 text-slate-400 border-slate-700 hover:text-slate-200'
+                                    }`}
+                                >
+                                    بدون مجموعة ({ungroupedCount})
+                                </button>
+                            )}
+                        </div>
+                    )}
                 </div>
 
                 {/* Bulk Actions Banner */}
@@ -1519,23 +1728,86 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                 </span>
                             </div>
 
-                            {filteredSubmissions.map((sub) => {
+                            {filteredSubmissions.map((sub, idx) => {
                                 const isSelected = selectedIds.includes(sub.id);
                                 const dupInfo = duplicateMap[sub.id] || {};
+                                const subGroupRaw = (sub.batchGroupName || '').trim();
+                                const subGroupNorm = normalizeArabic(subGroupRaw);
+                                const prevGroupNorm = idx > 0 ? normalizeArabic((filteredSubmissions[idx - 1].batchGroupName || '').trim()) : null;
+                                const isFirstOfGroup = idx === 0 || subGroupNorm !== prevGroupNorm;
+                                const groupInfo = subGroupNorm ? groupThemeByNorm[subGroupNorm] : null;
+                                const groupTheme = groupInfo?.theme || null;
+                                const groupItemsInFiltered = isFirstOfGroup
+                                    ? filteredSubmissions.filter(x => normalizeArabic((x.batchGroupName || '').trim()) === subGroupNorm)
+                                    : [];
+                                const allGroupSelected = groupItemsInFiltered.length > 0 && groupItemsInFiltered.every(x => selectedIds.includes(x.id));
 
                                 return (
-                                    <div
-                                        key={sub.id}
-                                        className={`p-3.5 rounded-xl border transition-all ${
-                                            isSelected
-                                                ? 'bg-indigo-950/40 border-indigo-500/60'
-                                                : sub.status === 'approved'
-                                                ? 'bg-slate-800/40 border-slate-700/60'
-                                                : sub.status === 'rejected'
-                                                ? 'bg-rose-950/20 border-rose-800/30'
-                                                : 'bg-slate-800/80 border-slate-700 hover:border-slate-600'
-                                        }`}
-                                    >
+                                    <React.Fragment key={sub.id}>
+                                        {/* Group Header Banner when a new group block starts */}
+                                        {isFirstOfGroup && availableGroups.length > 0 && (
+                                            <div className={`mt-3 mb-1.5 px-3.5 py-2 rounded-xl border flex items-center justify-between gap-2 ${
+                                                groupTheme
+                                                    ? groupTheme.header
+                                                    : 'bg-slate-800/70 border-slate-700 text-slate-300'
+                                            }`}>
+                                                <div className="flex items-center gap-2">
+                                                    <span className={`w-2.5 h-2.5 rounded-full ${groupTheme ? groupTheme.dot : 'bg-slate-500'}`} />
+                                                    <Layers size={14} />
+                                                    <span className="text-xs font-black">
+                                                        {subGroupRaw ? `مجموعة: ${subGroupRaw}` : 'بدون مجموعة'}
+                                                    </span>
+                                                    <span className="text-[11px] px-2 py-0.5 rounded-full bg-black/30 font-bold">
+                                                        {groupItemsInFiltered.length} طالب
+                                                    </span>
+                                                    {groupInfo && (
+                                                        <span className="text-[11px] opacity-80">
+                                                            (معتمد: {groupInfo.approvedCount} • بانتظار: {groupInfo.pendingCount})
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            const gIds = groupItemsInFiltered.map(x => x.id);
+                                                            if (allGroupSelected) {
+                                                                setSelectedIds(prev => prev.filter(id => !gIds.includes(id)));
+                                                            } else {
+                                                                setSelectedIds(prev => Array.from(new Set([...prev, ...gIds])));
+                                                            }
+                                                        }}
+                                                        className="text-[11px] px-2.5 py-1 rounded-lg bg-black/30 hover:bg-black/50 text-white font-bold flex items-center gap-1 transition-colors"
+                                                    >
+                                                        {allGroupSelected ? <CheckSquare size={12} /> : <Square size={12} />}
+                                                        <span>{allGroupSelected ? 'إلغاء تحديد المجموعة' : 'تحديد طلاب المجموعة'}</span>
+                                                    </button>
+                                                    {subGroupNorm && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setGroupFilter(groupFilter === subGroupNorm ? 'all' : subGroupNorm)}
+                                                            className="text-[11px] px-2 py-1 rounded-lg bg-black/25 hover:bg-black/40 text-white/90 font-semibold transition-colors"
+                                                        >
+                                                            {groupFilter === subGroupNorm ? 'عرض كل المجموعات' : 'عرض هذه المجموعة فقط'}
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        <div
+                                            className={`p-3.5 rounded-xl border transition-all ${
+                                                groupTheme ? groupTheme.cardBorder : ''
+                                            } ${
+                                                isSelected
+                                                    ? 'bg-indigo-950/40 border-indigo-500/60'
+                                                    : sub.status === 'approved'
+                                                    ? 'bg-slate-800/40 border-slate-700/60'
+                                                    : sub.status === 'rejected'
+                                                    ? 'bg-rose-950/20 border-rose-800/30'
+                                                    : 'bg-slate-800/80 border-slate-700 hover:border-slate-600'
+                                            }`}
+                                        >
                                         <div className="flex items-start justify-between gap-3">
                                             {/* Checkbox & Student Details */}
                                             <div className="flex items-start gap-3 flex-1">
@@ -1551,6 +1823,12 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                                         <h4 className="font-bold text-white text-sm">
                                                             {sub.studentName}
                                                         </h4>
+                                                        {subGroupRaw && groupTheme && (
+                                                            <span className={`text-[11px] px-2 py-0.5 rounded-md border font-bold flex items-center gap-1 ${groupTheme.badge}`}>
+                                                                <Tag size={10} />
+                                                                <span>مجموعة: {subGroupRaw}</span>
+                                                            </span>
+                                                        )}
                                                         <span className={`text-xs px-2 py-0.5 rounded-md font-semibold ${
                                                             sub.grade === 'غير معروف' || !sub.grade || sub.isGradeUnknown
                                                                 ? 'bg-amber-950/70 border border-amber-600/50 text-amber-300'
@@ -1761,7 +2039,8 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                                 </button>
                                             </div>
                                         </div>
-                                    </div>
+                                        </div>
+                                    </React.Fragment>
                                 );
                             })}
                         </div>
@@ -1803,6 +2082,16 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                             className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm"
                                         />
                                     </div>
+                                </div>
+                                <div>
+                                    <label className="block text-xs text-slate-400 mb-1">اسم المجموعة / الدفعة (اختياري)</label>
+                                    <input
+                                        type="text"
+                                        placeholder="مثال: ص 1 أو ص 2"
+                                        value={editingSubmission.batchGroupName || ''}
+                                        onChange={(e) => setEditingSubmission({ ...editingSubmission, batchGroupName: e.target.value })}
+                                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm"
+                                    />
                                 </div>
                                 {customFields.length > 0 ? (
                                     customFields.map(field => (

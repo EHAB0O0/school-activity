@@ -9,11 +9,62 @@ import {
     Lock, CheckCircle, AlertCircle, Users, Plus, Trash2,
     Edit2, Save, Sparkles, Clock, AlertTriangle, ArrowRight, X,
     HelpCircle, RotateCcw, Clipboard, CheckCircle2, Zap,
-    ChevronDown, ChevronUp, Copy, Check
+    ChevronDown, ChevronUp, Copy, Check, Layers, Tag
 } from 'lucide-react';
 import toast, { Toaster } from 'react-hot-toast';
 import AppLogo from '../components/ui/AppLogo';
 import { useSettings } from '../contexts/SettingsContext';
+
+const GROUP_COLOR_THEMES = [
+    {
+        badge: 'bg-violet-500/20 text-violet-300 border-violet-500/40',
+        pillActive: 'bg-violet-600 text-white border-violet-400 shadow-lg shadow-violet-600/30',
+        pillInactive: 'bg-violet-950/40 text-violet-300 border-violet-700/50 hover:bg-violet-900/50',
+        cardBorder: 'border-r-4 border-r-violet-500',
+        headerBg: 'bg-gradient-to-l from-violet-950/70 via-violet-950/30 to-slate-900/60 border-violet-500/40 text-violet-200',
+        dot: 'bg-violet-400'
+    },
+    {
+        badge: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40',
+        pillActive: 'bg-cyan-600 text-white border-cyan-400 shadow-lg shadow-cyan-600/30',
+        pillInactive: 'bg-cyan-950/40 text-cyan-300 border-cyan-700/50 hover:bg-cyan-900/50',
+        cardBorder: 'border-r-4 border-r-cyan-500',
+        headerBg: 'bg-gradient-to-l from-cyan-950/70 via-cyan-950/30 to-slate-900/60 border-cyan-500/40 text-cyan-200',
+        dot: 'bg-cyan-400'
+    },
+    {
+        badge: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
+        pillActive: 'bg-amber-600 text-white border-amber-400 shadow-lg shadow-amber-600/30',
+        pillInactive: 'bg-amber-950/40 text-amber-300 border-amber-700/50 hover:bg-amber-900/50',
+        cardBorder: 'border-r-4 border-r-amber-500',
+        headerBg: 'bg-gradient-to-l from-amber-950/70 via-amber-950/30 to-slate-900/60 border-amber-500/40 text-amber-200',
+        dot: 'bg-amber-400'
+    },
+    {
+        badge: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
+        pillActive: 'bg-emerald-600 text-white border-emerald-400 shadow-lg shadow-emerald-600/30',
+        pillInactive: 'bg-emerald-950/40 text-emerald-300 border-emerald-700/50 hover:bg-emerald-900/50',
+        cardBorder: 'border-r-4 border-r-emerald-500',
+        headerBg: 'bg-gradient-to-l from-emerald-950/70 via-emerald-950/30 to-slate-900/60 border-emerald-500/40 text-emerald-200',
+        dot: 'bg-emerald-400'
+    },
+    {
+        badge: 'bg-fuchsia-500/20 text-fuchsia-300 border-fuchsia-500/40',
+        pillActive: 'bg-fuchsia-600 text-white border-fuchsia-400 shadow-lg shadow-fuchsia-600/30',
+        pillInactive: 'bg-fuchsia-950/40 text-fuchsia-300 border-fuchsia-700/50 hover:bg-fuchsia-900/50',
+        cardBorder: 'border-r-4 border-r-fuchsia-500',
+        headerBg: 'bg-gradient-to-l from-fuchsia-950/70 via-fuchsia-950/30 to-slate-900/60 border-fuchsia-500/40 text-fuchsia-200',
+        dot: 'bg-fuchsia-400'
+    },
+    {
+        badge: 'bg-blue-500/20 text-blue-300 border-blue-500/40',
+        pillActive: 'bg-blue-600 text-white border-blue-400 shadow-lg shadow-blue-600/30',
+        pillInactive: 'bg-blue-950/40 text-blue-300 border-blue-700/50 hover:bg-blue-900/50',
+        cardBorder: 'border-r-4 border-r-blue-500',
+        headerBg: 'bg-gradient-to-l from-blue-950/70 via-blue-950/30 to-slate-900/60 border-blue-500/40 text-blue-200',
+        dot: 'bg-blue-400'
+    }
+];
 
 // --- Pure Arabic Normalization & Text Parsing Utilities ---
 
@@ -161,6 +212,8 @@ export default function PublicRegistrationPage() {
     const [students, setStudents] = useState([]);
     const [smartPasteText, setSmartPasteText] = useState('');
     const [isSmartPasteExpanded, setIsSmartPasteExpanded] = useState(true);
+    const [batchGroupName, setBatchGroupName] = useState('');
+    const [publicGroupFilter, setPublicGroupFilter] = useState('all');
 
     // Submissions by this link listener
     const [submissions, setSubmissions] = useState([]);
@@ -446,6 +499,74 @@ export default function PublicRegistrationPage() {
         };
     }, [smartPasteText, preparedStudents, gradeOptions]);
 
+    // Existing batch groups in this link (ordered by earliest submission so group 1 keeps color 0, etc.)
+    const existingGroups = useMemo(() => {
+        const chronological = [...submissions].reverse();
+        const map = new Map();
+        chronological.forEach(s => {
+            const rawG = (s.batchGroupName || '').trim();
+            if (!rawG) return;
+            const norm = normalizeArabic(rawG);
+            if (!map.has(norm)) {
+                const themeIdx = map.size % GROUP_COLOR_THEMES.length;
+                map.set(norm, {
+                    name: rawG,
+                    normName: norm,
+                    count: 1,
+                    theme: GROUP_COLOR_THEMES[themeIdx]
+                });
+            } else {
+                map.get(norm).count += 1;
+            }
+        });
+        return Array.from(map.values());
+    }, [submissions]);
+
+    const groupThemeByNorm = useMemo(() => {
+        const lookup = {};
+        existingGroups.forEach(g => {
+            lookup[g.normName] = g.theme;
+        });
+        return lookup;
+    }, [existingGroups]);
+
+    // Check if the typed batchGroupName is already used in this link
+    const isDuplicateGroupName = useMemo(() => {
+        const trimmed = batchGroupName.trim();
+        if (!trimmed) return false;
+        const norm = normalizeArabic(trimmed);
+        return existingGroups.some(g => g.normName === norm);
+    }, [batchGroupName, existingGroups]);
+
+    // Filtered and grouped submissions for the bottom list in PublicRegistrationPage
+    const filteredPublicSubmissions = useMemo(() => {
+        let list = submissions;
+        if (publicGroupFilter === '__ungrouped__') {
+            list = submissions.filter(s => !(s.batchGroupName || '').trim());
+        } else if (publicGroupFilter !== 'all') {
+            list = submissions.filter(s => normalizeArabic(s.batchGroupName || '') === publicGroupFilter);
+        }
+
+        // Group items of the same batchGroupName together consecutively
+        if (existingGroups.length === 0) return list;
+
+        const groupOrder = new Map();
+        existingGroups.forEach((g, idx) => groupOrder.set(g.normName, idx));
+
+        return [...list].sort((a, b) => {
+            const gA = normalizeArabic(a.batchGroupName || '');
+            const gB = normalizeArabic(b.batchGroupName || '');
+            if (gA !== gB) {
+                if (!gA) return 1;
+                if (!gB) return -1;
+                return (groupOrder.get(gA) ?? 999) - (groupOrder.get(gB) ?? 999);
+            }
+            const tA = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
+            const tB = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
+            return tA - tB;
+        });
+    }, [submissions, publicGroupFilter, existingGroups]);
+
     // Parse Custom Fields
     const customFields = linkData ? (Array.isArray(linkData.customFields)
         ? linkData.customFields
@@ -484,6 +605,11 @@ export default function PublicRegistrationPage() {
 
     // Apply smart paste text to rapidRows
     const handleApplySmartPaste = (customText = null) => {
+        if (isDuplicateGroupName) {
+            toast.error(`اسم المجموعة "${batchGroupName.trim()}" مستخدم مسبقاً في هذا الرابط! يرجى اختيار اسم آخر غير مكرر.`);
+            return;
+        }
+
         const textToUse = customText !== null ? customText : smartPasteText;
         if (!textToUse || !textToUse.trim()) {
             toast.error("يرجى لصق أو إدخال أسماء الطلاب أولاً");
@@ -537,6 +663,10 @@ export default function PublicRegistrationPage() {
 
     // Direct paste from clipboard
     const handlePasteFromClipboard = async () => {
+        if (isDuplicateGroupName) {
+            toast.error(`اسم المجموعة "${batchGroupName.trim()}" مستخدم مسبقاً في هذا الرابط! يرجى اختيار اسم آخر غير مكرر.`);
+            return;
+        }
         try {
             if (!navigator.clipboard?.readText) {
                 toast.error("متصفحك لا يدعم القراءة المباشرة من الحافظة، يرجى اللصق يدوياً في المربع");
@@ -736,6 +866,12 @@ export default function PublicRegistrationPage() {
             return;
         }
 
+        const cleanGroupName = batchGroupName.trim();
+        if (cleanGroupName && isDuplicateGroupName) {
+            toast.error(`لا يمكن الحفظ: اسم المجموعة "${cleanGroupName}" مستخدم مسبقاً في هذا الرابط! يرجى اختيار اسم مختلف.`);
+            return;
+        }
+
         // Validate multiple custom fields in rapid mode (skip if fixed)
         for (const field of customFields) {
             const hasFixed = field.isFixed && field.fixedValue;
@@ -749,7 +885,11 @@ export default function PublicRegistrationPage() {
         }
 
         setIsSubmitting(true);
-        const toastId = toast.loading(`جاري حفظ ${validRows.length} طالب...`);
+        const toastId = toast.loading(
+            cleanGroupName
+                ? `جاري حفظ ${validRows.length} طالب ضمن مجموعة "${cleanGroupName}"...`
+                : `جاري حفظ ${validRows.length} طالب...`
+        );
 
         try {
             let seatsLeft = hasMaxCap ? Math.max(0, maxCap - activeCount) : 999999;
@@ -789,6 +929,7 @@ export default function PublicRegistrationPage() {
                     customFieldValue,
                     status: submissionStatus,
                     matchedStudentId: row.matchedStudentId || null,
+                    batchGroupName: cleanGroupName || null,
                     createdAt: serverTimestamp()
                 });
 
@@ -799,7 +940,12 @@ export default function PublicRegistrationPage() {
                 }
             }
 
-            toast.success("تم تسجيل جميع الطلاب بنجاح", { id: toastId });
+            toast.success(
+                cleanGroupName
+                    ? `تم تسجيل ${validRows.length} طالب في مجموعة "${cleanGroupName}" بنجاح`
+                    : "تم تسجيل جميع الطلاب بنجاح",
+                { id: toastId }
+            );
             const defaultGrade = gradeOptions[0] || '';
             const defaultSection = getSectionOptions(defaultGrade)[0] || '1';
             setRapidRows([
@@ -808,6 +954,7 @@ export default function PublicRegistrationPage() {
                 { studentName: '', isGradeUnknown: false, grade: defaultGrade, section: defaultSection, customValues: {}, phone: '' }
             ]);
             setSmartPasteText('');
+            setBatchGroupName('');
         } catch (err) {
             console.error("Rapid submit error:", err);
             toast.error("حدث خطأ أثناء الحفظ", { id: toastId });
@@ -854,6 +1001,7 @@ export default function PublicRegistrationPage() {
                 customValues,
                 customFieldValue,
                 phone: editingSub.phone || '',
+                batchGroupName: (editingSub.batchGroupName || '').trim() || null,
                 status: editingSub.status,
                 linkId: linkData.id,
                 updatedAt: serverTimestamp()
@@ -1356,6 +1504,104 @@ export default function PublicRegistrationPage() {
                                         </div>
                                     </div>
 
+                                    {/* حقل تسمية المجموعة / الدفعة الحالية (ممنوع التكرار داخل نفس الرابط) */}
+                                    <div className="bg-slate-950/85 border border-indigo-500/30 rounded-2xl p-3.5 space-y-2.5 relative z-10">
+                                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                            <label className="text-xs font-bold text-indigo-200 flex items-center gap-1.5">
+                                                <Layers size={15} className="text-indigo-400 shrink-0" />
+                                                <span>اسم المجموعة / الدفعة لهذه الأسماء (اختياري):</span>
+                                            </label>
+                                            <span className="text-[10px] text-slate-400">
+                                                لتسهيل فرزهم واعتمادهم معاً لاحقاً (لا يتكرر الاسم في نفس الرابط)
+                                            </span>
+                                        </div>
+
+                                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                                            <div className="relative flex-1">
+                                                <Tag size={14} className="absolute right-3 top-2.5 text-slate-400" />
+                                                <input
+                                                    type="text"
+                                                    value={batchGroupName}
+                                                    onChange={(e) => setBatchGroupName(e.target.value)}
+                                                    placeholder="مثال: ص 1 ، ص 2 ، صفحة 1 ، مجموعة أ ..."
+                                                    className={`w-full pr-9 pl-8 py-2 bg-slate-900 border rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none transition-colors ${
+                                                        isDuplicateGroupName
+                                                            ? 'border-rose-500 focus:border-rose-400 bg-rose-950/20'
+                                                            : batchGroupName.trim()
+                                                            ? 'border-emerald-500/60 focus:border-emerald-400'
+                                                            : 'border-slate-700 focus:border-indigo-500'
+                                                    }`}
+                                                />
+                                                {batchGroupName && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setBatchGroupName('')}
+                                                        className="absolute left-2.5 top-2.5 text-slate-400 hover:text-white"
+                                                        title="مسح اسم المجموعة"
+                                                    >
+                                                        <X size={13} />
+                                                    </button>
+                                                )}
+                                            </div>
+
+                                            {/* اقتراحات سريعة لاسم المجموعة */}
+                                            <div className="flex items-center gap-1.5 flex-wrap">
+                                                <span className="text-[10px] text-slate-400 ml-1">اختيار سريع:</span>
+                                                {['ص 1', 'ص 2', 'ص 3', 'ص 4', 'مجموعة 1', 'مجموعة 2'].map(preset => {
+                                                    const normPreset = normalizeArabic(preset);
+                                                    const isTaken = existingGroups.some(g => g.normName === normPreset);
+                                                    const isSelected = normalizeArabic(batchGroupName) === normPreset && !isTaken;
+                                                    return (
+                                                        <button
+                                                            key={preset}
+                                                            type="button"
+                                                            disabled={isTaken}
+                                                            onClick={() => setBatchGroupName(isSelected ? '' : preset)}
+                                                            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all flex items-center gap-1 ${
+                                                                isTaken
+                                                                    ? 'bg-slate-900/50 border-slate-800 text-slate-600 cursor-not-allowed line-through'
+                                                                    : isSelected
+                                                                    ? 'bg-indigo-600 border-indigo-400 text-white shadow-sm'
+                                                                    : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-300'
+                                                            }`}
+                                                            title={isTaken ? `المجموعة "${preset}" مستخدمة مسبقاً في هذا الرابط` : `تسمية الدفعة "${preset}"`}
+                                                        >
+                                                            <span>{preset}</span>
+                                                            {isTaken && <span className="text-[9px] text-rose-400/80 no-underline">(مستخدم)</span>}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+
+                                        {/* تحذير فوري إذا كان اسم المجموعة مكرراً في نفس الرابط */}
+                                        {isDuplicateGroupName && (
+                                            <div className="bg-rose-950/60 border border-rose-500/50 rounded-xl p-2.5 flex items-center gap-2 text-xs text-rose-200 animate-in fade-in">
+                                                <AlertCircle size={15} className="text-rose-400 shrink-0" />
+                                                <span>
+                                                    ⛔ اسم المجموعة <strong>"{batchGroupName.trim()}"</strong> مستخدم مسبقاً في هذا الرابط! لا يُسمح بتكرار اسم المجموعة داخل نفس الرابط، يرجى اختيار اسم آخر (مثل: ص 2 أو ص 3).
+                                                </span>
+                                            </div>
+                                        )}
+
+                                        {/* عرض المجموعات المسجلة مسبقاً في الرابط لمعرفة ما تم إنجازه */}
+                                        {existingGroups.length > 0 && (
+                                            <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-slate-800/80">
+                                                <span className="text-[10px] text-slate-400">المجموعات المضافة بالرابط حالياً:</span>
+                                                {existingGroups.map(g => (
+                                                    <span
+                                                        key={g.normName}
+                                                        className={`text-[10px] px-2 py-0.5 rounded-md border font-bold flex items-center gap-1 ${g.theme.badge}`}
+                                                    >
+                                                        <span className={`w-1.5 h-1.5 rounded-full ${g.theme.dot}`} />
+                                                        <span>{g.name}</span>
+                                                        <span className="opacity-75 font-mono">({g.count})</span>
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+
                                     {/* مربع النص والتحليل الذكي */}
                                     {isSmartPasteExpanded && (
                                         <div className="space-y-3 relative z-10 pt-1">
@@ -1409,7 +1655,7 @@ export default function PublicRegistrationPage() {
                                                     <button
                                                         type="button"
                                                         onClick={() => handleApplySmartPaste()}
-                                                        disabled={!smartPasteText.trim()}
+                                                        disabled={!smartPasteText.trim() || isDuplicateGroupName}
                                                         className="flex-1 sm:flex-none px-4 py-2 bg-gradient-to-r from-indigo-600 to-emerald-600 hover:from-indigo-500 hover:to-emerald-500 active:scale-95 text-white font-bold rounded-xl text-xs shadow-md shadow-indigo-600/30 flex items-center justify-center gap-1.5 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                                                     >
                                                         <Zap size={14} className="fill-current" />
@@ -1524,13 +1770,17 @@ export default function PublicRegistrationPage() {
                                         {/* حفظ سريع مباشر من الشريط الثابت */}
                                         <button
                                             type="button"
-                                            disabled={isSubmitting || filledRapidRows === 0}
+                                            disabled={isSubmitting || filledRapidRows === 0 || isDuplicateGroupName}
                                             onClick={handleSaveRapid}
                                             className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 sm:py-2 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white rounded-xl text-xs font-bold shadow-md shadow-emerald-600/30 transition-all disabled:opacity-40"
                                             title="حفظ الأسطر المكتملة الآن"
                                         >
                                             <Save size={14} />
-                                            <span>حفظ ({filledRapidRows})</span>
+                                            <span>
+                                                {batchGroupName.trim()
+                                                    ? `حفظ في "${batchGroupName.trim()}" (${filledRapidRows})`
+                                                    : `حفظ (${filledRapidRows})`}
+                                            </span>
                                         </button>
                                     </div>
                                 </div>
@@ -1722,12 +1972,18 @@ export default function PublicRegistrationPage() {
 
                                     <button
                                         type="button"
-                                        disabled={isSubmitting}
+                                        disabled={isSubmitting || isDuplicateGroupName}
                                         onClick={handleSaveRapid}
                                         className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-indigo-600/30 flex items-center gap-2 transition-all disabled:opacity-50"
                                     >
                                         <Save size={16} />
-                                        <span>{isSubmitting ? "جاري الحفظ..." : `حفظ الكل دفعة واحدة (${filledRapidRows})`}</span>
+                                        <span>
+                                            {isSubmitting
+                                                ? "جاري الحفظ..."
+                                                : batchGroupName.trim()
+                                                ? `حفظ الكل في مجموعة "${batchGroupName.trim()}" (${filledRapidRows})`
+                                                : `حفظ الكل دفعة واحدة (${filledRapidRows})`}
+                                        </span>
                                     </button>
                                 </div>
                             </div>
@@ -1737,7 +1993,7 @@ export default function PublicRegistrationPage() {
 
                 {/* Bottom Section: Submissions by this delegate */}
                 <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-4">
-                    <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                    <div className="flex items-center justify-between border-b border-slate-800 pb-3 flex-wrap gap-2">
                         <h3 className="font-bold text-white text-base flex items-center gap-2">
                             <Users size={18} className="text-indigo-400" />
                             <span>الأسماء المسجلة عبر هذا الرابط ({submissions.length})</span>
@@ -1747,84 +2003,184 @@ export default function PublicRegistrationPage() {
                         </span>
                     </div>
 
-                    {submissions.length === 0 ? (
+                    {/* فلاتر المجموعات (إذا تم إدخال مجموعات في هذا الرابط) */}
+                    {existingGroups.length > 0 && (
+                        <div className="bg-slate-950/70 border border-slate-800 rounded-2xl p-3 space-y-2">
+                            <div className="flex items-center justify-between text-xs">
+                                <span className="text-slate-300 font-bold flex items-center gap-1.5">
+                                    <Layers size={14} className="text-indigo-400" />
+                                    <span>تصفية الأسماء حسب المجموعة:</span>
+                                </span>
+                                {publicGroupFilter !== 'all' && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setPublicGroupFilter('all')}
+                                        className="text-[11px] text-indigo-400 hover:text-indigo-300 underline"
+                                    >
+                                        عرض كل المجموعات
+                                    </button>
+                                )}
+                            </div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                                <button
+                                    type="button"
+                                    onClick={() => setPublicGroupFilter('all')}
+                                    className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
+                                        publicGroupFilter === 'all'
+                                            ? 'bg-indigo-600 text-white border-indigo-400 shadow-md shadow-indigo-600/30'
+                                            : 'bg-slate-800/80 text-slate-300 border-slate-700 hover:bg-slate-800'
+                                    }`}
+                                >
+                                    الكل ({submissions.length})
+                                </button>
+                                {existingGroups.map(g => {
+                                    const isActive = publicGroupFilter === g.normName;
+                                    return (
+                                        <button
+                                            key={g.normName}
+                                            type="button"
+                                            onClick={() => setPublicGroupFilter(isActive ? 'all' : g.normName)}
+                                            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5 ${
+                                                isActive ? g.theme.pillActive : g.theme.pillInactive
+                                            }`}
+                                        >
+                                            <span className={`w-2 h-2 rounded-full ${isActive ? 'bg-white' : g.theme.dot}`} />
+                                            <span>{g.name}</span>
+                                            <span className="font-mono text-[11px] opacity-85">({g.count})</span>
+                                        </button>
+                                    );
+                                })}
+                                {submissions.some(s => !(s.batchGroupName || '').trim()) && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setPublicGroupFilter(publicGroupFilter === '__ungrouped__' ? 'all' : '__ungrouped__')}
+                                        className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
+                                            publicGroupFilter === '__ungrouped__'
+                                                ? 'bg-slate-600 text-white border-slate-400'
+                                                : 'bg-slate-800/60 text-slate-400 border-slate-700 hover:text-slate-200'
+                                        }`}
+                                    >
+                                        بدون مجموعة ({submissions.filter(s => !(s.batchGroupName || '').trim()).length})
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    {filteredPublicSubmissions.length === 0 ? (
                         <div className="text-center py-10 text-slate-500 text-xs">
                             لم يتم تسجيل أي أسماء حتى الآن. استخدم النموذج أعلاه لبدء التسجيل.
                         </div>
                     ) : (
                         <div className="space-y-2">
-                            {submissions.map((sub, idx) => (
-                                <div
-                                    key={sub.id}
-                                    className="bg-slate-800/60 border border-slate-800 p-3 rounded-2xl flex items-center justify-between gap-3 flex-wrap"
-                                >
-                                    <div className="flex items-center gap-3">
-                                        <span className="text-xs text-slate-500 font-mono w-5 text-center">
-                                            {idx + 1}
-                                        </span>
-                                        <div>
-                                            <div className="flex items-center gap-2">
-                                                <h4 className="font-bold text-white text-sm">{sub.studentName}</h4>
-                                                <span className={`text-[11px] px-2 py-0.5 rounded-md font-semibold ${
-                                                    sub.grade === 'غير معروف' || !sub.grade || sub.isGradeUnknown
-                                                        ? 'bg-amber-950/60 text-amber-300 border border-amber-600/30'
-                                                        : 'bg-slate-900 text-slate-300'
-                                                }`}>
-                                                    {sub.grade === 'غير معروف' || !sub.grade || sub.isGradeUnknown
-                                                        ? 'الصف غير معروف'
-                                                        : `${typeof sub.grade === 'object' ? (sub.grade?.name || '') : sub.grade} - شعبة ${typeof sub.section === 'object' ? (sub.section?.name || '') : (sub.section || '1')}`
-                                                    }
-                                                </span>
-                                                <span className={`text-[10px] px-2 py-0.5 rounded-md font-bold ${
-                                                    sub.status === 'approved'
-                                                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                                                        : sub.status === 'waitlist'
-                                                        ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
-                                                        : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                                                }`}>
-                                                    {sub.status === 'approved' ? 'معتمد' : sub.status === 'waitlist' ? 'قائمة انتظار' : 'بانتظار الاعتماد'}
+                            {filteredPublicSubmissions.map((sub, idx) => {
+                                const subGroupRaw = (sub.batchGroupName || '').trim();
+                                const subGroupNorm = normalizeArabic(subGroupRaw);
+                                const prevGroupNorm = idx > 0 ? normalizeArabic((filteredPublicSubmissions[idx - 1].batchGroupName || '').trim()) : null;
+                                const isFirstInGroup = existingGroups.length > 0 && subGroupNorm !== prevGroupNorm;
+                                const groupTheme = subGroupNorm ? (groupThemeByNorm[subGroupNorm] || GROUP_COLOR_THEMES[0]) : null;
+                                const groupObj = subGroupNorm ? existingGroups.find(g => g.normName === subGroupNorm) : null;
+
+                                return (
+                                    <div key={sub.id} className="space-y-2">
+                                        {isFirstInGroup && (
+                                            <div className={`px-3.5 py-2 rounded-xl border flex items-center justify-between text-xs font-bold mt-2 ${
+                                                groupTheme
+                                                    ? groupTheme.headerBg
+                                                    : 'bg-slate-800/60 border-slate-700 text-slate-300'
+                                            }`}>
+                                                <div className="flex items-center gap-2">
+                                                    <Layers size={14} />
+                                                    <span>
+                                                        {subGroupRaw ? `مجموعة: ${subGroupRaw}` : 'طلاب مسجلون بشكل فردي (بدون مجموعة)'}
+                                                    </span>
+                                                </div>
+                                                <span className="text-[11px] font-mono opacity-85">
+                                                    {subGroupRaw && groupObj ? `${groupObj.count} طلاب` : `${submissions.filter(s => !(s.batchGroupName || '').trim()).length} طلاب`}
                                                 </span>
                                             </div>
-                                            {/* Custom Fields Badges */}
-                                            {customFields.length > 0 && (
-                                                <div className="flex flex-wrap gap-1.5 mt-1">
-                                                    {customFields.map((f) => {
-                                                        const val = sub.customValues?.[f.id] || (f.id === 'f_legacy' ? sub.customFieldValue : '');
-                                                        if (!val) return null;
-                                                        const displayVal = typeof val === 'object' ? (val.name || val.label || JSON.stringify(val)) : String(val);
-                                                        return (
-                                                            <span key={f.id} className="text-[11px] px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-indigo-300">
-                                                                <span className="text-slate-400">{f.label}: </span>
-                                                                {displayVal}
+                                        )}
+
+                                        <div
+                                            className={`bg-slate-800/60 border border-slate-800 p-3 rounded-2xl flex items-center justify-between gap-3 flex-wrap ${
+                                                groupTheme ? groupTheme.cardBorder : ''
+                                            }`}
+                                        >
+                                            <div className="flex items-center gap-3">
+                                                <span className="text-xs text-slate-500 font-mono w-5 text-center">
+                                                    {idx + 1}
+                                                </span>
+                                                <div>
+                                                    <div className="flex items-center gap-2 flex-wrap">
+                                                        <h4 className="font-bold text-white text-sm">{sub.studentName}</h4>
+                                                        {subGroupRaw && groupTheme && (
+                                                            <span className={`text-[10px] px-2 py-0.5 rounded-md border font-bold flex items-center gap-1 ${groupTheme.badge}`}>
+                                                                <Tag size={10} />
+                                                                <span>مجموعة: {subGroupRaw}</span>
                                                             </span>
-                                                        );
-                                                    })}
+                                                        )}
+                                                        <span className={`text-[11px] px-2 py-0.5 rounded-md font-semibold ${
+                                                            sub.grade === 'غير معروف' || !sub.grade || sub.isGradeUnknown
+                                                                ? 'bg-amber-950/60 text-amber-300 border border-amber-600/30'
+                                                                : 'bg-slate-900 text-slate-300'
+                                                        }`}>
+                                                            {sub.grade === 'غير معروف' || !sub.grade || sub.isGradeUnknown
+                                                                ? 'الصف غير معروف'
+                                                                : `${typeof sub.grade === 'object' ? (sub.grade?.name || '') : sub.grade} - شعبة ${typeof sub.section === 'object' ? (sub.section?.name || '') : (sub.section || '1')}`
+                                                            }
+                                                        </span>
+                                                        <span className={`text-[10px] px-2 py-0.5 rounded-md font-bold ${
+                                                            sub.status === 'approved'
+                                                                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                                                : sub.status === 'waitlist'
+                                                                ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                                                                : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                                                        }`}>
+                                                            {sub.status === 'approved' ? 'معتمد' : sub.status === 'waitlist' ? 'قائمة انتظار' : 'بانتظار الاعتماد'}
+                                                        </span>
+                                                    </div>
+                                                    {/* Custom Fields Badges */}
+                                                    {customFields.length > 0 && (
+                                                        <div className="flex flex-wrap gap-1.5 mt-1">
+                                                            {customFields.map((f) => {
+                                                                const val = sub.customValues?.[f.id] || (f.id === 'f_legacy' ? sub.customFieldValue : '');
+                                                                if (!val) return null;
+                                                                const displayVal = typeof val === 'object' ? (val.name || val.label || JSON.stringify(val)) : String(val);
+                                                                return (
+                                                                    <span key={f.id} className="text-[11px] px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-indigo-300">
+                                                                        <span className="text-slate-400">{f.label}: </span>
+                                                                        {displayVal}
+                                                                    </span>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+
+                                            {/* Edit / Delete (Allowed if link is active) */}
+                                            {!isExpired && !isPaused && (
+                                                <div className="flex items-center gap-1">
+                                                    <button
+                                                        onClick={() => setEditingSub(sub)}
+                                                        className="p-2 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
+                                                        title="تعديل"
+                                                    >
+                                                        <Edit2 size={14} />
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleDeleteSubmission(sub)}
+                                                        className="p-2 text-slate-400 hover:text-rose-400 hover:bg-slate-700 rounded-lg transition-colors"
+                                                        title="حذف"
+                                                    >
+                                                        <Trash2 size={14} />
+                                                    </button>
                                                 </div>
                                             )}
                                         </div>
                                     </div>
-
-                                    {/* Edit / Delete (Allowed if link is active) */}
-                                    {!isExpired && !isPaused && (
-                                        <div className="flex items-center gap-1">
-                                            <button
-                                                onClick={() => setEditingSub(sub)}
-                                                className="p-2 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
-                                                title="تعديل"
-                                            >
-                                                <Edit2 size={14} />
-                                            </button>
-                                            <button
-                                                onClick={() => handleDeleteSubmission(sub)}
-                                                className="p-2 text-slate-400 hover:text-rose-400 hover:bg-slate-700 rounded-lg transition-colors"
-                                                title="حذف"
-                                            >
-                                                <Trash2 size={14} />
-                                            </button>
-                                        </div>
-                                    )}
-                                </div>
-                            ))}
+                                );
+                            })}
                         </div>
                     )}
                 </div>
@@ -1848,6 +2204,17 @@ export default function PublicRegistrationPage() {
                                         required
                                         value={editingSub.studentName}
                                         onChange={(e) => setEditingSub({ ...editingSub, studentName: e.target.value })}
+                                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs text-slate-400 mb-1">اسم المجموعة / الدفعة (اختياري)</label>
+                                    <input
+                                        type="text"
+                                        placeholder="مثال: ص 1"
+                                        value={editingSub.batchGroupName || ''}
+                                        onChange={(e) => setEditingSub({ ...editingSub, batchGroupName: e.target.value })}
                                         className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm"
                                     />
                                 </div>
