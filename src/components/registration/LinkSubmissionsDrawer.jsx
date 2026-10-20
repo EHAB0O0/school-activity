@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
     X, CheckCircle, XCircle, Search, Download, Printer,
     AlertTriangle, UserCheck, Trash2, Edit2, ShieldAlert,
@@ -71,7 +71,7 @@ const GROUP_COLOR_THEMES = [
 ];
 
 export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpdated, onEditLink }) {
-    const { schoolInfo } = useSettings();
+    const { schoolInfo, grades } = useSettings();
     const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
     const [submissions, setSubmissions] = useState([]);
     const [students, setStudents] = useState([]);
@@ -188,6 +188,39 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
             .replace(/[\(\)\[\]{}.,،_+\-–—\\/]/g, ' ')
             .replace(/\s+/g, ' ')
             .trim();
+    };
+
+    const normalizeGroupKey = (str) => {
+        if (!str) return '';
+        return normalizeArabic(String(str))
+            .replace(/([^\d\s])\s*(\d)/g, '$1 $2')
+            .replace(/(\d)\s*([^\d\s])/g, '$1 $2')
+            .replace(/\s+/g, ' ')
+            .trim();
+    };
+
+    // Allowed grade options and section options helper for editing
+    const gradeOptions = useMemo(() => {
+        if (!link) {
+            return (grades?.map(g => typeof g === 'object' ? (g.name || g.id) : g) || ['أول ثانوي', 'ثاني ثانوي', 'ثالث ثانوي']).filter(Boolean);
+        }
+        return (link.allowedGrades?.includes('all') || !link.allowedGrades?.length
+            ? (grades?.map(g => typeof g === 'object' ? (g.name || g.id) : g) || ['أول ثانوي', 'ثاني ثانوي', 'ثالث ثانوي'])
+            : link.allowedGrades.map(g => typeof g === 'object' ? (g.name || g.id) : g)
+        ).filter(Boolean);
+    }, [link, grades]);
+
+    const getSectionOptions = (gradeName) => {
+        const found = grades?.find(g => (typeof g === 'object' ? (g.name || g.id) : g) === gradeName);
+        if (found && Array.isArray(found.sections) && found.sections.length > 0) {
+            return found.sections.map(sec => {
+                if (typeof sec === 'object' && sec !== null) {
+                    return String(sec.name || sec.id || '');
+                }
+                return String(sec);
+            }).filter(Boolean);
+        }
+        return ['1', '2', '3', '4', '5', '6'];
     };
 
     // Phone normalization helper
@@ -463,7 +496,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
         chronological.forEach(s => {
             const rawG = (s.batchGroupName || '').trim();
             if (!rawG) return;
-            const norm = normalizeArabic(rawG);
+            const norm = normalizeGroupKey(rawG);
             if (!map.has(norm)) {
                 const themeIdx = map.size % GROUP_COLOR_THEMES.length;
                 map.set(norm, {
@@ -487,7 +520,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
     const groupThemeByNorm = useMemo(() => {
         const lookup = {};
         availableGroups.forEach(g => {
-            lookup[g.normName] = g.theme;
+            lookup[g.normName] = g;
         });
         return lookup;
     }, [availableGroups]);
@@ -572,7 +605,7 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
             if (groupFilter === '__ungrouped__') {
                 matchesGroup = !(sub.batchGroupName || '').trim();
             } else if (groupFilter !== 'all') {
-                matchesGroup = normalizeArabic(sub.batchGroupName || '') === groupFilter;
+                matchesGroup = normalizeGroupKey(sub.batchGroupName || '') === groupFilter;
             }
 
             return matchesSearch && matchesStatus && matchesGrade && matchesGroup;
@@ -584,8 +617,8 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
         availableGroups.forEach((g, idx) => groupOrder.set(g.normName, idx));
 
         return [...filtered].sort((a, b) => {
-            const gA = normalizeArabic(a.batchGroupName || '');
-            const gB = normalizeArabic(b.batchGroupName || '');
+            const gA = normalizeGroupKey(a.batchGroupName || '');
+            const gB = normalizeGroupKey(b.batchGroupName || '');
             if (gA !== gB) {
                 if (!gA) return 1;
                 if (!gB) return -1;
@@ -1157,13 +1190,21 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
         e.preventDefault();
         if (!editingSubmission) return;
         try {
+            const isUnknown = Boolean(editingSubmission.isGradeUnknown) || editingSubmission.grade === 'غير معروف' || !editingSubmission.grade;
+            const finalGrade = isUnknown ? 'غير معروف' : editingSubmission.grade;
+            const finalSection = isUnknown ? '' : String(editingSubmission.section || '');
+            const rawGroup = (editingSubmission.batchGroupName || '').trim();
+            const existingGroupMatch = rawGroup ? groupThemeByNorm[normalizeGroupKey(rawGroup)] : null;
+            const finalGroupName = existingGroupMatch ? existingGroupMatch.name : (rawGroup || null);
+
             await updateDoc(doc(db, 'link_submissions', editingSubmission.id), {
                 studentName: editingSubmission.studentName,
-                grade: editingSubmission.grade,
-                section: editingSubmission.section,
-                class: `${editingSubmission.grade || ''} / ${editingSubmission.section || ''}`.trim(),
+                grade: finalGrade,
+                section: finalSection,
+                isGradeUnknown: isUnknown,
+                class: isUnknown ? 'غير معروف' : `${finalGrade} / ${finalSection}`.trim(),
                 phone: editingSubmission.phone || '',
-                batchGroupName: (editingSubmission.batchGroupName || '').trim() || null,
+                batchGroupName: finalGroupName,
                 customValues: editingSubmission.customValues || {},
                 customFieldValue: editingSubmission.customFieldValue || '',
                 updatedAt: serverTimestamp()
@@ -1574,12 +1615,12 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                 >
                                     <option value="all">📂 كل المجموعات ({counts.total})</option>
                                     {availableGroups.map(g => (
-                                        <option key={g.norm} value={g.norm}>
+                                        <option key={g.normName} value={g.normName}>
                                             🏷️ مجموعة: {g.name} ({g.count})
                                         </option>
                                     ))}
                                     {ungroupedCount > 0 && (
-                                        <option value="ungrouped">بدون مجموعة ({ungroupedCount})</option>
+                                        <option value="__ungrouped__">بدون مجموعة ({ungroupedCount})</option>
                                     )}
                                 </select>
                             )}
@@ -1623,15 +1664,15 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                 الكل ({counts.total})
                             </button>
                             {availableGroups.map((grp) => {
-                                const isActive = groupFilter === grp.norm;
+                                const isActive = groupFilter === grp.normName;
                                 return (
                                     <button
-                                        key={grp.norm}
+                                        key={grp.normName}
                                         type="button"
-                                        onClick={() => setGroupFilter(isActive ? 'all' : grp.norm)}
+                                        onClick={() => setGroupFilter(isActive ? 'all' : grp.normName)}
                                         className={`text-[11px] px-2.5 py-1 rounded-lg border font-bold flex items-center gap-1.5 transition-all ${
                                             isActive
-                                                ? `${grp.theme.activePill} ring-2 ring-white/20`
+                                                ? `${grp.theme.pillActive} ring-2 ring-white/20`
                                                 : `${grp.theme.badge} hover:opacity-90`
                                         }`}
                                     >
@@ -1646,9 +1687,9 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                             {ungroupedCount > 0 && (
                                 <button
                                     type="button"
-                                    onClick={() => setGroupFilter(groupFilter === 'ungrouped' ? 'all' : 'ungrouped')}
+                                    onClick={() => setGroupFilter(groupFilter === '__ungrouped__' ? 'all' : '__ungrouped__')}
                                     className={`text-[11px] px-2.5 py-1 rounded-lg border font-bold transition-all ${
-                                        groupFilter === 'ungrouped'
+                                        groupFilter === '__ungrouped__'
                                             ? 'bg-slate-600 text-white border-slate-400'
                                             : 'bg-slate-800/60 text-slate-400 border-slate-700 hover:text-slate-200'
                                     }`}
@@ -1732,13 +1773,14 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                 const isSelected = selectedIds.includes(sub.id);
                                 const dupInfo = duplicateMap[sub.id] || {};
                                 const subGroupRaw = (sub.batchGroupName || '').trim();
-                                const subGroupNorm = normalizeArabic(subGroupRaw);
-                                const prevGroupNorm = idx > 0 ? normalizeArabic((filteredSubmissions[idx - 1].batchGroupName || '').trim()) : null;
+                                const subGroupNorm = normalizeGroupKey(subGroupRaw);
+                                const prevGroupNorm = idx > 0 ? normalizeGroupKey((filteredSubmissions[idx - 1].batchGroupName || '').trim()) : null;
                                 const isFirstOfGroup = idx === 0 || subGroupNorm !== prevGroupNorm;
                                 const groupInfo = subGroupNorm ? groupThemeByNorm[subGroupNorm] : null;
                                 const groupTheme = groupInfo?.theme || null;
+                                const displayGroupName = groupInfo?.name || subGroupRaw;
                                 const groupItemsInFiltered = isFirstOfGroup
-                                    ? filteredSubmissions.filter(x => normalizeArabic((x.batchGroupName || '').trim()) === subGroupNorm)
+                                    ? filteredSubmissions.filter(x => normalizeGroupKey((x.batchGroupName || '').trim()) === subGroupNorm)
                                     : [];
                                 const allGroupSelected = groupItemsInFiltered.length > 0 && groupItemsInFiltered.every(x => selectedIds.includes(x.id));
 
@@ -1748,14 +1790,14 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                         {isFirstOfGroup && availableGroups.length > 0 && (
                                             <div className={`mt-3 mb-1.5 px-3.5 py-2 rounded-xl border flex items-center justify-between gap-2 ${
                                                 groupTheme
-                                                    ? groupTheme.header
+                                                    ? groupTheme.headerBg
                                                     : 'bg-slate-800/70 border-slate-700 text-slate-300'
                                             }`}>
                                                 <div className="flex items-center gap-2">
                                                     <span className={`w-2.5 h-2.5 rounded-full ${groupTheme ? groupTheme.dot : 'bg-slate-500'}`} />
                                                     <Layers size={14} />
                                                     <span className="text-xs font-black">
-                                                        {subGroupRaw ? `مجموعة: ${subGroupRaw}` : 'بدون مجموعة'}
+                                                        {displayGroupName ? `مجموعة: ${displayGroupName}` : 'بدون مجموعة'}
                                                     </span>
                                                     <span className="text-[11px] px-2 py-0.5 rounded-full bg-black/30 font-bold">
                                                         {groupItemsInFiltered.length} طالب
@@ -2063,25 +2105,75 @@ export default function LinkSubmissionsDrawer({ isOpen, onClose, link, onLinkUpd
                                         className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm"
                                     />
                                 </div>
-                                <div className="grid grid-cols-2 gap-3">
-                                    <div>
-                                        <label className="block text-xs text-slate-400 mb-1">الصف</label>
-                                        <input
-                                            type="text"
-                                            value={editingSubmission.grade}
-                                            onChange={(e) => setEditingSubmission({ ...editingSubmission, grade: e.target.value })}
-                                            className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm"
-                                        />
+                                {/* Grade & Section Dropdowns with Unknown Grade Option */}
+                                <div className="space-y-2.5">
+                                    <div className="flex items-center justify-between">
+                                        <label className="block text-xs text-slate-400">الصف والشعبة</label>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                const curUnknown = Boolean(editingSubmission.isGradeUnknown) || editingSubmission.grade === 'غير معروف' || !editingSubmission.grade;
+                                                const nextUnknown = !curUnknown;
+                                                const defaultGrade = gradeOptions[0] || 'الأول الثانوي';
+                                                const defaultSec = String(getSectionOptions(defaultGrade)[0] || '1');
+                                                setEditingSubmission({
+                                                    ...editingSubmission,
+                                                    isGradeUnknown: nextUnknown,
+                                                    grade: nextUnknown ? 'غير معروف' : (editingSubmission.grade && editingSubmission.grade !== 'غير معروف' ? editingSubmission.grade : defaultGrade),
+                                                    section: nextUnknown ? '' : (editingSubmission.section || defaultSec)
+                                                });
+                                            }}
+                                            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all ${
+                                                Boolean(editingSubmission.isGradeUnknown) || editingSubmission.grade === 'غير معروف' || !editingSubmission.grade
+                                                    ? 'bg-amber-500/20 border-amber-500/60 text-amber-300'
+                                                    : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
+                                            }`}
+                                        >
+                                            {Boolean(editingSubmission.isGradeUnknown) || editingSubmission.grade === 'غير معروف' || !editingSubmission.grade
+                                                ? '✓ الصف غير معروف'
+                                                : 'تحديد كـ "الصف غير معروف"'}
+                                        </button>
                                     </div>
-                                    <div>
-                                        <label className="block text-xs text-slate-400 mb-1">الشعبة</label>
-                                        <input
-                                            type="text"
-                                            value={editingSubmission.section}
-                                            onChange={(e) => setEditingSubmission({ ...editingSubmission, section: e.target.value })}
-                                            className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm"
-                                        />
-                                    </div>
+                                    {!(Boolean(editingSubmission.isGradeUnknown) || editingSubmission.grade === 'غير معروف' || !editingSubmission.grade) && (
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <div>
+                                                <label className="block text-xs text-slate-400 mb-1">الصف</label>
+                                                <select
+                                                    value={editingSubmission.grade || gradeOptions[0]}
+                                                    onChange={(e) => {
+                                                        const newGrade = e.target.value;
+                                                        const availableSecs = getSectionOptions(newGrade).map(String);
+                                                        const nextSec = availableSecs.includes(String(editingSubmission.section))
+                                                            ? String(editingSubmission.section)
+                                                            : (availableSecs[0] || '1');
+                                                        setEditingSubmission({
+                                                            ...editingSubmission,
+                                                            grade: newGrade,
+                                                            section: nextSec,
+                                                            isGradeUnknown: false
+                                                        });
+                                                    }}
+                                                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm"
+                                                >
+                                                    {gradeOptions.map(g => (
+                                                        <option key={g} value={g}>{g}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs text-slate-400 mb-1">الشعبة</label>
+                                                <select
+                                                    value={String(editingSubmission.section || getSectionOptions(editingSubmission.grade || gradeOptions[0])[0] || '1')}
+                                                    onChange={(e) => setEditingSubmission({ ...editingSubmission, section: e.target.value })}
+                                                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm"
+                                                >
+                                                    {getSectionOptions(editingSubmission.grade || gradeOptions[0]).map(sec => (
+                                                        <option key={sec} value={String(sec)}>شعبة {sec}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                                 <div>
                                     <label className="block text-xs text-slate-400 mb-1">اسم المجموعة / الدفعة (اختياري)</label>

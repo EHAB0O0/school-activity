@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { db } from '../firebase';
 import {
@@ -79,6 +79,15 @@ const normalizeArabic = (str) => {
         .replace(/ى/g, 'ي')
         .replace(/\u0640/g, '')
         .replace(/\s+/g, ' ');
+};
+
+const normalizeGroupKey = (str) => {
+    if (!str) return '';
+    return normalizeArabic(String(str))
+        .replace(/([^\d\s])\s*(\d)/g, '$1 $2')
+        .replace(/(\d)\s*([^\d\s])/g, '$1 $2')
+        .replace(/\s+/g, ' ')
+        .trim();
 };
 
 const normalizeArabicForMatch = (str) => {
@@ -506,7 +515,7 @@ export default function PublicRegistrationPage() {
         chronological.forEach(s => {
             const rawG = (s.batchGroupName || '').trim();
             if (!rawG) return;
-            const norm = normalizeArabic(rawG);
+            const norm = normalizeGroupKey(rawG);
             if (!map.has(norm)) {
                 const themeIdx = map.size % GROUP_COLOR_THEMES.length;
                 map.set(norm, {
@@ -530,12 +539,12 @@ export default function PublicRegistrationPage() {
         return lookup;
     }, [existingGroups]);
 
-    // Check if the typed batchGroupName is already used in this link
-    const isDuplicateGroupName = useMemo(() => {
+    // Check if the typed batchGroupName matches an existing group in this link (if so, new students will be appended to it)
+    const matchingExistingGroup = useMemo(() => {
         const trimmed = batchGroupName.trim();
-        if (!trimmed) return false;
-        const norm = normalizeArabic(trimmed);
-        return existingGroups.some(g => g.normName === norm);
+        if (!trimmed) return null;
+        const norm = normalizeGroupKey(trimmed);
+        return existingGroups.find(g => g.normName === norm) || null;
     }, [batchGroupName, existingGroups]);
 
     // Filtered and grouped submissions for the bottom list in PublicRegistrationPage
@@ -544,7 +553,7 @@ export default function PublicRegistrationPage() {
         if (publicGroupFilter === '__ungrouped__') {
             list = submissions.filter(s => !(s.batchGroupName || '').trim());
         } else if (publicGroupFilter !== 'all') {
-            list = submissions.filter(s => normalizeArabic(s.batchGroupName || '') === publicGroupFilter);
+            list = submissions.filter(s => normalizeGroupKey(s.batchGroupName || '') === publicGroupFilter);
         }
 
         // Group items of the same batchGroupName together consecutively
@@ -554,8 +563,8 @@ export default function PublicRegistrationPage() {
         existingGroups.forEach((g, idx) => groupOrder.set(g.normName, idx));
 
         return [...list].sort((a, b) => {
-            const gA = normalizeArabic(a.batchGroupName || '');
-            const gB = normalizeArabic(b.batchGroupName || '');
+            const gA = normalizeGroupKey(a.batchGroupName || '');
+            const gB = normalizeGroupKey(b.batchGroupName || '');
             if (gA !== gB) {
                 if (!gA) return 1;
                 if (!gB) return -1;
@@ -605,11 +614,6 @@ export default function PublicRegistrationPage() {
 
     // Apply smart paste text to rapidRows
     const handleApplySmartPaste = (customText = null) => {
-        if (isDuplicateGroupName) {
-            toast.error(`اسم المجموعة "${batchGroupName.trim()}" مستخدم مسبقاً في هذا الرابط! يرجى اختيار اسم آخر غير مكرر.`);
-            return;
-        }
-
         const textToUse = customText !== null ? customText : smartPasteText;
         if (!textToUse || !textToUse.trim()) {
             toast.error("يرجى لصق أو إدخال أسماء الطلاب أولاً");
@@ -663,10 +667,6 @@ export default function PublicRegistrationPage() {
 
     // Direct paste from clipboard
     const handlePasteFromClipboard = async () => {
-        if (isDuplicateGroupName) {
-            toast.error(`اسم المجموعة "${batchGroupName.trim()}" مستخدم مسبقاً في هذا الرابط! يرجى اختيار اسم آخر غير مكرر.`);
-            return;
-        }
         try {
             if (!navigator.clipboard?.readText) {
                 toast.error("متصفحك لا يدعم القراءة المباشرة من الحافظة، يرجى اللصق يدوياً في المربع");
@@ -866,11 +866,11 @@ export default function PublicRegistrationPage() {
             return;
         }
 
-        const cleanGroupName = batchGroupName.trim();
-        if (cleanGroupName && isDuplicateGroupName) {
-            toast.error(`لا يمكن الحفظ: اسم المجموعة "${cleanGroupName}" مستخدم مسبقاً في هذا الرابط! يرجى اختيار اسم مختلف.`);
-            return;
-        }
+        const rawGroupInput = batchGroupName.trim();
+        const cleanGroupName = rawGroupInput
+            ? (matchingExistingGroup ? matchingExistingGroup.name : rawGroupInput)
+            : '';
+        const wasExistingGroup = Boolean(matchingExistingGroup);
 
         // Validate multiple custom fields in rapid mode (skip if fixed)
         for (const field of customFields) {
@@ -887,7 +887,9 @@ export default function PublicRegistrationPage() {
         setIsSubmitting(true);
         const toastId = toast.loading(
             cleanGroupName
-                ? `جاري حفظ ${validRows.length} طالب ضمن مجموعة "${cleanGroupName}"...`
+                ? (wasExistingGroup
+                    ? `جاري إضافة ${validRows.length} طالب وإلحاقهم بمجموعة "${cleanGroupName}"...`
+                    : `جاري حفظ ${validRows.length} طالب ضمن مجموعة "${cleanGroupName}"...`)
                 : `جاري حفظ ${validRows.length} طالب...`
         );
 
@@ -942,7 +944,9 @@ export default function PublicRegistrationPage() {
 
             toast.success(
                 cleanGroupName
-                    ? `تم تسجيل ${validRows.length} طالب في مجموعة "${cleanGroupName}" بنجاح`
+                    ? (wasExistingGroup
+                        ? `تم إلحاق ${validRows.length} طالب بمجموعة "${cleanGroupName}" بنجاح`
+                        : `تم تسجيل ${validRows.length} طالب في مجموعة "${cleanGroupName}" بنجاح`)
                     : "تم تسجيل جميع الطلاب بنجاح",
                 { id: toastId }
             );
@@ -992,6 +996,12 @@ export default function PublicRegistrationPage() {
             const finalSection = isUnknown ? '' : (editingSub.section || '');
             const finalClass = isUnknown ? 'غير معروف' : `${finalGrade} / ${finalSection}`.trim();
 
+            const rawEditGroup = (editingSub.batchGroupName || '').trim();
+            const matchedEditGroup = rawEditGroup
+                ? existingGroups.find(g => g.normName === normalizeGroupKey(rawEditGroup))
+                : null;
+            const finalGroupName = rawEditGroup ? (matchedEditGroup ? matchedEditGroup.name : rawEditGroup) : null;
+
             await updateDoc(doc(db, 'link_submissions', editingSub.id), {
                 studentName: editingSub.studentName,
                 grade: finalGrade,
@@ -1001,7 +1011,7 @@ export default function PublicRegistrationPage() {
                 customValues,
                 customFieldValue,
                 phone: editingSub.phone || '',
-                batchGroupName: (editingSub.batchGroupName || '').trim() || null,
+                batchGroupName: finalGroupName,
                 status: editingSub.status,
                 linkId: linkData.id,
                 updatedAt: serverTimestamp()
@@ -1504,7 +1514,7 @@ export default function PublicRegistrationPage() {
                                         </div>
                                     </div>
 
-                                    {/* حقل تسمية المجموعة / الدفعة الحالية (ممنوع التكرار داخل نفس الرابط) */}
+                                    {/* حقل تسمية المجموعة / الدفعة الحالية */}
                                     <div className="bg-slate-950/85 border border-indigo-500/30 rounded-2xl p-3.5 space-y-2.5 relative z-10">
                                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                                             <label className="text-xs font-bold text-indigo-200 flex items-center gap-1.5">
@@ -1512,7 +1522,7 @@ export default function PublicRegistrationPage() {
                                                 <span>اسم المجموعة / الدفعة لهذه الأسماء (اختياري):</span>
                                             </label>
                                             <span className="text-[10px] text-slate-400">
-                                                لتسهيل فرزهم واعتمادهم معاً لاحقاً (لا يتكرر الاسم في نفس الرابط)
+                                                لتسهيل فرزهم واعتمادهم معاً (إذا اخترت اسم مجموعة موجودة سيُضافون لنفس المجموعة)
                                             </span>
                                         </div>
 
@@ -1525,8 +1535,8 @@ export default function PublicRegistrationPage() {
                                                     onChange={(e) => setBatchGroupName(e.target.value)}
                                                     placeholder="مثال: ص 1 ، ص 2 ، صفحة 1 ، مجموعة أ ..."
                                                     className={`w-full pr-9 pl-8 py-2 bg-slate-900 border rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none transition-colors ${
-                                                        isDuplicateGroupName
-                                                            ? 'border-rose-500 focus:border-rose-400 bg-rose-950/20'
+                                                        matchingExistingGroup
+                                                            ? 'border-amber-500/80 focus:border-amber-400 bg-amber-950/20'
                                                             : batchGroupName.trim()
                                                             ? 'border-emerald-500/60 focus:border-emerald-400'
                                                             : 'border-slate-700 focus:border-indigo-500'
@@ -1548,56 +1558,69 @@ export default function PublicRegistrationPage() {
                                             <div className="flex items-center gap-1.5 flex-wrap">
                                                 <span className="text-[10px] text-slate-400 ml-1">اختيار سريع:</span>
                                                 {['ص 1', 'ص 2', 'ص 3', 'ص 4', 'مجموعة 1', 'مجموعة 2'].map(preset => {
-                                                    const normPreset = normalizeArabic(preset);
-                                                    const isTaken = existingGroups.some(g => g.normName === normPreset);
-                                                    const isSelected = normalizeArabic(batchGroupName) === normPreset && !isTaken;
+                                                    const normPreset = normalizeGroupKey(preset);
+                                                    const existingMatch = existingGroups.find(g => g.normName === normPreset);
+                                                    const isSelected = normalizeGroupKey(batchGroupName) === normPreset;
                                                     return (
                                                         <button
                                                             key={preset}
                                                             type="button"
-                                                            disabled={isTaken}
-                                                            onClick={() => setBatchGroupName(isSelected ? '' : preset)}
+                                                            onClick={() => setBatchGroupName(isSelected ? '' : (existingMatch ? existingMatch.name : preset))}
                                                             className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all flex items-center gap-1 ${
-                                                                isTaken
-                                                                    ? 'bg-slate-900/50 border-slate-800 text-slate-600 cursor-not-allowed line-through'
-                                                                    : isSelected
-                                                                    ? 'bg-indigo-600 border-indigo-400 text-white shadow-sm'
+                                                                isSelected
+                                                                    ? (existingMatch
+                                                                        ? 'bg-amber-600 border-amber-400 text-white shadow-sm'
+                                                                        : 'bg-indigo-600 border-indigo-400 text-white shadow-sm')
+                                                                    : existingMatch
+                                                                    ? 'bg-amber-950/40 hover:bg-amber-900/50 border-amber-700/60 text-amber-300'
                                                                     : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-300'
                                                             }`}
-                                                            title={isTaken ? `المجموعة "${preset}" مستخدمة مسبقاً في هذا الرابط` : `تسمية الدفعة "${preset}"`}
+                                                            title={existingMatch ? `المجموعة "${existingMatch.name}" موجودة (${existingMatch.count} طلاب) — اضغط لإلحاق طلاب جدد بها` : `تسمية الدفعة "${preset}"`}
                                                         >
                                                             <span>{preset}</span>
-                                                            {isTaken && <span className="text-[9px] text-rose-400/80 no-underline">(مستخدم)</span>}
+                                                            {existingMatch && (
+                                                                <span className="text-[9px] opacity-90 font-mono">
+                                                                    (+{existingMatch.count})
+                                                                </span>
+                                                            )}
                                                         </button>
                                                     );
                                                 })}
                                             </div>
                                         </div>
 
-                                        {/* تحذير فوري إذا كان اسم المجموعة مكرراً في نفس الرابط */}
-                                        {isDuplicateGroupName && (
-                                            <div className="bg-rose-950/60 border border-rose-500/50 rounded-xl p-2.5 flex items-center gap-2 text-xs text-rose-200 animate-in fade-in">
-                                                <AlertCircle size={15} className="text-rose-400 shrink-0" />
+                                        {/* تنبيه فوري بأن الطلاب سينضافون لنفس المجموعة الموجودة لأن الاسم مطابق */}
+                                        {matchingExistingGroup && (
+                                            <div className="bg-amber-950/60 border border-amber-500/50 rounded-xl p-2.5 flex items-center gap-2 text-xs text-amber-200 animate-in fade-in">
+                                                <AlertTriangle size={15} className="text-amber-400 shrink-0" />
                                                 <span>
-                                                    ⛔ اسم المجموعة <strong>"{batchGroupName.trim()}"</strong> مستخدم مسبقاً في هذا الرابط! لا يُسمح بتكرار اسم المجموعة داخل نفس الرابط، يرجى اختيار اسم آخر (مثل: ص 2 أو ص 3).
+                                                    🔔 تنبيه: اسم المجموعة <strong>"{matchingExistingGroup.name}"</strong> مطابق لمجموعة موجودة مسبقاً في هذا الرابط وتضم حالياً <strong>({matchingExistingGroup.count} طلاب)</strong> — سيتم <strong>إضافة الطلاب الجدد إلى نفس هذه المجموعة</strong> مباشرة.
                                                 </span>
                                             </div>
                                         )}
 
-                                        {/* عرض المجموعات المسجلة مسبقاً في الرابط لمعرفة ما تم إنجازه */}
+                                        {/* عرض المجموعات المسجلة مسبقاً في الرابط لمعرفة ما تم إنجازه أو الضغط عليها للإلحاق بها */}
                                         {existingGroups.length > 0 && (
                                             <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-slate-800/80">
-                                                <span className="text-[10px] text-slate-400">المجموعات المضافة بالرابط حالياً:</span>
-                                                {existingGroups.map(g => (
-                                                    <span
-                                                        key={g.normName}
-                                                        className={`text-[10px] px-2 py-0.5 rounded-md border font-bold flex items-center gap-1 ${g.theme.badge}`}
-                                                    >
-                                                        <span className={`w-1.5 h-1.5 rounded-full ${g.theme.dot}`} />
-                                                        <span>{g.name}</span>
-                                                        <span className="opacity-75 font-mono">({g.count})</span>
-                                                    </span>
-                                                ))}
+                                                <span className="text-[10px] text-slate-400">المجموعات المضافة بالرابط حالياً (اضغط للإلحاق بها):</span>
+                                                {existingGroups.map(g => {
+                                                    const isSelected = normalizeGroupKey(batchGroupName) === g.normName;
+                                                    return (
+                                                        <button
+                                                            key={g.normName}
+                                                            type="button"
+                                                            onClick={() => setBatchGroupName(isSelected ? '' : g.name)}
+                                                            className={`text-[10px] px-2 py-0.5 rounded-md border font-bold flex items-center gap-1 transition-all ${
+                                                                isSelected ? g.theme.pillActive : g.theme.badge
+                                                            }`}
+                                                            title={`اضغط لإضافة طلاب جدد إلى مجموعة "${g.name}"`}
+                                                        >
+                                                            <span className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-white' : g.theme.dot}`} />
+                                                            <span>{g.name}</span>
+                                                            <span className="opacity-75 font-mono">({g.count})</span>
+                                                        </button>
+                                                    );
+                                                })}
                                             </div>
                                         )}
                                     </div>
@@ -1655,7 +1678,7 @@ export default function PublicRegistrationPage() {
                                                     <button
                                                         type="button"
                                                         onClick={() => handleApplySmartPaste()}
-                                                        disabled={!smartPasteText.trim() || isDuplicateGroupName}
+                                                        disabled={!smartPasteText.trim()}
                                                         className="flex-1 sm:flex-none px-4 py-2 bg-gradient-to-r from-indigo-600 to-emerald-600 hover:from-indigo-500 hover:to-emerald-500 active:scale-95 text-white font-bold rounded-xl text-xs shadow-md shadow-indigo-600/30 flex items-center justify-center gap-1.5 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                                                     >
                                                         <Zap size={14} className="fill-current" />
@@ -1770,7 +1793,7 @@ export default function PublicRegistrationPage() {
                                         {/* حفظ سريع مباشر من الشريط الثابت */}
                                         <button
                                             type="button"
-                                            disabled={isSubmitting || filledRapidRows === 0 || isDuplicateGroupName}
+                                            disabled={isSubmitting || filledRapidRows === 0}
                                             onClick={handleSaveRapid}
                                             className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 sm:py-2 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white rounded-xl text-xs font-bold shadow-md shadow-emerald-600/30 transition-all disabled:opacity-40"
                                             title="حفظ الأسطر المكتملة الآن"
@@ -1778,7 +1801,9 @@ export default function PublicRegistrationPage() {
                                             <Save size={14} />
                                             <span>
                                                 {batchGroupName.trim()
-                                                    ? `حفظ في "${batchGroupName.trim()}" (${filledRapidRows})`
+                                                    ? (matchingExistingGroup
+                                                        ? `إلحاق بمجموعة "${matchingExistingGroup.name}" (${filledRapidRows})`
+                                                        : `حفظ في "${batchGroupName.trim()}" (${filledRapidRows})`)
                                                     : `حفظ (${filledRapidRows})`}
                                             </span>
                                         </button>
@@ -1972,7 +1997,7 @@ export default function PublicRegistrationPage() {
 
                                     <button
                                         type="button"
-                                        disabled={isSubmitting || isDuplicateGroupName}
+                                        disabled={isSubmitting}
                                         onClick={handleSaveRapid}
                                         className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-indigo-600/30 flex items-center gap-2 transition-all disabled:opacity-50"
                                     >
@@ -1981,7 +2006,9 @@ export default function PublicRegistrationPage() {
                                             {isSubmitting
                                                 ? "جاري الحفظ..."
                                                 : batchGroupName.trim()
-                                                ? `حفظ الكل في مجموعة "${batchGroupName.trim()}" (${filledRapidRows})`
+                                                ? (matchingExistingGroup
+                                                    ? `حفظ وإلحاق بمجموعة "${matchingExistingGroup.name}" (${filledRapidRows})`
+                                                    : `حفظ الكل في مجموعة "${batchGroupName.trim()}" (${filledRapidRows})`)
                                                 : `حفظ الكل دفعة واحدة (${filledRapidRows})`}
                                         </span>
                                     </button>
@@ -2075,8 +2102,8 @@ export default function PublicRegistrationPage() {
                         <div className="space-y-2">
                             {filteredPublicSubmissions.map((sub, idx) => {
                                 const subGroupRaw = (sub.batchGroupName || '').trim();
-                                const subGroupNorm = normalizeArabic(subGroupRaw);
-                                const prevGroupNorm = idx > 0 ? normalizeArabic((filteredPublicSubmissions[idx - 1].batchGroupName || '').trim()) : null;
+                                const subGroupNorm = normalizeGroupKey(subGroupRaw);
+                                const prevGroupNorm = idx > 0 ? normalizeGroupKey((filteredPublicSubmissions[idx - 1].batchGroupName || '').trim()) : null;
                                 const isFirstInGroup = existingGroups.length > 0 && subGroupNorm !== prevGroupNorm;
                                 const groupTheme = subGroupNorm ? (groupThemeByNorm[subGroupNorm] || GROUP_COLOR_THEMES[0]) : null;
                                 const groupObj = subGroupNorm ? existingGroups.find(g => g.normName === subGroupNorm) : null;
@@ -2254,23 +2281,43 @@ export default function PublicRegistrationPage() {
                                         <div>
                                             <label className="block text-xs text-slate-400 mb-1">الصف</label>
                                             <select
-                                                value={editingSub.grade}
-                                                onChange={(e) => setEditingSub({ ...editingSub, grade: e.target.value })}
-                                                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm"
+                                                value={editingSub.grade || gradeOptions[0] || ''}
+                                                onChange={(e) => {
+                                                    const newGrade = e.target.value;
+                                                    const secs = getSectionOptions(newGrade);
+                                                    const currentSec = String(editingSub.section || '').trim();
+                                                    const nextSec = secs.includes(currentSec) ? currentSec : (secs[0] || '1');
+                                                    setEditingSub({ ...editingSub, grade: newGrade, section: nextSec });
+                                                }}
+                                                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500"
                                             >
-                                                {gradeOptions.map(g => (
-                                                    <option key={g} value={g}>{g}</option>
-                                                ))}
+                                                {(() => {
+                                                    const currentG = String(editingSub.grade || '').trim();
+                                                    const allG = currentG && currentG !== 'غير معروف' && !gradeOptions.includes(currentG)
+                                                        ? [currentG, ...gradeOptions]
+                                                        : gradeOptions;
+                                                    return allG.map(g => (
+                                                        <option key={g} value={g}>{g}</option>
+                                                    ));
+                                                })()}
                                             </select>
                                         </div>
                                         <div>
                                             <label className="block text-xs text-slate-400 mb-1">الشعبة</label>
-                                            <input
-                                                type="text"
-                                                value={editingSub.section}
+                                            <select
+                                                value={editingSub.section || getSectionOptions(editingSub.grade || gradeOptions[0])[0] || '1'}
                                                 onChange={(e) => setEditingSub({ ...editingSub, section: e.target.value })}
-                                                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm"
-                                            />
+                                                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500"
+                                            >
+                                                {(() => {
+                                                    const secs = getSectionOptions(editingSub.grade || gradeOptions[0]);
+                                                    const currentSec = String(editingSub.section || '').trim();
+                                                    const allSecs = currentSec && !secs.includes(currentSec) ? [currentSec, ...secs] : secs;
+                                                    return allSecs.map(sec => (
+                                                        <option key={sec} value={sec}>شعبة {sec}</option>
+                                                    ));
+                                                })()}
+                                            </select>
                                         </div>
                                     </div>
                                 )}
