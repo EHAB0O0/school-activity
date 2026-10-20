@@ -66,11 +66,25 @@ const GROUP_COLOR_THEMES = [
     }
 ];
 
-// --- Pure Arabic Normalization & Text Parsing Utilities ---
+// --- Pure Arabic Normalization & Smart Text Parsing Engine ---
+
+const cleanBidiAndZeroWidth = (str) => {
+    if (!str) return '';
+    return String(str)
+        .replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF\u00AD]/g, '')
+        .replace(/\u00A0/g, ' ');
+};
+
+const toWesternDigits = (str) => {
+    if (!str) return '';
+    return String(str)
+        .replace(/[\u0660-\u0669]/g, d => String(d.charCodeAt(0) - 0x0660))
+        .replace(/[\u06F0-\u06F9]/g, d => String(d.charCodeAt(0) - 0x06F0));
+};
 
 const normalizeArabic = (str) => {
     if (!str) return '';
-    return str
+    return cleanBidiAndZeroWidth(str)
         .trim()
         .toLowerCase()
         .replace(/[\u064B-\u065F\u0670]/g, '')
@@ -83,7 +97,7 @@ const normalizeArabic = (str) => {
 
 const normalizeGroupKey = (str) => {
     if (!str) return '';
-    return normalizeArabic(String(str))
+    return toWesternDigits(normalizeArabic(String(str)))
         .replace(/([^\d\s])\s*(\d)/g, '$1 $2')
         .replace(/(\d)\s*([^\d\s])/g, '$1 $2')
         .replace(/\s+/g, ' ')
@@ -92,7 +106,7 @@ const normalizeGroupKey = (str) => {
 
 const normalizeArabicForMatch = (str) => {
     if (!str) return '';
-    return String(str)
+    let s = toWesternDigits(cleanBidiAndZeroWidth(str))
         .trim()
         .toLowerCase()
         .replace(/[\u064B-\u065F\u0670]/g, '') // Tashkeel
@@ -101,83 +115,607 @@ const normalizeArabicForMatch = (str) => {
         .replace(/ى/g, 'ي')
         .replace(/[ؤئ]/g, 'ي')
         .replace(/\u0640/g, '') // Tatweel
-        .replace(/\bعبد\s+/g, 'عبد')
-        .replace(/\bابو\s+/g, 'ابو')
-        .replace(/\bال\s+/g, 'ال')
+        .replace(/وو+/g, 'و') // داوود -> داود
+        .replace(/يي+/g, 'ي') // محيي -> محي
+        .replace(/[\(\)\[\]{}.,،_+\-–—\\/|:;؛!?~*"'«»]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    // Merge compound Arabic name prefixes (must use (^|\s) because \b is ASCII-only)
+    s = s
+        .replace(/(^|\s)عبد\s+(?=\S)/g, '$1عبد')
+        .replace(/(^|\s)(ابو|ابي|ابا)\s+(?=\S)/g, '$1ابو')
+        .replace(/(^|\s)ال\s+(?=\S)/g, '$1ال')
+        .replace(/(^|\s)ذو\s+(?=\S)/g, '$1ذو')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    return s;
+};
+
+const STOP_NAME_CONNECTORS = new Set(['بن', 'ابن', 'ابنه', 'بنت', 'ولد', 'ال']);
+
+const getComparableTokens = (normStr) => {
+    if (!normStr) return [];
+    return normStr
+        .split(' ')
+        .map(t => t.trim())
+        .filter(t => t && !STOP_NAME_CONNECTORS.has(t));
+};
+
+const stripLeadingAl = (token) => {
+    if (!token || token.length < 5) return token;
+    if (token.startsWith('ال') && !token.startsWith('الله') && !token.startsWith('الاه')) {
+        return token.slice(2);
+    }
+    return token;
+};
+
+const levenshteinDistance = (a, b) => {
+    if (a === b) return 0;
+    if (!a) return b ? b.length : 0;
+    if (!b) return a.length;
+    if (Math.abs(a.length - b.length) > 2) return 99;
+    const matrix = Array.from({ length: a.length + 1 }, (_, i) => [i]);
+    for (let j = 1; j <= b.length; j++) matrix[0][j] = j;
+    for (let i = 1; i <= a.length; i++) {
+        for (let j = 1; j <= b.length; j++) {
+            const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+            matrix[i][j] = Math.min(
+                matrix[i - 1][j] + 1,
+                matrix[i][j - 1] + 1,
+                matrix[i - 1][j - 1] + cost
+            );
+        }
+    }
+    return matrix[a.length][b.length];
+};
+
+const scoreTokenSimilarity = (t1, t2, allowFuzzy = true) => {
+    if (!t1 || !t2) return 0;
+    if (t1 === t2) return 1.0;
+    // Trailing hamza drop (e.g. علاء <-> علا, براء <-> برا)
+    const h1 = t1.replace(/ء$/, '');
+    const h2 = t2.replace(/ء$/, '');
+    if (h1 === h2 && h1.length >= 3) return 0.98;
+    // Leading "ال" on family/tribal names (e.g. الزهراني <-> زهراني)
+    const s1 = stripLeadingAl(h1);
+    const s2 = stripLeadingAl(h2);
+    if (s1 === s2 && s1.length >= 3) return 0.96;
+    // Common prefix/abbreviation or 1-char OCR/typing typo on longer tokens
+    if (allowFuzzy && s1.length >= 4 && s2.length >= 4) {
+        const dist = levenshteinDistance(s1, s2);
+        if (dist === 1) return 0.86;
+    }
+    return 0;
+};
+
+// Map Arabic section letters to section numbers
+const SECTION_LETTER_TO_NUM = {
+    'ا': '1', 'أ': '1', 'a': '1',
+    'ب': '2', 'b': '2',
+    'ج': '3', 'c': '3',
+    'د': '4', 'd': '4',
+    'ه': '5', 'هـ': '5', 'e': '5',
+    'و': '6', 'f': '6',
+    'ز': '7', 'ح': '8', 'ط': '9'
+};
+
+// Words that clearly indicate non-name noise, status, role, activity, or table headers
+const NON_NAME_NOISE_WORDS = new Set([
+    // Status & Attendance
+    'حاضر', 'حضور', 'غائب', 'غياب', 'مشارك', 'مشاركه', 'مشترك', 'منسحب', 'معتذر', 'مستأذن', 'مستاذن',
+    'معتمد', 'تم', 'مكتمل', 'مؤكد', 'احتياط', 'احتياطي', 'اساسي', 'مرشح', 'فائز', 'مجتاز', 'منتظم',
+    'مستجد', 'منقول', 'معيد', 'نعم', 'لا', 'صح', 'خطا', 'موافق', 'مرفوض', 'انتظار', 'تحت', 'المراجعه',
+    // Grades / Evaluations
+    'ممتاز', 'جيد', 'جدا', 'مقبول', 'ضعيف', 'متفوق', 'متميز', 'متقن', 'اولى', 'ثانيه', 'ثالثه',
+    'رابعه', 'خامسه', 'سادسه', 'ثانوي', 'الثانوي', 'متوسط', 'المتوسط', 'ابتدائي', 'الابتدائي',
+    'علمي', 'ادبي', 'شرعي', 'عام', 'مسار', 'صحي', 'هندسه', 'حاسب', 'اداره', 'اعمال', 'شريعه',
+    'مقررات', 'فصلي', 'فصل', 'الفصل', 'صف', 'الصف', 'شعبه', 'الشعبه', 'قاعه', 'القاعه', 'مجموعه', 'المجموعه',
+    'دفعه', 'الدفعه', 'صفحه', 'الصفحه', 'ص', 'ش', 'ف', 'م', 'ت', 'ر', 'ج',
+    // Roles & Activities
+    'قائد', 'نائب', 'عضو', 'مفوض', 'منسق', 'مشرف', 'رائد', 'عريف', 'مسؤول', 'لجنه', 'اللجنه',
+    'اذاعه', 'الاذاعه', 'مسابقه', 'المسابقه', 'نشاط', 'النشاط', 'الأنشطه', 'الانشطه', 'تطوع', 'تطوعي',
+    'رياضي', 'الرياضي', 'ثقافي', 'الثقافي', 'الاجتماعي', 'اجتماعي', 'كشفي', 'كشافه', 'الكشافه', 'فني',
+    'مسرح', 'النظام', 'الامتياز', 'رحله', 'زياره', 'مبادره', 'برنامج', 'دوره', 'ندوه', 'محاضره',
+    'بطوله', 'دوري', 'فريق', 'فرقه', 'اعلامي', 'الاعلاميه', 'اعلاميه', 'تنظيم', 'استقبال',
+    // Scores / Units / Table Metadata
+    'نقطه', 'نقاط', 'درجه', 'درجات', 'ريال', 'ملاحظه', 'ملاحظات', 'التوقيع', 'توقيع', 'بدون',
+    'يوجد', 'فراغ', 'الاسم', 'الطالب', 'الطلاب', 'اسم', 'طالب', 'المشارك', 'المشاركين', 'المشاركون',
+    'كشف', 'قائمه', 'بيان', 'اسماء', 'الاسماء', 'المجموع', 'اجمالي', 'الاجمالي', 'العدد', 'التاريخ',
+    'اليوم', 'المدرسه', 'مدرسه', 'اداره', 'تعليم', 'وزاره', 'المملكه', 'العربيه', 'السعوديه',
+    'بسم', 'الله', 'الرحمن', 'الرحيم', 'مدير', 'وكيل', 'مرشد', 'المرشد', 'الاستاذ', 'استاذ',
+    'معلم', 'المعلم', 'جوال', 'الجوال', 'هاتف', 'الهاتف', 'رقم', 'الهويه', 'السجل', 'المدني',
+    'student', 'name', 'class', 'grade', 'section', 'phone', 'mobile', 'notes', 'status', 'yes', 'no', 'ok', 'page'
+]);
+
+// Detect grade level number (1..6) from a string WITHOUT confusing section digits with grade digits
+const detectGradeLevelNumber = (str) => {
+    if (!str) return null;
+    const norm = toWesternDigits(normalizeArabic(str))
         .replace(/[\(\)\[\]{}.,،_+\-–—\\/|:;؛!?~*]/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
+
+    if (!norm) return null;
+
+    // 1. Check explicit Arabic/English grade words in order of occurrence
+    const tokens = norm.split(' ');
+    for (let i = 0; i < tokens.length; i++) {
+        const t = tokens[i];
+        const next = tokens[i + 1] || '';
+        const prev = tokens[i - 1] || '';
+
+        if (/^(اول|اولي|الاول|الاولي|1ث|ث1|1م|م1|first|1st|g10)$/.test(t) || (t === '1' && /^(ث|ثانوي|الثانوي|م|متوسط)$/.test(next)) || (t === '10' && prev === 'grade')) return 1;
+        if (/^(ثاني|ثانيه|ثان|الثاني|الثانيه|2ث|ث2|2م|م2|second|2nd|g11)$/.test(t) || (t === '2' && /^(ث|ثانوي|الثانوي|م|متوسط)$/.test(next)) || (t === '11' && prev === 'grade')) return 2;
+        if (/^(ثالث|ثالثه|الثالث|الثالثه|3ث|ث3|3م|م3|third|3rd|g12)$/.test(t) || (t === '3' && /^(ث|ثانوي|الثانوي|م|متوسط)$/.test(next)) || (t === '12' && prev === 'grade')) return 3;
+        if (/^(رابع|رابعه|الرابع|الرابعه)$/.test(t)) return 4;
+        if (/^(خامس|خامسه|الخامس|الخامسه)$/.test(t)) return 5;
+        if (/^(سادس|سادسه|السادس|السادسه)$/.test(t)) return 6;
+    }
+
+    // 2. Check Noor 3-digit class code (e.g. 101, 203, 304)
+    const noorMatch = norm.match(/\b([1-6])0([1-9])\b/);
+    if (noorMatch) return Number(noorMatch[1]);
+
+    // 3. Check slash/hyphen numeric class (e.g. 2/1, 3 - 2) from original string
+    const rawWest = toWesternDigits(cleanBidiAndZeroWidth(str));
+    const slashMatch = rawWest.match(/(?:^|\s|\(|\[|فصل|صف)\s*([1-6])\s*[\/\\\-–—]\s*([1-9]\d?)(?:\s|\)|\]|$)/);
+    if (slashMatch) return Number(slashMatch[1]);
+
+    return null;
 };
 
-const getComparableTokens = (normStr) => {
-    return normStr
-        .split(' ')
-        .filter(t => t && t !== 'بن' && t !== 'ابن' && t !== 'ابنه' && t !== 'بنت');
+// Extract Grade & Section from any class/hint string (never treats random words or page numbers as section)
+const extractGradeAndSectionFromFragment = (fragment) => {
+    if (!fragment) return { gradeLevel: null, section: null, isClassFragment: false };
+    let raw = toWesternDigits(cleanBidiAndZeroWidth(fragment)).trim();
+    if (!raw) return { gradeLevel: null, section: null, isClassFragment: false };
+
+    const norm = normalizeArabic(raw);
+
+    // Reject obvious page/group/points/phone fragments so "ص 1" or "10 نقاط" is NEVER treated as a class/section
+    if (/^(ص|صفحه|الصفحه|مجموعه|المجموعه|دفعه|الدفعه|page|group)\s*\d+$/i.test(norm)) {
+        return { gradeLevel: null, section: null, isClassFragment: false };
+    }
+    if (/^\d+\s*(نقطه|نقاط|درجه|درجات|ريال|طالب|طلاب)$/.test(norm)) {
+        return { gradeLevel: null, section: null, isClassFragment: false };
+    }
+    if (/^(?:\+?966|00966|0)?5\d{8}$/.test(raw.replace(/[\s\-]/g, ''))) {
+        return { gradeLevel: null, section: null, isClassFragment: false };
+    }
+
+    // 1. Noor 3-digit class code (e.g., 102 -> Grade 1, Sec 2; 204 -> Grade 2, Sec 4)
+    const noorMatch = norm.match(/^(?:فصل|صف|شعبه|قاعه)?\s*([1-6])0([1-9])$/);
+    if (noorMatch) {
+        return { gradeLevel: Number(noorMatch[1]), section: noorMatch[2], isClassFragment: true };
+    }
+
+    // 2. Slash / hyphen numeric class (e.g., "2/1", "٢ / ٣", "فصل 3/2", "2 - 4")
+    const slashMatch = raw.match(/^(?:فصل|الفصل|صف|الصف|شعبه|شعبة|class)?\s*([1-6])\s*(?:ث|م)?\s*[\/\\\-–—]\s*([1-9]\d?|[أابجدهو])\s*$/i);
+    if (slashMatch) {
+        let gNum = Number(slashMatch[1]);
+        let secRaw = normalizeArabic(slashMatch[2]);
+        let sec = SECTION_LETTER_TO_NUM[secRaw] || secRaw;
+        return { gradeLevel: gNum, section: sec, isClassFragment: true };
+    }
+
+    // 3. Explicit Grade words + optional Section
+    const ordinalMap = {
+        'اول': 1, 'اولي': 1, 'الاول': 1, 'الاولي': 1, '1ث': 1, 'ث1': 1, '1م': 1, 'م1': 1, 'first': 1, '1st': 1, 'g10': 1,
+        'ثاني': 2, 'ثانيه': 2, 'ثان': 2, 'الثاني': 2, 'الثانيه': 2, '2ث': 2, 'ث2': 2, '2م': 2, 'م2': 2, 'second': 2, '2nd': 2, 'g11': 2,
+        'ثالث': 3, 'ثالثه': 3, 'الثالث': 3, 'الثالثه': 3, '3ث': 3, 'ث3': 3, '3م': 3, 'م3': 3, 'third': 3, '3rd': 3, 'g12': 3,
+        'رابع': 4, 'رابعه': 4, 'الرابع': 4, 'الرابعه': 4,
+        'خامس': 5, 'خامسه': 5, 'الخامس': 5, 'الخامسه': 5,
+        'سادس': 6, 'سادسه': 6, 'السادس': 6, 'السادسه': 6
+    };
+
+    const cleanTokens = norm
+        .replace(/[\(\)\[\]{}.,،_+\-–—\\/|:;؛!?~*]/g, ' ')
+        .replace(/([1-6])\s+(ث|م)\b/g, '$1$2')
+        .replace(/\b(ث|م)\s+([1-6])/g, '$1$2')
+        .split(/\s+/)
+        .filter(Boolean);
+
+    let foundGradeLevel = null;
+    let gradeTokenIndex = -1;
+
+    for (let i = 0; i < cleanTokens.length; i++) {
+        const tk = cleanTokens[i];
+        if (ordinalMap[tk]) {
+            foundGradeLevel = ordinalMap[tk];
+            gradeTokenIndex = i;
+            break;
+        }
+        if ((tk === 'صف' || tk === 'الصف' || tk === 'grade') && cleanTokens[i + 1] && /^[1-6]$/.test(cleanTokens[i + 1])) {
+            foundGradeLevel = Number(cleanTokens[i + 1]);
+            gradeTokenIndex = i + 1;
+            break;
+        }
+    }
+
+    if (foundGradeLevel !== null) {
+        let foundSection = null;
+        const stageIgnore = new Set([
+            'ثانوي', 'الثانوي', 'ثانويه', 'الثانويه', 'متوسط', 'المتوسط', 'ابتدائي', 'الابتدائي',
+            'صف', 'الصف', 'فصل', 'الفصل', 'شعبه', 'الشعبه', 'قاعه', 'القاعه', 'ش', 'ف',
+            'مسار', 'المسار', 'عام', 'العام', 'علمي', 'العلمي', 'ادبي', 'الادبي', 'شرعي', 'الشرعي',
+            'صحي', 'هندسه', 'حاسب', 'اداره', 'اعمال', 'مقررات', 'سنه', 'السنه', 'grade', 'sec', 'section', 'class'
+        ]);
+
+        for (let i = 0; i < cleanTokens.length; i++) {
+            if (i === gradeTokenIndex) continue;
+            const tk = cleanTokens[i];
+            if (stageIgnore.has(tk)) continue;
+
+            if (/^([1-9]|1\d|20)$/.test(tk)) {
+                foundSection = tk;
+                break;
+            }
+            if (i > gradeTokenIndex && ordinalMap[tk]) {
+                // e.g., "ثاني اول" -> Grade 2, Section 1; "ثالث ثاني" -> Grade 3, Section 2
+                foundSection = String(ordinalMap[tk]);
+                break;
+            }
+            if (SECTION_LETTER_TO_NUM[tk] && (i > gradeTokenIndex || cleanTokens.includes('شعبه') || cleanTokens.includes('فصل'))) {
+                foundSection = SECTION_LETTER_TO_NUM[tk];
+                break;
+            }
+        }
+
+        // Verify that the fragment doesn't contain unrelated person name words
+        const nonClassWords = cleanTokens.filter((tk, idx) => {
+            if (idx === gradeTokenIndex) return false;
+            if (stageIgnore.has(tk)) return false;
+            if (/^([1-9]|1\d|20)$/.test(tk)) return false;
+            if (ordinalMap[tk]) return false;
+            if (SECTION_LETTER_TO_NUM[tk]) return false;
+            return true;
+        });
+
+        return {
+            gradeLevel: foundGradeLevel,
+            section: foundSection,
+            isClassFragment: nonClassWords.length === 0
+        };
+    }
+
+    // 4. Section-only fragment (e.g., "شعبة 3", "شعبه ٢", "فصل 4", "ش 2", or pure small integer in a section column)
+    const secOnlyMatch = norm.match(/^(?:شعبه|الشعبه|فصل|الفصل|قاعه|القاعه|ش|ف|sec|section)\s*[:\-]?\s*([1-9]|1\d|20|[ابجدهو])$/);
+    if (secOnlyMatch) {
+        const sVal = secOnlyMatch[1];
+        return {
+            gradeLevel: null,
+            section: SECTION_LETTER_TO_NUM[sVal] || sVal,
+            isClassFragment: true
+        };
+    }
+
+    return { gradeLevel: null, section: null, isClassFragment: false };
+};
+
+// Check if a token or phrase consists purely of non-name noise words
+const isPureNoisePhrase = (phrase) => {
+    const norm = normalizeArabicForMatch(phrase);
+    if (!norm) return true;
+    // Check page/group/points patterns
+    if (/^(ص|صفحه|الصفحه|مجموعه|المجموعه|دفعه|الدفعه)\s*\d+$/.test(norm)) return true;
+    if (/^\d+\s*(نقطه|نقاط|درجه|درجات|ريال|طالب|طلاب)$/.test(norm)) return true;
+    const tokens = norm.split(' ').filter(Boolean);
+    if (tokens.length === 0) return true;
+    return tokens.every(tk => NON_NAME_NOISE_WORDS.has(tk) || /^\d+$/.test(tk));
+};
+
+// Check if a whole line is a non-student header/footer line (e.g. "بسم الله الرحمن الرحيم", "الاسم | الصف | الشعبة", "ص 1")
+const isHeaderOrMetadataLine = (line) => {
+    const norm = normalizeArabicForMatch(line);
+    if (!norm) return true;
+    if (/^(بسم الله|قائمه الطلاب|كشف اسماء|اسماء الطلاب|الطلاب المشاركين|المجموع|اجمالي|التوقيع|مدير المدرسه|رائد النشاط|وكيل المدرسه)/.test(norm)) {
+        return true;
+    }
+    if (/^(ص|صفحه|الصفحه|مجموعه|المجموعه|دفعه|الدفعه|ورقه|الورقه)\s*\d+(\s*من\s*\d+)?$/.test(norm)) {
+        return true;
+    }
+    const tokens = norm.split(' ').filter(Boolean);
+    if (tokens.length > 0 && tokens.every(tk => NON_NAME_NOISE_WORDS.has(tk) || /^\d+$/.test(tk))) {
+        return true;
+    }
+    return false;
 };
 
 const parsePastedStudentsText = (rawText) => {
     if (!rawText || !rawText.trim()) return [];
 
-    let rawLines = rawText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const cleanedRaw = cleanBidiAndZeroWidth(rawText);
+    let rawLines = cleanedRaw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
 
-    // If only 1 line but separated by commas:
-    if (rawLines.length === 1 && (rawLines[0].includes('،') || rawLines[0].includes(','))) {
-        const commaSplit = rawLines[0].split(/[،,]/).map(s => s.trim()).filter(Boolean);
+    // If only 1 line but separated by commas or semicolons:
+    if (rawLines.length === 1 && (rawLines[0].includes('،') || rawLines[0].includes(',') || rawLines[0].includes('؛'))) {
+        const commaSplit = rawLines[0].split(/[،,؛]/).map(s => s.trim()).filter(Boolean);
         if (commaSplit.length > 1) {
             rawLines = commaSplit;
         }
     }
 
     const results = [];
+    let currentContextGradeLevel = null;
+    let currentContextSection = null;
 
-    rawLines.forEach(line => {
-        let clean = line;
+    rawLines.forEach(originalLine => {
+        let line = toWesternDigits(cleanBidiAndZeroWidth(originalLine)).trim();
+        if (!line) return;
 
-        // 1. Remove leading numbering (Western 123 and Arabic-Indic ١٢٣)
-        clean = clean.replace(/^[\(\[]?[\d\u0660-\u0669]+[\)\]]?[\.\-\:\/]?\s*/, '');
+        // Strip decorative divider lines (---, ===, ***)
+        if (/^[\-=*_~•●▪▫\s]+$/.test(line)) return;
 
-        // 2. Remove leading bullets or icons
-        clean = clean.replace(/^[•●○■▪️▫️\-*~–—✦★✓✔👉👤]+\s*/, '');
+        // 1. Remove leading list numbering (e.g. "1-", "١.", "(2)", "[3]", "1/", "1 -", "- 1 -")
+        line = line.replace(/^\s*[\(\[\{]?\s*\d{1,3}\s*[\)\]\}]?\s*[\.\-\–\—\:\/\|]?\s*/, '');
+        // Remove leading bullets, emojis, checkmarks, icons
+        line = line.replace(/^[\s•●○■▪▫▪️▫️✦★☆✓✔✅☑❌❎👤🧑👨‍🎓🔹🔸◾◽👈👉⬅️➡️\-*~–—_+|/]+/, '').trim();
+        // Remove trailing checkmarks or emojis
+        line = line.replace(/[\s•●○■▪▫▪️▫️✦★☆✓✔✅☑❌❎👤🧑👨‍🎓🔹🔸◾◽👈👉⬅️➡️*~_]+$/, '').trim();
 
-        // 3. Remove labels like "الطالب:" or "الاسم:"
-        clean = clean.replace(/^(اسم\s+الطالب|الطالب|الاسم)\s*[:：\-]\s*/i, '');
+        if (!line) return;
 
-        // 4. Handle Excel tab separation
-        let tabGrade = '';
-        let tabSection = '';
-        if (clean.includes('\t')) {
-            const tabParts = clean.split('\t').map(p => p.trim()).filter(Boolean);
-            if (tabParts.length > 0) {
-                clean = tabParts[0];
-                if (tabParts[1]) tabGrade = tabParts[1];
-                if (tabParts[2]) tabSection = tabParts[2];
-            }
+        // 2. Check if this entire line is a Class Context Header (e.g., "فصل ثاني ثانوي 2:" or "الصف الثالث ثانوي شعبة 1")
+        const headerCandidate = line.replace(/[:：\-–—]+$/, '').trim();
+        const headerClassInfo = extractGradeAndSectionFromFragment(headerCandidate);
+        if (headerClassInfo.isClassFragment && (headerClassInfo.gradeLevel !== null || headerClassInfo.section !== null)) {
+            if (headerClassInfo.gradeLevel !== null) currentContextGradeLevel = headerClassInfo.gradeLevel;
+            if (headerClassInfo.section !== null) currentContextSection = headerClassInfo.section;
+            return;
         }
 
-        // 5. Handle inline class annotation
-        let inlineGradeHint = tabGrade;
-        let inlineSectionHint = tabSection;
-
-        const classMatch = clean.match(/[\(\[\-–—]([^\)\]]+)[\)\]]?$/);
-        if (classMatch && !inlineGradeHint) {
-            const potentialClass = classMatch[1].trim();
-            if (/(ثانوي|اول|أول|ثاني|ثالث|\d\s*[\/\-]\s*\d)/i.test(potentialClass)) {
-                inlineGradeHint = potentialClass;
-                clean = clean.replace(/[\(\[\-–—]([^\)\]]+)[\)\]]?$/, '').trim();
-            }
+        // Check if this line is a pure header/footer/noise line (e.g. "بسم الله الرحمن الرحيم", "الاسم | الصف", "ص 1")
+        if (isHeaderOrMetadataLine(line)) {
+            return;
         }
 
-        // 6. Clean extra quotes or trailing punctuation
-        clean = clean.replace(/^["'«]+|["'»]+$/g, '').trim();
-        clean = clean.replace(/[\.\:\-–—]$/, '').trim();
+        // 3. Extract and strip Saudi phone numbers (05xxxxxxxx, +9665xxxxxxxx) so their digits never pollute grade/section
+        let inlinePhoneHint = '';
+        line = line.replace(/(?:\+?966|00966|0)?5\d[\s\-]?\d{3}[\s\-]?\d{4}\b/g, (match) => {
+            const digits = match.replace(/\D/g, '');
+            inlinePhoneHint = digits.startsWith('966') ? '0' + digits.slice(3) : (digits.startsWith('00966') ? '0' + digits.slice(5) : (digits.startsWith('5') ? '0' + digits : digits));
+            return ' ';
+        });
 
-        if (clean.length >= 2) {
-            results.push({
-                rawName: clean,
-                inlineGradeHint,
-                inlineSectionHint
+        // Strip long ID numbers (5+ digits like National ID or Academic ID) and Hijri/Gregorian years (1440-1450, 2020-2030)
+        line = line.replace(/\b\d{5,15}\b/g, ' ');
+        line = line.replace(/\b(14[345]\d|20[23]\d)(?:\/\d{1,2}(?:\/\d{1,2})?)?\b/g, ' ');
+
+        // Strip explicit prefixes like "اسم الطالب:" or "الطالب /" or "المشارك:"
+        line = line.replace(/^(?:اسم\s+الطالب|الطالب|الاسم|المشارك|طالب|الأخ|الاخ|الابن)\s*[:：\/\-–—]\s*/i, '').trim();
+
+        let inlineGradeLevel = null;
+        let inlineGradeHint = '';
+        let inlineSectionHint = '';
+        const ignoredNotes = [];
+
+        // 4. Extract parenthetical (...) and bracketed [...] segments anywhere in the line
+        line = line.replace(/[\(\[\{]([^\)\]\}]*)[\)\]\}]/g, (fullMatch, inner) => {
+            const trimmedInner = inner.trim();
+            if (!trimmedInner) return ' ';
+            const classInfo = extractGradeAndSectionFromFragment(trimmedInner);
+            if (classInfo.gradeLevel !== null || classInfo.section !== null) {
+                if (classInfo.gradeLevel !== null) {
+                    inlineGradeLevel = classInfo.gradeLevel;
+                    inlineGradeHint = trimmedInner;
+                }
+                if (classInfo.section !== null) {
+                    inlineSectionHint = classInfo.section;
+                }
+                return ' ';
+            }
+            // If it's noise/notes inside brackets (like "(مشارك)" or "(غائب)" or "(ص 1)"), strip it!
+            if (isPureNoisePhrase(trimmedInner) || /\d/.test(trimmedInner)) {
+                ignoredNotes.push(trimmedInner);
+                return ' ';
+            }
+            // Even if it's arbitrary commentary in parentheses (e.g. "(إذاعة مدرسية)"), strip it unless it starts with "آل "
+            if (!/^(آل|ال)\s+\S+$/.test(trimmedInner)) {
+                ignoredNotes.push(trimmedInner);
+                return ' ';
+            }
+            return ' ' + trimmedInner + ' ';
+        });
+
+        // 5. Handle multi-column lines (Tab \t, Pipe |, or spaced delimiters " - ", " – ", " — ", " : ")
+        if (line.includes('\t') || line.includes('|') || /\s+[\-–—:]\s+/.test(line)) {
+            const rawParts = line
+                .split(/\t|\||(?:\s+[\-–—:]\s+)/)
+                .map(p => p.trim())
+                .filter(Boolean);
+
+            const nameCandidateParts = [];
+
+            rawParts.forEach(part => {
+                // Skip pure row numbers
+                if (/^\d{1,3}$/.test(part)) {
+                    // Only treat a standalone 1..20 digit as section if we ALREADY found a grade in an earlier column and don't have a section yet
+                    if (inlineGradeLevel !== null && !inlineSectionHint && /^([1-9]|1\d|20)$/.test(part)) {
+                        inlineSectionHint = part;
+                    }
+                    return;
+                }
+                // Check if this column is a single Arabic section letter after a grade column
+                if (inlineGradeLevel !== null && !inlineSectionHint && SECTION_LETTER_TO_NUM[normalizeArabic(part)]) {
+                    inlineSectionHint = SECTION_LETTER_TO_NUM[normalizeArabic(part)];
+                    return;
+                }
+
+                // Check if this part is a class/grade/section fragment
+                const cInfo = extractGradeAndSectionFromFragment(part);
+                if (cInfo.isClassFragment && (cInfo.gradeLevel !== null || cInfo.section !== null)) {
+                    if (cInfo.gradeLevel !== null) {
+                        inlineGradeLevel = cInfo.gradeLevel;
+                        inlineGradeHint = part;
+                    }
+                    if (cInfo.section !== null) {
+                        inlineSectionHint = cInfo.section;
+                    }
+                    return;
+                }
+
+                // Check if this part is non-name noise (like "مشارك", "حاضر", "ممتاز", "ص 1", "10 نقاط")
+                if (isPureNoisePhrase(part)) {
+                    ignoredNotes.push(part);
+                    return;
+                }
+
+                nameCandidateParts.push(part);
             });
+
+            // Choose the best name part (usually the first multi-word Arabic/English name segment)
+            line = nameCandidateParts.join(' ').trim();
         }
+
+        // 6. Now inspect tokens of the remaining string for unseparated leading/trailing class or noise tokens
+        // e.g. "محمد أحمد علي الزهراني ثاني ثانوي 1" or "2/3 خالد عبدالله القحطاني" or "سعد فهد العتيبي مشارك"
+        line = line.replace(/^["'«]+|["'»]+$/g, '').trim();
+
+        // Check leading slash class (e.g., "2/1 محمد أحمد الزهراني")
+        const leadingSlash = line.match(/^(?:فصل|صف|شعبه|شعبة)?\s*([1-6])\s*[\/\\\-–—]\s*([1-9]\d?)\s+(.+)$/);
+        if (leadingSlash) {
+            if (inlineGradeLevel === null) {
+                inlineGradeLevel = Number(leadingSlash[1]);
+                inlineGradeHint = `${leadingSlash[1]}/${leadingSlash[2]}`;
+            }
+            if (!inlineSectionHint) inlineSectionHint = leadingSlash[2];
+            line = leadingSlash[3].trim();
+        }
+
+        // Check trailing slash class (e.g., "محمد أحمد الزهراني 2/1" or "محمد أحمد الزهراني - 2/1")
+        const trailingSlash = line.match(/^(.+?)\s+[\-–—\/]?\s*(?:فصل|صف|شعبه|شعبة)?\s*([1-6])\s*(?:ث|م)?\s*[\/\\\-–—]\s*([1-9]\d?|[أابجدهو])$/);
+        if (trailingSlash) {
+            if (inlineGradeLevel === null) {
+                inlineGradeLevel = Number(trailingSlash[2]);
+                inlineGradeHint = `${trailingSlash[2]}/${trailingSlash[3]}`;
+            }
+            if (!inlineSectionHint) {
+                const sRaw = normalizeArabic(trailingSlash[3]);
+                inlineSectionHint = SECTION_LETTER_TO_NUM[sRaw] || sRaw;
+            }
+            line = trailingSlash[1].trim();
+        }
+
+        // Check trailing Noor 3-digit class code (e.g., "محمد أحمد الزهراني 203")
+        const trailingNoor = line.match(/^(.+?)\s+([1-6])0([1-9])$/);
+        if (trailingNoor) {
+            if (inlineGradeLevel === null) {
+                inlineGradeLevel = Number(trailingNoor[2]);
+                inlineGradeHint = `${trailingNoor[2]}/${trailingNoor[3]}`;
+            }
+            if (!inlineSectionHint) inlineSectionHint = trailingNoor[3];
+            line = trailingNoor[1].trim();
+        }
+
+        // Check leading explicit class phrase (e.g., "ثاني ثانوي 1 محمد أحمد الزهراني")
+        const leadingClassMatch = line.match(/^(?:الصف\s+|صف\s+|فصل\s+)?(أول|اول|أولى|اولى|الأول|الاول|ثاني|ثانية|ثانيه|الثاني|ثالث|ثالثة|ثالثه|الثالث|[1-3]\s*ث)\s*(?:ثانوي|الثانوي|متوسط|علمي|أدبي|ادبي|عام)?\s*(?:[\/\-]?\s*(?:شعبة|شعبه|فصل|ش|ف)?\s*([1-9]\d?))?\s*[:\-–—\/]?\s+(.+)$/i);
+        if (leadingClassMatch) {
+            const remainWords = leadingClassMatch[3].trim().split(/\s+/);
+            // Only treat as leading class if explicit stage/section is present or remaining has >= 2 name words
+            if (remainWords.length >= 2) {
+                const cInfo = extractGradeAndSectionFromFragment(`${leadingClassMatch[1]} ثانوي ${leadingClassMatch[2] || ''}`);
+                if (cInfo.gradeLevel !== null && inlineGradeLevel === null) {
+                    inlineGradeLevel = cInfo.gradeLevel;
+                    inlineGradeHint = leadingClassMatch[1];
+                }
+                if (cInfo.section !== null && !inlineSectionHint) {
+                    inlineSectionHint = cInfo.section;
+                }
+                line = leadingClassMatch[3].trim();
+            }
+        }
+
+        // Check trailing explicit class phrase (e.g. "محمد أحمد الزهراني ثاني ثانوي 1", "محمد الزهراني ثالث 2", "محمد الزهراني اولى ثانوي", "محمد الزهراني ثاني اول")
+        const trailingClassMatch = line.match(/^(.+?)\s+[\-–—\/]?\s*(?:الصف\s+|صف\s+|فصل\s+)?((?:أول|اول|أولى|اولى|الأول|الاول|ثاني|ثانية|ثانيه|الثاني|ثالث|ثالثة|ثالثه|الثالث|[1-3]\s*ث)(?:\s+(?:ثانوي|الثانوي|متوسط|علمي|أدبي|ادبي|عام|مسار\s+\S+))?(?:\s*[\/\-]?\s*(?:شعبة|شعبه|فصل|ش|ف)?\s*(?:[1-9]\d?|أول|اول|ثاني|ثالث|[أابجدهو]))?)$/i);
+        if (trailingClassMatch) {
+            const namePart = trailingClassMatch[1].trim();
+            const classPart = trailingClassMatch[2].trim();
+            const classNorm = normalizeArabic(classPart);
+            // Protect against "محمد ثاني" where "ثاني" is the father/family name without any stage word or section number
+            const hasExplicitClassSignal = /(ثانوي|متوسط|ابتدائي|علمي|ادبي|عام|شعبه|فصل|صف|اولي|ثانيه|ثالثه|\d|\bث\b)/.test(classNorm) ||
+                /\b(اول|ثاني|ثالث)\s+(اول|ثاني|ثالث)\b/.test(classNorm);
+
+            if (hasExplicitClassSignal && namePart.split(/\s+/).length >= 1) {
+                const cInfo = extractGradeAndSectionFromFragment(classPart);
+                if (cInfo.gradeLevel !== null && inlineGradeLevel === null) {
+                    inlineGradeLevel = cInfo.gradeLevel;
+                    inlineGradeHint = classPart;
+                }
+                if (cInfo.section !== null && !inlineSectionHint) {
+                    inlineSectionHint = cInfo.section;
+                }
+                line = namePart;
+            }
+        }
+
+        // Check trailing section-only phrase (e.g. "محمد أحمد الزهراني شعبة 3" or "محمد أحمد الزهراني ف 2")
+        const trailingSecOnly = line.match(/^(.+?)\s+[\-–—\/]?\s*(?:شعبة|شعبه|الشعبة|فصل|الفصل|قاعة|ش|ف)\s*[:\-]?\s*([1-9]\d?|[أابجدهو])$/i);
+        if (trailingSecOnly) {
+            const sRaw = normalizeArabic(trailingSecOnly[2]);
+            if (!inlineSectionHint) inlineSectionHint = SECTION_LETTER_TO_NUM[sRaw] || sRaw;
+            line = trailingSecOnly[1].trim();
+        }
+
+        // 7. Strip trailing or leading non-name noise tokens (e.g. "محمد أحمد الزهراني مشارك", "محمد أحمد الزهراني ص 1", "محمد أحمد الزهراني 1")
+        // Also strip trailing standalone page/group tags like "ص1" or "ص 2"
+        line = line.replace(/\s+[\-–—\/]?\s*(?:ص|صفحة|صفحه|مجموعة|مجموعه|دفعة|دفعه)\s*\d+$/i, '').trim();
+
+        let words = line.split(/\s+/).filter(Boolean);
+
+        // Strip trailing noise words or stray trailing numbers
+        while (words.length > 1) {
+            const lastWord = words[words.length - 1];
+            const lastNorm = normalizeArabicForMatch(lastWord);
+            if (/^\d+$/.test(lastNorm)) {
+                // If it's a small number 1..15 at the very end and we already have a grade (or no section), it might be a section number or noise
+                if (!inlineSectionHint && /^([1-9]|1[0-5])$/.test(lastNorm) && inlineGradeLevel !== null) {
+                    inlineSectionHint = lastNorm;
+                }
+                words.pop();
+                continue;
+            }
+            if (NON_NAME_NOISE_WORDS.has(lastNorm)) {
+                ignoredNotes.push(words.pop());
+                continue;
+            }
+            break;
+        }
+
+        // Strip leading noise words (like "الطالب", "المشارك", "الاسم", "أ.")
+        while (words.length > 1) {
+            const firstWord = words[0];
+            const firstNorm = normalizeArabicForMatch(firstWord);
+            if (NON_NAME_NOISE_WORDS.has(firstNorm) || /^(ا|أ|د|م)\.$/.test(firstWord) || /^\d+$/.test(firstNorm)) {
+                words.shift();
+                continue;
+            }
+            break;
+        }
+
+        let cleanName = words.join(' ')
+            .replace(/^[\.\:\-–—\/\|،,]+|[\.\:\-–—\/\|،,]+$/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        // Reject if remaining name is empty, purely numeric, or purely noise words
+        if (!cleanName || cleanName.length < 2 || /^\d+$/.test(cleanName) || isPureNoisePhrase(cleanName)) {
+            return;
+        }
+
+        // Apply context header grade/section if this student line didn't specify its own
+        const finalGradeLevel = inlineGradeLevel !== null ? inlineGradeLevel : currentContextGradeLevel;
+        const finalSectionHint = inlineSectionHint || (inlineGradeLevel === null ? (currentContextSection || '') : '');
+
+        results.push({
+            rawName: cleanName,
+            inlineGradeLevel: finalGradeLevel,
+            inlineGradeHint: inlineGradeHint || (finalGradeLevel ? String(finalGradeLevel) : ''),
+            inlineSectionHint: finalSectionHint,
+            inlinePhoneHint,
+            ignoredNoise: ignoredNotes.join(' ، ')
+        });
     });
 
     return results;
@@ -342,64 +880,195 @@ export default function PublicRegistrationPage() {
         return (students || []).map(s => {
             const sNorm = normalizeArabicForMatch(s.name);
             const sTokens = getComparableTokens(sNorm);
+            const sStrippedTokens = sTokens.map(stripLeadingAl);
+            const classFrag = extractGradeAndSectionFromFragment(s.class || '');
+            const sGradeLevel = detectGradeLevelNumber(s.grade || '') || classFrag.gradeLevel || detectGradeLevelNumber(s.class || '');
+            const rawSec = toWesternDigits(cleanBidiAndZeroWidth(s.section || classFrag.section || '')).trim();
+            const sSection = rawSec.replace(/^(?:شعبة|شعبه|فصل|ش|ف)\s*/i, '').trim();
             return {
                 ...s,
                 sNorm,
-                sTokens
+                sTokens,
+                sStrippedTokens,
+                sGradeLevel,
+                sSection
             };
         });
     }, [students]);
 
-    // Match a student name against pre-indexed school students
-    const findBestStudentMatch = (rawName) => {
+    // Match a student name against pre-indexed school students (with optional grade/section disambiguation)
+    const findBestStudentMatch = (rawName, hintGradeLevel = null, hintSection = '') => {
         if (!rawName || !preparedStudents.length) return null;
-        const queryNorm = normalizeArabicForMatch(rawName);
+
+        // If rawName still has inline class/noise (e.g. when typing directly in a single row input), clean it first for matching
+        const parsedInline = parsePastedStudentsText(rawName);
+        const effectiveName = parsedInline.length === 1 ? parsedInline[0].rawName : rawName;
+        const effGradeLevel = hintGradeLevel !== null ? hintGradeLevel : (parsedInline[0]?.inlineGradeLevel ?? null);
+        const effSection = hintSection || parsedInline[0]?.inlineSectionHint || '';
+
+        const queryNorm = normalizeArabicForMatch(effectiveName);
         if (!queryNorm) return null;
         const queryTokens = getComparableTokens(queryNorm);
+        if (queryTokens.length === 0) return null;
+        const queryStripped = queryTokens.map(stripLeadingAl);
+
+        const pickBestByClassHint = (candidatesList) => {
+            if (!candidatesList.length) return null;
+            if (candidatesList.length === 1) return candidatesList[0];
+            if (effGradeLevel !== null || effSection) {
+                const exactClassMatch = candidatesList.find(
+                    c => (effGradeLevel === null || c.sGradeLevel === effGradeLevel) &&
+                         (!effSection || c.sSection === String(effSection))
+                );
+                if (exactClassMatch) return exactClassMatch;
+                if (effGradeLevel !== null) {
+                    const gradeOnlyMatch = candidatesList.find(c => c.sGradeLevel === effGradeLevel);
+                    if (gradeOnlyMatch) return gradeOnlyMatch;
+                }
+            }
+            return candidatesList[0];
+        };
 
         // 1. Exact Normalized Name Match
-        let matched = preparedStudents.find(s => s.sNorm === queryNorm);
-        if (matched) return { student: matched, matchType: 'exact', confidence: 100 };
-
-        // 2. Exact Comparable Tokens Match (ignoring "بن" / "ابن")
-        if (queryTokens.length >= 2) {
-            matched = preparedStudents.find(s => s.sTokens.join(' ') === queryTokens.join(' '));
-            if (matched) return { student: matched, matchType: 'tokens_exact', confidence: 98 };
+        const exactMatches = preparedStudents.filter(s => s.sNorm === queryNorm);
+        if (exactMatches.length > 0) {
+            return { student: pickBestByClassHint(exactMatches), matchType: 'exact', confidence: 100 };
         }
 
-        // 3. Substring / Prefix match
+        // 2. Exact Comparable Tokens Match (ignoring "بن" / "ابن" and "ال" prefix differences on family name)
         if (queryTokens.length >= 2) {
-            const queryTokensStr = queryTokens.join(' ');
-            matched = preparedStudents.find(s => {
-                const sTokensStr = s.sTokens.join(' ');
-                return sTokensStr.startsWith(queryTokensStr) || queryTokensStr.startsWith(sTokensStr);
-            });
-            if (matched) return { student: matched, matchType: 'prefix', confidence: 90 };
+            const qJoined = queryTokens.join(' ');
+            const qStrippedJoined = queryStripped.join(' ');
+            const tokenExactMatches = preparedStudents.filter(
+                s => s.sTokens.join(' ') === qJoined || s.sStrippedTokens.join(' ') === qStrippedJoined
+            );
+            if (tokenExactMatches.length > 0) {
+                return { student: pickBestByClassHint(tokenExactMatches), matchType: 'tokens_exact', confidence: 98 };
+            }
         }
 
-        // 4. First Name + Last Name match with high token overlap
+        // 3. Ordered Subsequence / Prefix Match (e.g. "محمد أحمد الزهراني" -> "محمد أحمد علي الزهراني")
+        if (queryTokens.length >= 2) {
+            const subseqCandidates = [];
+
+            for (const s of preparedStudents) {
+                if (s.sTokens.length < 2) continue;
+
+                // First name must match strongly
+                const firstSim = scoreTokenSimilarity(queryTokens[0], s.sTokens[0], false);
+                if (firstSim < 0.95) continue;
+
+                // Check if all queryTokens appear in order inside s.sTokens (or vice versa if DB has fewer tokens)
+                const shorter = queryTokens.length <= s.sTokens.length ? queryTokens : s.sTokens;
+                const longer = queryTokens.length <= s.sTokens.length ? s.sTokens : queryTokens;
+
+                let sIdx = 0;
+                let matchedCount = 0;
+                for (let qIdx = 0; qIdx < shorter.length; qIdx++) {
+                    while (sIdx < longer.length) {
+                        if (scoreTokenSimilarity(shorter[qIdx], longer[sIdx], false) >= 0.95) {
+                            matchedCount++;
+                            sIdx++;
+                            break;
+                        }
+                        sIdx++;
+                    }
+                }
+
+                if (matchedCount === shorter.length) {
+                    const lastSim = scoreTokenSimilarity(
+                        queryTokens[queryTokens.length - 1],
+                        s.sTokens[s.sTokens.length - 1],
+                        false
+                    );
+                    // If only 2 tokens (e.g. "محمد الزهراني" or "محمد أحمد"), require either last name match or 3+ tokens, or unique prefix
+                    if (shorter.length >= 3 || lastSim >= 0.95) {
+                        let rankScore = (shorter.length / longer.length) + (lastSim >= 0.95 ? 0.15 : 0);
+                        if (effGradeLevel !== null && s.sGradeLevel === effGradeLevel) rankScore += 0.2;
+                        if (effSection && s.sSection === String(effSection)) rankScore += 0.1;
+                        if (effGradeLevel !== null && s.sGradeLevel && s.sGradeLevel !== effGradeLevel && shorter.length === 2) {
+                            // Avoid matching a 2-word name to the wrong grade when an explicit grade was given
+                            continue;
+                        }
+                        subseqCandidates.push({ student: s, rankScore });
+                    }
+                }
+            }
+
+            if (subseqCandidates.length > 0) {
+                subseqCandidates.sort((a, b) => b.rankScore - a.rankScore);
+                return {
+                    student: subseqCandidates[0].student,
+                    matchType: 'subsequence',
+                    confidence: 94
+                };
+            }
+        }
+
+        // 4. Fuzzy & OCR-Typo Tolerant Match (First Name + Family Name / Multi-token similarity)
         if (queryTokens.length >= 2) {
             let bestCandidate = null;
             let bestScore = 0;
 
             for (const s of preparedStudents) {
                 if (s.sTokens.length < 2) continue;
-                const firstMatch = s.sTokens[0] === queryTokens[0];
-                const lastMatch = s.sTokens[s.sTokens.length - 1] === queryTokens[queryTokens.length - 1];
-                const sharedTokens = queryTokens.filter(t => s.sTokens.includes(t));
 
-                if (firstMatch && lastMatch && sharedTokens.length >= 2) {
-                    const score = (sharedTokens.length * 2) / (queryTokens.length + s.sTokens.length);
-                    if (score > bestScore && score >= 0.5) {
-                        bestScore = score;
-                        bestCandidate = s;
+                const firstSim = scoreTokenSimilarity(queryTokens[0], s.sTokens[0], true);
+                if (firstSim < 0.85) continue;
+
+                const lastSim = scoreTokenSimilarity(
+                    queryTokens[queryTokens.length - 1],
+                    s.sTokens[s.sTokens.length - 1],
+                    true
+                );
+
+                // Count how many query tokens match a distinct token in s.sTokens in order
+                let matchedWeight = 0;
+                let matchedTokensCount = 0;
+                let sCursor = 0;
+
+                for (let i = 0; i < queryTokens.length; i++) {
+                    let bestTokenSim = 0;
+                    let bestTokenIdx = -1;
+                    for (let j = sCursor; j < s.sTokens.length; j++) {
+                        const sim = scoreTokenSimilarity(queryTokens[i], s.sTokens[j], true);
+                        if (sim > bestTokenSim) {
+                            bestTokenSim = sim;
+                            bestTokenIdx = j;
+                        }
                     }
-                } else if (firstMatch && sharedTokens.length >= 3) {
-                    const score = (sharedTokens.length * 2) / (queryTokens.length + s.sTokens.length);
-                    if (score > bestScore && score >= 0.6) {
-                        bestScore = score;
-                        bestCandidate = s;
+                    if (bestTokenSim >= 0.85) {
+                        matchedWeight += bestTokenSim;
+                        matchedTokensCount++;
+                        sCursor = bestTokenIdx + 1;
                     }
+                }
+
+                const minRequiredTokens = queryTokens.length === 2 ? 2 : Math.min(3, queryTokens.length);
+                if (matchedTokensCount < minRequiredTokens) continue;
+                if (queryTokens.length === 2 && lastSim < 0.85) continue;
+
+                let score = (matchedWeight * 2) / (queryTokens.length + s.sTokens.length);
+                if (lastSim >= 0.95) score += 0.08;
+                if (firstSim === 1) score += 0.04;
+
+                // Class hint bonus/penalty
+                if (effGradeLevel !== null && s.sGradeLevel) {
+                    if (s.sGradeLevel === effGradeLevel) {
+                        score += 0.1;
+                        if (effSection && s.sSection === String(effSection)) score += 0.05;
+                    } else if (queryTokens.length <= 2) {
+                        // Do not fuzzy-match a 2-word name across a contradicting explicit grade
+                        continue;
+                    } else {
+                        score -= 0.08;
+                    }
+                }
+
+                const threshold = queryTokens.length === 2 ? 0.62 : 0.60;
+                if (score > bestScore && score >= threshold) {
+                    bestScore = score;
+                    bestCandidate = s;
                 }
             }
 
@@ -407,7 +1076,7 @@ export default function PublicRegistrationPage() {
                 return {
                     student: bestCandidate,
                     matchType: 'fuzzy',
-                    confidence: Math.round(bestScore * 100)
+                    confidence: Math.min(95, Math.round(bestScore * 100))
                 };
             }
         }
@@ -415,88 +1084,133 @@ export default function PublicRegistrationPage() {
         return null;
     };
 
-    // Helper to resolve grade and section from matched student and/or hints
-    const resolveGradeAndSection = (matchedStudent, inlineGradeHint, inlineSectionHint) => {
-        const rawGrade = matchedStudent?.grade || inlineGradeHint || '';
-        const rawClass = matchedStudent?.class || inlineGradeHint || '';
-        const rawSection = matchedStudent?.section || inlineSectionHint || '';
+    // Helper to resolve grade and section from matched student and/or inline hints without ever confusing section digits with grade digits
+    const resolveGradeAndSection = (matchedStudent, inlineGradeHint = '', inlineSectionHint = '', inlineGradeLevel = null) => {
+        const inlineFrag = extractGradeAndSectionFromFragment(inlineGradeHint);
+        const hintGradeNum = inlineGradeLevel !== null ? inlineGradeLevel : (inlineFrag.gradeLevel || detectGradeLevelNumber(inlineGradeHint));
+        const hintSecRaw = inlineSectionHint || inlineFrag.section || '';
+
+        const dbClassFrag = extractGradeAndSectionFromFragment(matchedStudent?.class || '');
+        const dbGradeRaw = matchedStudent?.grade && matchedStudent.grade !== 'غير معروف' ? String(matchedStudent.grade).trim() : '';
+        const dbGradeNum = detectGradeLevelNumber(dbGradeRaw) || dbClassFrag.gradeLevel || detectGradeLevelNumber(matchedStudent?.class || '');
+        const dbSecRaw = matchedStudent?.section || dbClassFrag.section || '';
 
         let resolvedGrade = '';
-        let resolvedSection = '';
 
-        // Match with gradeOptions
-        if (rawGrade) {
-            const matchedGradeOpt = gradeOptions.find(g =>
-                normalizeArabicForMatch(g) === normalizeArabicForMatch(rawGrade) ||
-                g.includes(rawGrade) ||
-                rawGrade.includes(g)
-            ) || gradeOptions.find(g => {
-                if (/اول|أول|1/i.test(rawGrade) && /اول|أول|1/i.test(g)) return true;
-                if (/ثاني|2/i.test(rawGrade) && /ثاني|2/i.test(g)) return true;
-                if (/ثالث|3/i.test(rawGrade) && /ثالث|3/i.test(g)) return true;
-                return false;
-            });
-            resolvedGrade = matchedGradeOpt || '';
+        // Helper to map a grade string or level number (1..6) to the school's configured gradeOptions
+        const mapToGradeOption = (gradeStr, gradeLevelNum) => {
+            if (gradeStr) {
+                const normTarget = normalizeArabicForMatch(gradeStr);
+                const direct = gradeOptions.find(g => normalizeArabicForMatch(g) === normTarget);
+                if (direct) return direct;
+            }
+            const levelToFind = gradeLevelNum || detectGradeLevelNumber(gradeStr);
+            if (levelToFind !== null) {
+                const byLevel = gradeOptions.find(g => detectGradeLevelNumber(g) === levelToFind);
+                if (byLevel) return byLevel;
+                // Fallback index if gradeOptions are ordered [1st, 2nd, 3rd]
+                if (levelToFind >= 1 && levelToFind <= gradeOptions.length) {
+                    return gradeOptions[levelToFind - 1];
+                }
+            }
+            if (gradeStr) {
+                const partial = gradeOptions.find(g => g.includes(gradeStr) || gradeStr.includes(g));
+                if (partial) return partial;
+            }
+            return '';
+        };
+
+        // 1. Resolve Grade (prefer DB grade if student is matched in school records, otherwise inline hint)
+        if (matchedStudent && (dbGradeRaw || dbGradeNum !== null)) {
+            resolvedGrade = mapToGradeOption(dbGradeRaw, dbGradeNum);
         }
-
-        if (!resolvedGrade && rawClass) {
-            const matchedGradeOpt = gradeOptions.find(g => rawClass.includes(g)) ||
-                gradeOptions.find(g => {
-                    if (/اول|أول|1/i.test(rawClass) && /اول|أول|1/i.test(g)) return true;
-                    if (/ثاني|2/i.test(rawClass) && /ثاني|2/i.test(g)) return true;
-                    if (/ثالث|3/i.test(rawClass) && /ثالث|3/i.test(g)) return true;
-                    return false;
-                });
-            resolvedGrade = matchedGradeOpt || '';
+        if (!resolvedGrade && (inlineGradeHint || hintGradeNum !== null)) {
+            resolvedGrade = mapToGradeOption(inlineGradeHint, hintGradeNum);
         }
-
         if (!resolvedGrade) {
             resolvedGrade = gradeOptions[0] || '';
         }
 
-        // Resolve section
-        const availableSections = getSectionOptions(resolvedGrade);
-        let candidateSection = String(rawSection || '').trim();
+        // 2. Resolve Section strictly against availableSections for resolvedGrade
+        const availableSections = getSectionOptions(resolvedGrade).map(s => String(s).trim());
+        const rawCandidateSec = (matchedStudent && dbSecRaw) ? dbSecRaw : (hintSecRaw || dbSecRaw || '');
 
-        if (!candidateSection && rawClass) {
-            const slashMatch = String(rawClass).match(/[\/\-]\s*(\d+)/);
-            if (slashMatch) {
-                candidateSection = slashMatch[1];
+        let cleanSec = toWesternDigits(cleanBidiAndZeroWidth(String(rawCandidateSec)))
+            .replace(/^(?:شعبة|شعبه|الشعبة|فصل|الفصل|قاعة|القاعة|ش|ف|sec|section)\s*[:\-]?\s*/i, '')
+            .trim();
+
+        // If cleanSec still has slash (like "ثاني / 3"), extract only the section from it
+        if (cleanSec && !/^\d+$/.test(cleanSec) && !SECTION_LETTER_TO_NUM[normalizeArabic(cleanSec)]) {
+            const secFrag = extractGradeAndSectionFromFragment(cleanSec);
+            if (secFrag.section) {
+                cleanSec = secFrag.section;
             } else {
-                const anyDigit = String(rawClass).match(/(\d+)/);
-                if (anyDigit) candidateSection = anyDigit[1];
+                cleanSec = '';
             }
         }
 
-        if (candidateSection && availableSections.includes(candidateSection)) {
-            resolvedSection = candidateSection;
-        } else if (availableSections.length > 0) {
-            resolvedSection = candidateSection || availableSections[0] || '1';
-        } else {
-            resolvedSection = '1';
+        if (cleanSec && !availableSections.includes(cleanSec)) {
+            const letterMapped = SECTION_LETTER_TO_NUM[normalizeArabic(cleanSec)];
+            if (letterMapped && availableSections.includes(letterMapped)) {
+                cleanSec = letterMapped;
+            } else if (/^\d+$/.test(cleanSec)) {
+                const numStr = String(Number(cleanSec));
+                if (availableSections.includes(numStr)) {
+                    cleanSec = numStr;
+                }
+            }
         }
+
+        // Strictly validate that resolvedSection is a valid section from availableSections (never random text!)
+        let resolvedSection = '1';
+        if (cleanSec && availableSections.includes(cleanSec)) {
+            resolvedSection = cleanSec;
+        } else if (availableSections.length > 0) {
+            resolvedSection = availableSections[0] || '1';
+        }
+
+        const classSource = matchedStudent && (dbGradeRaw || dbGradeNum !== null)
+            ? 'db'
+            : (inlineGradeHint || hintGradeNum !== null || hintSecRaw ? 'text' : 'default');
 
         return {
             grade: resolvedGrade,
-            section: resolvedSection
+            section: resolvedSection,
+            classSource
         };
     };
 
     // Memoized live analysis stats of pasted text
     const smartAnalysisStats = useMemo(() => {
         if (!smartPasteText || !smartPasteText.trim()) {
-            return { total: 0, matched: 0, unmatched: 0, candidates: [] };
+            return { total: 0, matched: 0, unmatched: 0, withInlineClass: 0, cleanedNoiseCount: 0, candidates: [] };
         }
 
         const parsed = parsePastedStudentsText(smartPasteText);
         let matchedCount = 0;
+        let withInlineClass = 0;
+        let cleanedNoiseCount = 0;
 
         const candidates = parsed.map(item => {
-            const matchRes = findBestStudentMatch(item.rawName);
-            if (matchRes) matchedCount++;
+            const matchRes = findBestStudentMatch(item.rawName, item.inlineGradeLevel, item.inlineSectionHint);
+            const matched = matchRes?.student || null;
+            if (matched) matchedCount++;
+            if (item.inlineGradeLevel !== null || item.inlineGradeHint || item.inlineSectionHint) withInlineClass++;
+            if (item.ignoredNoise) cleanedNoiseCount++;
+
+            const resolved = resolveGradeAndSection(
+                matched,
+                item.inlineGradeHint,
+                item.inlineSectionHint,
+                item.inlineGradeLevel
+            );
+
             return {
                 ...item,
-                matchResult: matchRes
+                matchResult: matchRes,
+                resolvedGrade: resolved.grade,
+                resolvedSection: resolved.section,
+                classSource: resolved.classSource
             };
         });
 
@@ -504,6 +1218,8 @@ export default function PublicRegistrationPage() {
             total: candidates.length,
             matched: matchedCount,
             unmatched: candidates.length - matchedCount,
+            withInlineClass,
+            cleanedNoiseCount,
             candidates
         };
     }, [smartPasteText, preparedStudents, gradeOptions]);
@@ -635,18 +1351,24 @@ export default function PublicRegistrationPage() {
 
         let matchedCount = 0;
         const newRows = parsed.map(item => {
-            const matchRes = findBestStudentMatch(item.rawName);
+            const matchRes = findBestStudentMatch(item.rawName, item.inlineGradeLevel, item.inlineSectionHint);
             const matched = matchRes?.student;
             if (matched) matchedCount++;
 
-            const { grade, section } = resolveGradeAndSection(matched, item.inlineGradeHint, item.inlineSectionHint);
+            const { grade, section, classSource } = resolveGradeAndSection(
+                matched,
+                item.inlineGradeHint,
+                item.inlineSectionHint,
+                item.inlineGradeLevel
+            );
 
             return {
                 studentName: matched ? matched.name : item.rawName,
                 isGradeUnknown: false,
                 grade,
                 section,
-                phone: matched?.phone || '',
+                classSource,
+                phone: matched?.phone || item.inlinePhoneHint || '',
                 matchedStudentId: matched?.id || null,
                 matchedStudentName: matched?.name || null,
                 customValues: { ...initialCustomValues }
@@ -1641,7 +2363,7 @@ export default function PublicRegistrationPage() {
 
                                             {/* إحصائيات التعرف والإجراءات */}
                                             <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 pt-1">
-                                                <div className="flex items-center gap-2 flex-wrap text-xs">
+                                                <div className="flex items-center gap-1.5 flex-wrap text-xs">
                                                     {smartAnalysisStats.total > 0 ? (
                                                         <>
                                                             <span className="px-2.5 py-1 rounded-xl bg-slate-800/80 border border-slate-700 text-slate-300 font-medium">
@@ -1657,10 +2379,21 @@ export default function PublicRegistrationPage() {
                                                                     <strong className="font-mono">{smartAnalysisStats.unmatched}</strong> غير مسجل
                                                                 </span>
                                                             )}
+                                                            {smartAnalysisStats.withInlineClass > 0 && (
+                                                                <span className="px-2.5 py-1 rounded-xl bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 font-medium flex items-center gap-1">
+                                                                    <Sparkles size={12} className="text-indigo-400" />
+                                                                    <strong className="font-mono">{smartAnalysisStats.withInlineClass}</strong> فصل مستنتج من النص
+                                                                </span>
+                                                            )}
+                                                            {smartAnalysisStats.cleanedNoiseCount > 0 && (
+                                                                <span className="px-2.5 py-1 rounded-xl bg-cyan-500/15 border border-cyan-500/30 text-cyan-300 font-medium flex items-center gap-1" title="تم استبعاد نصوص إضافية ليست جزءاً من اسم الطالب أو شعبته">
+                                                                    <span>🧹 تم تنظيف نصوص زائدة ({smartAnalysisStats.cleanedNoiseCount})</span>
+                                                                </span>
+                                                            )}
                                                         </>
                                                     ) : (
                                                         <span className="text-[11px] text-slate-400">
-                                                            💡 يتعرف تلقائياً على الأرقام، الشرطات، النقاط، الإكسل، وتنسيقات الواتساب.
+                                                            💡 يفهم جميع الصيغ (ثاني ثانوي 1، 2/3، ٢٠٤، شعبة ب، قوائم الفصول، الواتساب، والإكسل) ويتجاهل النصوص الزائدة تلقائياً.
                                                         </span>
                                                     )}
                                                 </div>
@@ -1686,6 +2419,64 @@ export default function PublicRegistrationPage() {
                                                     </button>
                                                 </div>
                                             </div>
+
+                                            {/* معاينة فورية ذكية للأسماء والفصول المستخرجة قبل التعبئة */}
+                                            {smartAnalysisStats.candidates.length > 0 && (
+                                                <div className="bg-slate-950/90 border border-slate-800/90 rounded-2xl p-2.5 space-y-1.5 max-h-44 overflow-y-auto custom-scrollbar">
+                                                    <div className="flex items-center justify-between text-[10px] text-slate-400 px-1 pb-1 border-b border-slate-800/80">
+                                                        <span className="font-bold text-indigo-300">🔍 معاينة التحليل الذكي ({smartAnalysisStats.candidates.length} طالب):</span>
+                                                        <span>اضغط &quot;تعبئة وتحديث الجدول&quot; لاعتمادهم بالجدول أدناه</span>
+                                                    </div>
+                                                    {smartAnalysisStats.candidates.map((cand, cIdx) => {
+                                                        const matchedStu = cand.matchResult?.student;
+                                                        return (
+                                                            <div
+                                                                key={cIdx}
+                                                                className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-xl bg-slate-900/80 border border-slate-800/80 text-[11px] flex-wrap"
+                                                            >
+                                                                <div className="flex items-center gap-2 min-w-0">
+                                                                    <span className="text-[10px] font-mono text-slate-500 w-4 text-center shrink-0">
+                                                                        {cIdx + 1}
+                                                                    </span>
+                                                                    <span className="font-bold text-white truncate">
+                                                                        {matchedStu ? matchedStu.name : cand.rawName}
+                                                                    </span>
+                                                                    {matchedStu && normalizeArabic(matchedStu.name) !== normalizeArabic(cand.rawName) && (
+                                                                        <span className="text-[10px] text-slate-400 truncate">
+                                                                            (بالنص: {cand.rawName})
+                                                                        </span>
+                                                                    )}
+                                                                    {cand.ignoredNoise && (
+                                                                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700" title="نص إضافي تم تجاهله حتى لا يؤثر على الاسم أو الشعبة">
+                                                                            تجاهل: {cand.ignoredNoise}
+                                                                        </span>
+                                                                    )}
+                                                                </div>
+                                                                <div className="flex items-center gap-1.5 shrink-0">
+                                                                    <span className={`px-2 py-0.5 rounded-md font-bold text-[10px] border ${
+                                                                        cand.classSource === 'db'
+                                                                            ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
+                                                                            : cand.classSource === 'text'
+                                                                            ? 'bg-indigo-950/60 border-indigo-500/40 text-indigo-300'
+                                                                            : 'bg-slate-800 border-slate-700 text-slate-300'
+                                                                    }`}>
+                                                                        {cand.resolvedGrade} - شعبة {cand.resolvedSection}
+                                                                    </span>
+                                                                    {matchedStu ? (
+                                                                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 font-semibold">
+                                                                            ✓ بالسجل
+                                                                        </span>
+                                                                    ) : (
+                                                                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 font-semibold">
+                                                                            جديد
+                                                                        </span>
+                                                                    )}
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            )}
                                         </div>
                                     )}
                                 </div>
@@ -1826,11 +2617,21 @@ export default function PublicRegistrationPage() {
                                                         const updated = [...rapidRows];
                                                         const newName = e.target.value;
                                                         updated[idx].studentName = newName;
-                                                        const matchRes = findBestStudentMatch(newName);
+                                                        const inlineParsed = parsePastedStudentsText(newName)[0];
+                                                        const matchRes = findBestStudentMatch(
+                                                            inlineParsed?.rawName || newName,
+                                                            inlineParsed?.inlineGradeLevel ?? null,
+                                                            inlineParsed?.inlineSectionHint || ''
+                                                        );
                                                         if (matchRes?.student) {
                                                             updated[idx].matchedStudentId = matchRes.student.id;
                                                             updated[idx].matchedStudentName = matchRes.student.name;
-                                                            const { grade, section } = resolveGradeAndSection(matchRes.student);
+                                                            const { grade, section } = resolveGradeAndSection(
+                                                                matchRes.student,
+                                                                inlineParsed?.inlineGradeHint,
+                                                                inlineParsed?.inlineSectionHint,
+                                                                inlineParsed?.inlineGradeLevel ?? null
+                                                            );
                                                             if (!updated[idx].isGradeUnknown) {
                                                                 updated[idx].grade = grade;
                                                                 updated[idx].section = section;
@@ -1838,6 +2639,16 @@ export default function PublicRegistrationPage() {
                                                         } else {
                                                             updated[idx].matchedStudentId = null;
                                                             updated[idx].matchedStudentName = null;
+                                                            if (inlineParsed && (inlineParsed.inlineGradeLevel !== null || inlineParsed.inlineSectionHint) && !updated[idx].isGradeUnknown) {
+                                                                const { grade, section } = resolveGradeAndSection(
+                                                                    null,
+                                                                    inlineParsed.inlineGradeHint,
+                                                                    inlineParsed.inlineSectionHint,
+                                                                    inlineParsed.inlineGradeLevel
+                                                                );
+                                                                updated[idx].grade = grade;
+                                                                updated[idx].section = section;
+                                                            }
                                                         }
                                                         setRapidRows(updated);
                                                     }}
